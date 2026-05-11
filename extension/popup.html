@@ -9,25 +9,26 @@
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..600,30..100,0..1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --cream:   #F8F1E4;
-  --paper:   #FCFAF5;
-  --sand:    #EDE0C8;
-  --sage:    #A8B89E;
-  --sage-dp: #889982;
-  --terra:   #C97D5B;
-  --terra-dp:#A86246;
-  --apricot: #F2B894;
-  --lavender:#B5A8D9;
-  --rose:    #DDB4B0;
-  --ink:     #2D2823;
-  --ink-soft:#4A413A;
-  --ink-mute:#7A6F62;
-  --line:    rgba(45, 40, 35, 0.1);
-  --line-soft: rgba(45, 40, 35, 0.05);
+  --cream:    #F8F1E4;
+  --paper:    #FCFAF5;
+  --sand:     #EDE0C8;
+  --terra:    #C97D5B;
+  --terra-dp: #A86246;
+  --apricot:  #F2B894;
+  --sage:     #A8B89E;
+  --sage-dp:  #889982;
+  --green-v:  #5BAF6B;
+  --blue-v:   #4A8BD9;
+  --lavender: #B5A8D9;
+  --ink:      #2D2823;
+  --ink-soft: #4A413A;
+  --ink-mute: #7A6F62;
+  --line:     rgba(45, 40, 35, 0.1);
+  --line-soft:rgba(45, 40, 35, 0.05);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  width: 340px;
+  width: 360px;
   background: var(--cream);
   color: var(--ink);
   font-family: 'Inter', system-ui, sans-serif;
@@ -37,7 +38,7 @@ body {
 
 /* ── Header ── */
 .header {
-  padding: 14px 18px 12px;
+  padding: 12px 16px;
   background: var(--paper);
   border-bottom: 1px solid var(--line);
   display: flex;
@@ -47,10 +48,10 @@ body {
 .logo {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .logo-mark {
-  width: 26px; height: 26px;
+  width: 24px; height: 24px;
   border-radius: 7px;
   background: linear-gradient(135deg, var(--terra), var(--apricot));
   position: relative;
@@ -64,292 +65,321 @@ body {
   justify-content: center;
   font-family: 'Fraunces', serif;
   font-weight: 600;
-  font-size: 15px;
+  font-size: 14px;
   color: var(--paper);
 }
 .logo-text {
   font-family: 'Fraunces', serif;
   font-variation-settings: "SOFT" 100, "WONK" 1;
   font-weight: 500;
-  font-size: 15px;
-  color: var(--ink);
+  font-size: 14px;
 }
-.url-chip {
+.version {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-mute);
+  letter-spacing: 1px;
+}
+
+/* ── Identity Hero (the main thing) ── */
+.identity {
+  padding: 24px 20px 18px;
+  text-align: center;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.identity.verified {
+  background: radial-gradient(ellipse at top, rgba(91, 175, 107, 0.10) 0%, var(--paper) 70%);
+}
+.identity-icon {
+  font-size: 56px;
+  line-height: 1;
+  display: inline-block;
+  margin-bottom: 10px;
+  filter: drop-shadow(0 4px 12px rgba(45, 40, 35, 0.12));
+}
+.identity-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--green-v);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.identity.empty .identity-status {
+  color: var(--ink-mute);
+}
+.identity-role {
+  font-family: 'Fraunces', serif;
+  font-variation-settings: "SOFT" 80, "WONK" 1;
+  font-size: 22px;
+  font-weight: 500;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+.identity-level {
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin-bottom: 14px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Trust score bar */
+.trust-wrap {
+  display: none;
+  max-width: 280px;
+  margin: 0 auto 12px;
+}
+.trust-wrap.show { display: block; }
+.trust-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   color: var(--ink-mute);
-  background: var(--cream);
-  border: 1px solid var(--line);
-  padding: 3px 8px;
-  border-radius: 100px;
-  max-width: 160px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* ── Status area ── */
-.status-area {
-  padding: 24px 18px;
-  background: var(--paper);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  position: relative;
-}
-.status-area.verified  {
-  background: linear-gradient(135deg, rgba(168, 184, 158, 0.18), var(--paper));
-}
-.status-area.unverified {
-  background: linear-gradient(135deg, rgba(242, 184, 148, 0.18), var(--paper));
-}
-.status-area.machine {
-  background: linear-gradient(135deg, rgba(181, 168, 217, 0.18), var(--paper));
-}
-.status-icon {
-  font-size: 32px;
-  width: 52px;
-  height: 52px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--paper);
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.status-info { flex: 1; min-width: 0; }
-.status-label {
-  font-family: 'Fraunces', serif;
-  font-size: 16px;
-  font-weight: 500;
-  margin-bottom: 2px;
-  color: var(--ink);
-}
-.status-label.green  { color: var(--sage-dp); }
-.status-label.amber  { color: var(--terra-dp); }
-.status-label.muted  { color: var(--ink-mute); }
-.status-sub {
-  font-size: 12px;
-  color: var(--ink-mute);
-  font-family: 'JetBrains Mono', monospace;
-}
-
-/* ── Trust score ── */
-.trust-section {
-  padding: 16px 18px;
-  background: var(--cream);
-  border-bottom: 1px solid var(--line-soft);
-  display: none;
-}
-.trust-section.show { display: block; }
-.trust-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.trust-label {
-  font-size: 11px;
-  color: var(--ink-mute);
-  letter-spacing: 0.06em;
+  letter-spacing: 1px;
   text-transform: uppercase;
-  font-family: 'JetBrains Mono', monospace;
+  margin-bottom: 4px;
 }
-.trust-value {
+.trust-row b {
   font-family: 'Fraunces', serif;
-  font-variation-settings: "SOFT" 100;
-  font-weight: 500;
-  font-size: 16px;
+  font-size: 14px;
   color: var(--ink);
+  font-weight: 600;
 }
 .trust-bar {
-  height: 6px;
+  height: 5px;
   background: var(--sand);
   border-radius: 3px;
   overflow: hidden;
 }
 .trust-fill {
   height: 100%;
-  background: var(--terra);
+  background: linear-gradient(90deg, var(--terra), var(--apricot), var(--green-v));
   border-radius: 3px;
   transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  width: 0%;
 }
-.trust-fill.mid  { background: var(--apricot); }
-.trust-fill.high { background: var(--sage-dp); }
 
-/* ── Role card ── */
-.role-card {
-  padding: 14px 18px;
-  background: var(--paper);
-  border-bottom: 1px solid var(--line-soft);
-  display: none;
-}
-.role-card.show { display: block; }
-.role-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.role-icon {
-  font-size: 24px;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--cream);
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.role-info { flex: 1; min-width: 0; }
-.role-name {
-  font-family: 'Fraunces', serif;
-  font-weight: 500;
-  font-size: 15px;
-  color: var(--ink);
-  margin-bottom: 1px;
-}
-.role-level {
-  font-size: 11px;
-  color: var(--ink-mute);
+/* Expiry */
+.expiry {
   font-family: 'JetBrains Mono', monospace;
-  letter-spacing: 0.02em;
-}
-
-.privileges {
-  border-top: 1px solid var(--line-soft);
-  padding-top: 10px;
-  margin-top: 4px;
-}
-.priv {
-  font-size: 12px;
-  color: var(--ink-soft);
-  padding: 4px 0 4px 18px;
-  position: relative;
-  line-height: 1.4;
-}
-.priv::before {
-  content: '✓';
-  position: absolute;
-  left: 0;
-  color: var(--sage-dp);
-  font-weight: 600;
-  font-size: 11px;
-}
-
-/* ── Details ── */
-.details {
-  padding: 14px 18px;
-  background: var(--cream);
-  display: none;
-}
-.details.show { display: block; }
-.details h4 {
   font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
   color: var(--ink-mute);
-  margin-bottom: 10px;
-  font-weight: 500;
-  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.5px;
 }
-.dr {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 12px;
-}
-.dr:last-child { border-bottom: none; }
-.dk {
-  color: var(--ink-mute);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-}
-.dv {
-  color: var(--ink);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  text-align: right;
-  word-break: break-all;
-}
-.dv.g { color: var(--sage-dp); font-weight: 500; }
-.dv.a { color: var(--terra-dp); font-weight: 500; }
+.expiry.warning { color: var(--terra-dp); }
 
-/* ── Actions ── */
-.actions {
-  padding: 14px 18px 16px;
+/* Identity actions */
+.id-actions {
+  display: none;
+  padding: 12px 16px;
   background: var(--paper);
-  border-top: 1px solid var(--line);
-  display: flex;
-  gap: 8px;
-  flex-direction: column;
+  border-bottom: 1px solid var(--line);
+  gap: 6px;
+  flex-wrap: wrap;
 }
-.btn {
+.id-actions.show { display: flex; }
+.id-btn {
+  flex: 1;
+  min-width: 0;
+  background: var(--cream);
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-radius: 100px;
-  border: none;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
-  transition: all 0.2s;
+  gap: 4px;
 }
-.btn-primary {
+.id-btn:hover {
+  background: var(--sand);
+  transform: translateY(-1px);
+}
+.id-btn.primary {
   background: var(--ink);
   color: var(--cream);
+  border-color: var(--ink);
 }
-.btn-primary:hover { background: var(--terra-dp); }
-.btn-secondary {
-  background: var(--cream);
-  color: var(--ink);
-  border: 1px solid var(--line);
-}
-.btn-secondary:hover { background: var(--sand); }
-.btn-revoke {
-  background: transparent;
-  color: var(--terra-dp);
-  border: 1px solid var(--terra);
-  display: none;
-}
-.btn-revoke.show { display: flex; }
-.btn-revoke:hover { background: var(--terra); color: var(--paper); }
-
-/* ── Empty state ── */
-.no-hhttps {
-  display: none;
-  padding: 20px 18px;
-  text-align: center;
-  background: var(--cream);
-  font-size: 12px;
-  color: var(--ink-soft);
-  line-height: 1.6;
-}
-.no-hhttps p { margin-bottom: 12px; }
-.no-hhttps a {
-  color: var(--terra-dp);
-  text-decoration: underline;
-  text-decoration-color: rgba(168, 98, 70, 0.3);
+.id-btn.primary:hover {
+  background: var(--terra-dp);
 }
 
-/* ── Footer ── */
-.footer {
-  padding: 10px 18px;
+/* Empty state — Login prompt */
+.empty-state {
+  display: none;
+  padding: 8px 16px 16px;
   background: var(--paper);
-  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+.empty-state.show { display: block; }
+.empty-cta {
+  display: block;
+  background: var(--ink);
+  color: var(--cream);
+  text-decoration: none;
+  text-align: center;
+  padding: 12px;
+  border-radius: 100px;
+  font-weight: 500;
+  font-size: 13px;
+  transition: all 0.2s;
+  margin-bottom: 8px;
+}
+.empty-cta:hover {
+  background: var(--terra-dp);
+  transform: translateY(-1px);
+}
+.empty-hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Role switcher */
+.role-switch {
+  display: none;
+  padding: 12px 16px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--line-soft);
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.role-switch.show { display: flex; }
+.role-switch-head {
+  width: 100%;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-mute);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: 4px;
+}
+.role-chip {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 100px;
+  padding: 5px 11px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.15s;
+}
+.role-chip:hover { background: var(--sand); }
+.role-chip.active {
+  background: var(--ink);
+  color: var(--cream);
+  border-color: var(--ink);
+}
+
+/* Page state */
+.page-section {
+  padding: 12px 16px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 11px;
+}
+.page-head {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-mute);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.page-row {
   display: flex;
   align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--ink-soft);
+}
+.page-icon { font-size: 14px; }
+.page-url {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-mute);
+  word-break: break-all;
+  margin-top: 2px;
+}
+
+/* Signature snippet */
+.snippet {
+  display: none;
+  padding: 10px 16px 14px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--line-soft);
+}
+.snippet.show { display: block; }
+.snippet-head {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-mute);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  display: flex;
   justify-content: space-between;
+}
+.snippet-box {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--ink-soft);
+  word-break: break-all;
+  line-height: 1.4;
+  max-height: 60px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+.snippet-btn {
+  margin-top: 6px;
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.snippet-btn:hover { background: var(--sand); }
+.snippet-btn.copied {
+  background: var(--green-v);
+  color: var(--paper);
+  border-color: var(--green-v);
+}
+
+/* Footer */
+.footer {
+  padding: 10px 16px;
+  background: var(--paper);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-size: 10px;
   color: var(--ink-mute);
   font-family: 'JetBrains Mono', monospace;
@@ -363,67 +393,84 @@ body {
 </head>
 <body>
 
+<!-- Header -->
 <div class="header">
   <div class="logo">
     <div class="logo-mark"></div>
     <div class="logo-text">HHTTPS</div>
   </div>
-  <div class="url-chip" id="headerUrl">—</div>
+  <div class="version">v1.2.0</div>
 </div>
 
-<div class="status-area" id="statusArea">
-  <div class="status-icon" id="statusIcon">🔒</div>
-  <div class="status-info">
-    <div class="status-label muted" id="statusLabel">Wird geprüft…</div>
-    <div class="status-sub" id="statusSub">—</div>
-  </div>
-</div>
-
-<div class="trust-section" id="trustSection">
-  <div class="trust-row">
-    <span class="trust-label">Trust-Score</span>
-    <span class="trust-value" id="trustValue">0/100</span>
-  </div>
-  <div class="trust-bar">
-    <div class="trust-fill" id="trustFill"></div>
-  </div>
-</div>
-
-<div class="role-card" id="roleCard">
-  <div class="role-row">
-    <div class="role-icon" id="roleIcon">🧑</div>
-    <div class="role-info">
-      <div class="role-name" id="roleName">—</div>
-      <div class="role-level" id="roleLevel">—</div>
+<!-- Identity Hero -->
+<div class="identity empty" id="identityHero">
+  <div class="identity-icon" id="identityIcon">🔒</div>
+  <div class="identity-status" id="identityStatus">Nicht eingeloggt</div>
+  <div class="identity-role" id="identityRole">Keine Identität</div>
+  <div class="identity-level" id="identityLevel">—</div>
+  <div class="trust-wrap" id="trustWrap">
+    <div class="trust-row">
+      <span>Trust Score</span>
+      <b id="trustValue">0 / 100</b>
+    </div>
+    <div class="trust-bar">
+      <div class="trust-fill" id="trustFill" style="width:0%"></div>
     </div>
   </div>
-  <div class="privileges" id="rolePrivileges"></div>
+  <div class="expiry" id="expiry"></div>
 </div>
 
-<div class="details" id="details">
-  <h4>Token-Details</h4>
-  <div class="dr"><span class="dk">Status</span>     <span class="dv" id="dStatus">—</span></div>
-  <div class="dr"><span class="dk">Mensch</span>     <span class="dv" id="dHuman">—</span></div>
-  <div class="dr"><span class="dk">Methode</span>    <span class="dv" id="dMethod">—</span></div>
-  <div class="dr"><span class="dk">Issuer</span>     <span class="dv" id="dIssuer">—</span></div>
-  <div class="dr" id="dTokenRow" style="display:none">
-    <span class="dk">Token</span><span class="dv" id="dToken">—</span>
+<!-- Empty state -->
+<div class="empty-state" id="emptyState">
+  <a href="https://hhttps.org" target="_blank" class="empty-cta">
+    Bei hhttps.org einloggen →
+  </a>
+  <div class="empty-hint">Passkey-Verifikation in 30 Sekunden</div>
+</div>
+
+<!-- Identity actions -->
+<div class="id-actions" id="idActions">
+  <button class="id-btn" id="refreshBtn" title="Token neu vom Server holen">
+    <span>↻</span> <span>Refresh</span>
+  </button>
+  <button class="id-btn" id="copyTokenBtn" title="Token in Zwischenablage">
+    <span>⎘</span> <span>Token</span>
+  </button>
+  <button class="id-btn" id="logoutBtn" title="Identität entfernen + Token widerrufen">
+    <span>↪</span> <span>Logout</span>
+  </button>
+</div>
+
+<!-- Role switcher (when >1 identities) -->
+<div class="role-switch" id="roleSwitch">
+  <div class="role-switch-head">Identität wechseln</div>
+  <!-- chips injected by JS -->
+</div>
+
+<!-- Signature snippet (the new "killer feature" precursor) -->
+<div class="snippet" id="snippet">
+  <div class="snippet-head">
+    <span>Identität als Signatur</span>
+    <span style="text-transform:none;letter-spacing:0">für Kommentare</span>
   </div>
+  <div class="snippet-box" id="snippetBox">—</div>
+  <button class="snippet-btn" id="copySnippetBtn">📋 In Zwischenablage kopieren</button>
 </div>
 
-<div class="actions">
-  <a href="https://hhttps.org" target="_blank" class="btn btn-primary">Bei hhttps.org verifizieren →</a>
-  <a href="https://iamhmn.org" target="_blank" class="btn btn-secondary">Was ist HHTTPS?</a>
-  <button id="revokeBtn" class="btn btn-revoke">Token widerrufen</button>
+<!-- Current page state -->
+<div class="page-section" id="pageSection">
+  <div class="page-head">Aktuelle Seite</div>
+  <div class="page-row" id="pageRow">
+    <span class="page-icon">⏳</span>
+    <span id="pageLabel">Wird geprüft …</span>
+  </div>
+  <div class="page-url" id="pageUrl"></div>
 </div>
 
-<div class="no-hhttps" id="noHHTTPS">
-  <p>Diese Website unterstützt HHTTPS noch nicht.</p>
-  <p><a href="https://hhttps.org" target="_blank">Mehr über das Protokoll →</a></p>
-</div>
-
+<!-- Footer -->
 <div class="footer">
-  <span>v1.1.0 · HHTTPS 0.4.1</span>
+  <a href="https://hhttps.org" target="_blank">hhttps.org</a>
+  <a href="https://iamhmn.org" target="_blank">iamhmn.org</a>
   <a href="https://github.com/dhannus/HumanProof" target="_blank">GitHub →</a>
 </div>
 

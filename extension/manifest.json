@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HHTTPS — HumanProof",
-  "version": "1.1.0",
-  "description": "Zeigt an, ob eine Website HHTTPS unterstützt und ob du als Mensch verifiziert bist. Kompatibel mit HHTTPS-Protokoll v0.4.1.",
+  "version": "1.2.0",
+  "description": "Deine HHTTPS-Identität — verifiziert als Mensch, mit Rolle und Trust-Score. Auto-Login auf hhttps.org, Signaturen für jede Webseite.",
   "author": "Daniel Hannuschka · HumanProof Initiative",
   "homepage_url": "https://hhttps.org",
 
@@ -31,8 +31,17 @@
 
   "content_scripts": [
     {
+      "matches": [
+        "https://hhttps.org/*",
+        "https://www.hhttps.org/*"
+      ],
+      "js": ["content-issuer.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["content-universal.js"],
       "run_at": "document_end"
     }
   ],
@@ -44,9 +53,7 @@
   ],
 
   "host_permissions": [
-    "https://hhttps.org/*",
-    "https://iamhmn.org/*",
-    "<all_urls>"
+    "https://hhttps.org/*"
   ],
 
   "web_accessible_resources": [

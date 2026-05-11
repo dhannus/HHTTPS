@@ -1,216 +1,301 @@
 /**
- * HHTTPS Extension Popup Script (v1.1.0)
- * Compatible with HHTTPS protocol v0.4.1 — supports all 15 roles.
+ * HHTTPS Extension Popup v1.2.0
+ *
+ * Identity-first: show the user's verified identity prominently,
+ * page state secondarily. Provides actions: refresh, copy token,
+ * logout, switch role, copy signature snippet.
  */
 
-const ROLE_DATA = {
-  citizen: {
-    icon: '🧑', name: 'Bürger',
-    level: 'Grundverifikation',
-    privs: ['Verifizierter Mensch im digitalen Raum', 'Schutz vor Deepfake-Missbrauch', 'Anonyme Kommunikation mit HHTTPS-Kennzeichnung']
-  },
-  journalist: {
-    icon: '📰', name: 'Journalist',
-    level: 'Presseausweis · E-Mail',
-    privs: ['Zugang zu HHTTPS-Pressebereichen', 'Verifizierte Quellenangabe', 'Schutz vor KI-Identitätsmissbrauch']
-  },
-  student: {
-    icon: '🎓', name: 'Schüler / Student',
-    level: 'Bildungs-E-Mail · Matrikelnummer',
-    privs: ['Verifizierte Online-Prüfungen', 'Schutz vor KI-generierten Antworten von Peers', 'Bildungsplattformen-Zugang']
-  },
-  teacher: {
-    icon: '👨‍🏫', name: 'Lehrer / Pädagoge',
-    level: 'Schul-E-Mail · Lehrer-ID',
-    privs: ['Verifizierte Eltern-Lehrer-Kommunikation', 'Authentische Bekanntmachungen', 'Schutz vor Fake-Lehrer-Identitäten']
-  },
-  researcher: {
-    icon: '🔬', name: 'Wissenschaftler',
-    level: 'ORCID · Uni-E-Mail',
-    privs: ['Verifizierte Autorenschaft', 'HHTTPS Peer-Review', 'Schutz wissenschaftlicher Reputation']
-  },
-  creative: {
-    icon: '🎭', name: 'Kreativschaffender',
-    level: 'Verbandsmitglied',
-    privs: ['Stimm-/Gesichtsschutz vor KI-Klonen', 'Nachweis menschlicher Urheberschaft', 'Verifizierte Identität in Kreativplattformen']
-  },
-  developer: {
-    icon: '💻', name: 'Entwickler',
-    level: 'GitHub · E-Mail',
-    privs: ['API-Zugang mit erhöhten Rate-Limits', 'Zugang zu HHTTPS-Testumgebungen', 'Verifizierte Code-Autorenschaft']
-  },
-  medical_professional: {
-    icon: '🩺', name: 'Arzt / Medizinerin',
-    level: 'Approbation · Klinik-E-Mail',
-    privs: ['Verifizierte medizinische Auskünfte', 'Schutz vor Fake-Ärzten in Patientenforen', 'Authentische Telemedizin']
-  },
-  caregiver: {
-    icon: '🤝', name: 'Pflegekraft',
-    level: 'Pflegekammer · E-Mail',
-    privs: ['Verifizierte Patientenkommunikation', 'Schutz vor Identitätsmissbrauch', 'Authentische Pflegeberatung']
-  },
-  lawyer: {
-    icon: '⚖️', name: 'Anwalt / Anwältin',
-    level: 'RAK-Eintrag · Kanzlei-E-Mail',
-    privs: ['Verifizierte Rechtsberatung digital', 'Schutz vor KI-Pseudo-Rechtsberatung', 'Authentische Mandanten-Kommunikation']
-  },
-  notary: {
-    icon: '📜', name: 'Notar',
-    level: 'Notarkammer-Eintrag',
-    privs: ['Verifizierte notarielle Auskünfte', 'HHTTPS bei digitaler Beurkundung', 'Höchste Vertrauensstufe']
-  },
-  civil_servant: {
-    icon: '🏛️', name: 'Beamte / Behörde',
-    level: 'Behörden-E-Mail · Dienstausweis',
-    privs: ['Verifizierte Behördenkommunikation', 'Schutz vor Phishing in Behördennamen', 'Authentische Bescheide']
-  },
-  politician: {
-    icon: '🗳️', name: 'Politiker',
-    level: 'Offizielle E-Mail · Bundestag-ID',
-    privs: ['Schutz vor Deepfakes in eigenem Namen', 'Höchste Vertrauensstufe', 'Verifizierte politische Kommunikation']
-  },
-  business: {
-    icon: '🏢', name: 'Unternehmen',
-    level: 'Domain · Handelsregister',
-    privs: ['Verifizierte Unternehmenskommunikation', 'HHTTPS-Zertifikat für Websites', 'Schutz vor KI-Phishing']
-  },
-  craftsman: {
-    icon: '🔧', name: 'Handwerker / Meister',
-    level: 'Handwerksrolle · Meisterbrief',
-    privs: ['Verifizierte Identität in Vergleichsportalen', 'Schutz vor Fake-Bewertungen', 'Authentische Angebote']
-  }
-};
+// ─── DOM refs ───────────────────────────────────────────────────────────────
+const el = (id) => document.getElementById(id);
+const hero          = el('identityHero');
+const identityIcon  = el('identityIcon');
+const identityStatus= el('identityStatus');
+const identityRole  = el('identityRole');
+const identityLevel = el('identityLevel');
+const trustWrap     = el('trustWrap');
+const trustValue    = el('trustValue');
+const trustFill     = el('trustFill');
+const expiry        = el('expiry');
+const emptyState    = el('emptyState');
+const idActions     = el('idActions');
+const roleSwitch    = el('roleSwitch');
+const snippetSec    = el('snippet');
+const snippetBox    = el('snippetBox');
+const pageRow       = el('pageRow');
+const pageLabel     = el('pageLabel');
+const pageUrl       = el('pageUrl');
 
+// ─── Initial state ──────────────────────────────────────────────────────────
 async function init() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab) return renderNone();
+  // Load identity
+  const idResp = await sendMsg({ type: 'GET_ACTIVE_IDENTITY' });
+  const ident = idResp?.identity;
 
-  try {
-    const url = new URL(tab.url);
-    document.getElementById('headerUrl').textContent = url.hostname;
-  } catch {}
+  if (ident) {
+    renderIdentity(ident);
+    await renderRoleSwitcher(ident);
+  } else {
+    renderEmptyState();
+  }
 
-  // Get state from background
-  chrome.runtime.sendMessage({ type: 'GET_STATE' }, () => {});
+  // Load current page info
+  await renderPageState();
 
-  chrome.tabs.sendMessage(tab.id, { type: 'GET_STATE' }, (state) => {
-    if (chrome.runtime.lastError || !state) {
-      // Try background as fallback
-      chrome.runtime.sendMessage({ type: 'GET_TAB_STATE', tabId: tab.id }, (s2) => {
-        if (s2 && s2.status) render(s2);
-        else renderNone();
-      });
-      return;
-    }
-    render(state);
-  });
-
-  // Wire up revoke button
-  document.getElementById('revokeBtn')?.addEventListener('click', async () => {
-    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-    chrome.tabs.sendMessage(t.id, { type: 'GET_STATE' }, async (state) => {
-      if (!state?.token || !state?.issuer) return;
-      if (!confirm('Token wirklich widerrufen? Du musst dich danach neu verifizieren.')) return;
-
-      chrome.runtime.sendMessage(
-        { type: 'REVOKE_TOKEN', token: state.token, issuer: state.issuer },
-        (r) => {
-          if (r?.ok) {
-            document.getElementById('revokeBtn').textContent = '✓ Widerrufen';
-            setTimeout(() => window.close(), 1200);
-          } else {
-            alert('Widerruf fehlgeschlagen: ' + (r?.error || 'unknown'));
-          }
-        }
-      );
-    });
-  });
+  // Wire up actions
+  el('refreshBtn').addEventListener('click', () => doRefresh(ident));
+  el('copyTokenBtn').addEventListener('click', () => doCopyToken(ident));
+  el('logoutBtn').addEventListener('click', () => doLogout(ident));
+  el('copySnippetBtn').addEventListener('click', () => doCopySnippet(ident));
 }
 
-function render(state) {
-  const statusArea  = document.getElementById('statusArea');
-  const statusIcon  = document.getElementById('statusIcon');
-  const statusLabel = document.getElementById('statusLabel');
-  const statusSub   = document.getElementById('statusSub');
+// ─── Render identity (verified) ─────────────────────────────────────────────
+function renderIdentity(ident) {
+  hero.classList.remove('empty');
+  hero.classList.add('verified');
+  emptyState.classList.remove('show');
+  idActions.classList.add('show');
 
-  const isVerified  = state.status === 'verified' && (state.human === true || state.human === 'true');
-  const isSupported = state.status === 'unverified' || state.status === 'verified';
-  const trustScore  = parseInt(state.trustScore || '0');
+  identityIcon.textContent  = ident.roleIcon || '👤';
+  identityStatus.textContent = '✓ Verifiziert';
+  identityRole.textContent  = ident.roleLabel || ident.role || 'Verified';
+  identityLevel.textContent = ident.levelLabel
+    ? `via ${ident.levelLabel}`
+    : (ident.roleLevel ? `via ${ident.roleLevel}` : 'WebAuthn');
 
-  // Status area
-  if (isVerified) {
-    statusArea.className   = 'status-area verified';
-    statusIcon.textContent = '👤';
-    statusLabel.textContent = '✓ Menschlich verifiziert';
-    statusLabel.className   = 'status-label green';
-    statusSub.textContent   = 'HHTTPS aktiv · ' + (state.version || 'v0.4.1');
-  } else if (state.status === 'verified' && !isVerified) {
-    // Machine token
-    statusArea.className   = 'status-area machine';
-    statusIcon.textContent = '🤖';
-    statusLabel.textContent = 'Maschine verifiziert';
-    statusLabel.className   = 'status-label amber';
-    statusSub.textContent   = 'Bot oder Maschinenklient (kein Mensch)';
-  } else if (state.status === 'unverified' && isSupported) {
-    statusArea.className   = 'status-area unverified';
-    statusIcon.textContent = '🔓';
-    statusLabel.textContent = 'HHTTPS verfügbar';
-    statusLabel.className   = 'status-label amber';
-    statusSub.textContent   = 'Nicht als Mensch verifiziert';
+  const score = ident.trustScore || 0;
+  trustWrap.classList.add('show');
+  trustValue.textContent = `${score} / 100`;
+  requestAnimationFrame(() => { trustFill.style.width = score + '%'; });
+
+  // Expiry countdown
+  renderExpiry(ident);
+
+  // Signature snippet
+  renderSignatureSnippet(ident);
+}
+
+function renderEmptyState() {
+  hero.classList.remove('verified');
+  hero.classList.add('empty');
+  emptyState.classList.add('show');
+  idActions.classList.remove('show');
+  snippetSec.classList.remove('show');
+  roleSwitch.classList.remove('show');
+
+  identityIcon.textContent  = '🔒';
+  identityStatus.textContent = 'Nicht eingeloggt';
+  identityRole.textContent  = 'Keine Identität';
+  identityLevel.textContent = 'Logge dich bei hhttps.org ein';
+  trustWrap.classList.remove('show');
+  expiry.textContent = '';
+}
+
+function renderExpiry(ident) {
+  if (!ident.expiresAt) {
+    expiry.textContent = '';
+    return;
+  }
+  const now = Date.now();
+  const exp = new Date(ident.expiresAt).getTime();
+  const minLeft = Math.floor((exp - now) / 60_000);
+
+  if (minLeft <= 0) {
+    expiry.textContent = 'Token abgelaufen — wird aktualisiert …';
+    expiry.classList.add('warning');
+  } else if (minLeft < 10) {
+    expiry.textContent = `Token läuft ab in ${minLeft} Min`;
+    expiry.classList.add('warning');
+  } else if (minLeft < 60) {
+    expiry.textContent = `Token gültig · ${minLeft} Min verbleibend`;
+    expiry.classList.remove('warning');
   } else {
-    statusArea.className   = 'status-area';
-    statusIcon.textContent = '🔒';
-    statusLabel.textContent = 'Kein HHTTPS';
-    statusLabel.className   = 'status-label muted';
-    statusSub.textContent   = 'Website unterstützt HHTTPS nicht';
-    document.getElementById('noHHTTPS').style.display = 'block';
+    expiry.textContent = `Token gültig · ${Math.floor(minLeft / 60)}h ${minLeft % 60}min`;
+    expiry.classList.remove('warning');
+  }
+}
+
+// ─── Role switcher (only if multiple identities) ────────────────────────────
+async function renderRoleSwitcher(activeIdent) {
+  const r = await sendMsg({ type: 'GET_ALL_IDENTITIES' });
+  const all = r?.identities || [];
+  if (all.length < 2) {
+    roleSwitch.classList.remove('show');
     return;
   }
 
-  // Trust score
-  if (isSupported) {
-    document.getElementById('trustSection').classList.add('show');
-    document.getElementById('trustValue').textContent = trustScore + '/100';
-    const fill = document.getElementById('trustFill');
-    requestAnimationFrame(() => { fill.style.width = trustScore + '%'; });
-    if (trustScore >= 90)      fill.classList.add('high');
-    else if (trustScore >= 70) fill.classList.add('mid');
+  // Clear and rebuild chips
+  roleSwitch.querySelectorAll('.role-chip').forEach(c => c.remove());
+  all.forEach(ident => {
+    const chip = document.createElement('button');
+    chip.className = 'role-chip' + (ident.id === activeIdent.id ? ' active' : '');
+    chip.innerHTML = `<span>${ident.roleIcon || '👤'}</span><span>${ident.roleLabel || ident.role}</span>`;
+    chip.addEventListener('click', async () => {
+      await sendMsg({ type: 'SET_ACTIVE_IDENTITY', id: ident.id });
+      window.location.reload();
+    });
+    roleSwitch.appendChild(chip);
+  });
+  roleSwitch.classList.add('show');
+}
+
+// ─── Signature snippet ──────────────────────────────────────────────────────
+function renderSignatureSnippet(ident) {
+  // Compact snippet that can be pasted into any text field as a portable
+  // identity claim. Phase 2 will turn this into invisible markers via
+  // zero-width characters, but for now the visible form is useful.
+  const snip = buildSnippet(ident);
+  snippetBox.textContent = snip;
+  snippetSec.classList.add('show');
+}
+
+function buildSnippet(ident) {
+  // Format: [HHTTPS verified · role · trust · jti-shortened]
+  // Plus the full token at the end (for verification)
+  const role   = ident.role || 'human';
+  const trust  = ident.trustScore || 60;
+  const icon   = ident.roleIcon || '👤';
+  const label  = ident.roleLabel || ident.role || 'Verifiziert';
+  return `[HHTTPS ✓ ${icon} ${label} · Trust ${trust}/100 · ${ident.token}]`;
+}
+
+// ─── Page state ─────────────────────────────────────────────────────────────
+async function renderPageState() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) return;
+
+  // Show URL hostname
+  try {
+    const u = new URL(tab.url);
+    pageUrl.textContent = u.hostname;
+  } catch (e) {
+    pageUrl.textContent = tab.url || '';
   }
 
-  // Role card
-  if (state.role && ROLE_DATA[state.role]) {
-    const rd = ROLE_DATA[state.role];
-    document.getElementById('roleCard').classList.add('show');
-    document.getElementById('roleIcon').textContent  = state.roleIcon || rd.icon;
-    document.getElementById('roleName').textContent  = state.roleLabel || rd.name;
-    document.getElementById('roleLevel').textContent = rd.level;
-    document.getElementById('rolePrivileges').innerHTML =
-      rd.privs.map(p => `<div class="priv">${p}</div>`).join('');
-  }
-
-  // Details
-  if (isSupported) {
-    document.getElementById('details').classList.add('show');
-    document.getElementById('dStatus').textContent = state.status || '—';
-    document.getElementById('dHuman').textContent  = isVerified ? '✓ Ja' : '✗ Nein';
-    document.getElementById('dHuman').className    = 'dv ' + (isVerified ? 'g' : 'a');
-    document.getElementById('dMethod').textContent = state.method || '—';
-    document.getElementById('dIssuer').textContent = state.issuer || '—';
-
-    if (state.token) {
-      document.getElementById('dTokenRow').style.display = 'flex';
-      document.getElementById('dToken').textContent = state.token.slice(0, 24) + '…';
-      document.getElementById('revokeBtn')?.classList.add('show');
+  // Special case: hhttps.org → "Identity issuer"
+  try {
+    const host = new URL(tab.url).hostname;
+    if (host === 'hhttps.org' || host === 'www.hhttps.org') {
+      pageRow.querySelector('.page-icon').textContent = '🏛️';
+      pageLabel.textContent = 'HHTTPS Identity Provider';
+      return;
     }
+  } catch (e) {}
+
+  // Try to query content script
+  let state = null;
+  try {
+    state = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), 600);
+      chrome.tabs.sendMessage(tab.id, { type: 'GET_PAGE_STATE' }, (resp) => {
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) return resolve(null);
+        resolve(resp);
+      });
+    });
+  } catch (e) {}
+
+  if (state && state.status && state.status !== 'none' && state.status !== 'unknown') {
+    pageRow.querySelector('.page-icon').textContent =
+      state.human ? '✓' : (state.status === 'unverified' ? '!' : '?');
+    pageLabel.textContent = state.status === 'verified'
+      ? `HHTTPS aktiv (${state.role || 'verifiziert'})`
+      : 'HHTTPS unterstützt, nicht verifiziert';
+  } else {
+    pageRow.querySelector('.page-icon').textContent = '○';
+    pageLabel.textContent = 'Unterstützt HHTTPS nicht';
   }
 }
 
-function renderNone() {
-  document.getElementById('statusIcon').textContent  = '🔒';
-  document.getElementById('statusLabel').textContent = 'Kein HHTTPS';
-  document.getElementById('statusLabel').className   = 'status-label muted';
-  document.getElementById('statusSub').textContent   = 'Seite nicht verfügbar oder kein HTTPS';
-  document.getElementById('noHHTTPS').style.display  = 'block';
+// ─── Actions ────────────────────────────────────────────────────────────────
+async function doRefresh(ident) {
+  if (!ident) return;
+  const btn = el('refreshBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span>↻</span> <span>...</span>';
+
+  const r = await sendMsg({ type: 'REFRESH_NOW', id: ident.id });
+  if (r?.ok && r.identity) {
+    renderIdentity(r.identity);
+    btn.innerHTML = '<span>✓</span> <span>Aktualisiert</span>';
+    setTimeout(() => {
+      btn.innerHTML = '<span>↻</span> <span>Refresh</span>';
+      btn.disabled = false;
+    }, 1500);
+  } else {
+    btn.innerHTML = '<span>✗</span> <span>Fehler</span>';
+    setTimeout(() => {
+      btn.innerHTML = '<span>↻</span> <span>Refresh</span>';
+      btn.disabled = false;
+    }, 2000);
+  }
+}
+
+async function doCopyToken(ident) {
+  if (!ident?.token) return;
+  const btn = el('copyTokenBtn');
+  try {
+    await navigator.clipboard.writeText(ident.token);
+    btn.innerHTML = '<span>✓</span> <span>Kopiert!</span>';
+    setTimeout(() => {
+      btn.innerHTML = '<span>⎘</span> <span>Token</span>';
+    }, 1500);
+  } catch (e) {
+    btn.innerHTML = '<span>✗</span> <span>Fehler</span>';
+    setTimeout(() => {
+      btn.innerHTML = '<span>⎘</span> <span>Token</span>';
+    }, 2000);
+  }
+}
+
+async function doCopySnippet(ident) {
+  if (!ident) return;
+  const btn = el('copySnippetBtn');
+  try {
+    await navigator.clipboard.writeText(buildSnippet(ident));
+    btn.textContent = '✓ Kopiert!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = '📋 In Zwischenablage kopieren';
+      btn.classList.remove('copied');
+    }, 1500);
+  } catch (e) {
+    btn.textContent = '✗ Fehler — Browser blockiert Zwischenablage';
+    setTimeout(() => {
+      btn.textContent = '📋 In Zwischenablage kopieren';
+    }, 2500);
+  }
+}
+
+async function doLogout(ident) {
+  if (!ident) return;
+  const confirmed = confirm(
+    'Diese Identität entfernen?\n\n' +
+    'Der Token wird beim Server widerrufen und aus dem Browser gelöscht. ' +
+    'Du musst dich danach neu bei hhttps.org einloggen.'
+  );
+  if (!confirmed) return;
+
+  const r = await sendMsg({ type: 'REVOKE_IDENTITY', id: ident.id });
+  if (r?.ok) {
+    window.location.reload();
+  } else {
+    alert('Logout fehlgeschlagen: ' + (r?.error || 'unbekannt'));
+  }
+}
+
+// ─── Helper ─────────────────────────────────────────────────────────────────
+function sendMsg(msg) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(msg, (resp) => {
+        if (chrome.runtime.lastError) return resolve(null);
+        resolve(resp);
+      });
+    } catch (e) {
+      resolve(null);
+    }
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);
