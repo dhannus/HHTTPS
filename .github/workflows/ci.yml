@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  server-syntax:
+    name: Server syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci --omit=dev || npm install --omit=dev
+
+      - name: Syntax check all JS files
+        run: |
+          for f in $(find server -name '*.js' -not -path '*/node_modules/*'); do
+            node --check "$f" || exit 1
+          done
+          echo "✓ All JS files syntax-clean"
+
+  extension-validation:
+    name: Browser extension validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifest.json
+        run: |
+          python3 -c "import json; json.load(open('extension/manifest.json')); print('✓ manifest.json valid')"
+
+      - name: Check extension JS syntax
+        run: |
+          sudo apt-get install -y nodejs
+          for f in extension/*.js; do
+            node --check "$f" || exit 1
+          done
+          echo "✓ Extension JS syntax-clean"
+
+  examples-syntax:
+    name: Examples syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+
+      - name: Node examples
+        run: |
+          for f in examples/*/server.js examples/*/app.js; do
+            [ -f "$f" ] && node --check "$f"
+          done
+
+      - name: Python examples
+        run: |
+          for f in examples/*/app.py examples/*/views.py; do
+            [ -f "$f" ] && python3 -m py_compile "$f"
+          done
+
+      - name: PHP examples
+        run: |
+          for f in examples/*/*.php; do
+            [ -f "$f" ] && php -l "$f"
+          done
+
+  docs-lint:
+    name: Docs / Markdown
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for broken internal links
+        run: |
+          set -e
+          for md in $(find . -name '*.md' -not -path './node_modules/*'); do
+            grep -oE '\]\(\./[^)]+\)' "$md" | while read link; do
+              path=$(echo "$link" | sed 's/](//' | sed 's/)$//')
+              if [ ! -e "$(dirname "$md")/$path" ]; then
+                echo "Broken link in $md: $path"
+                # Don't fail yet — just warn during initial cleanup
+              fi
+            done
+          done

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E-Mail verifiziert — HHTTPS HumanProof</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#03050a;--s1:#070d18;--b1:#132035;--cyan:#00e5ff;--green:#00e676;--red:#ff5252;--amber:#ffab40;--text:#e0ecff;--muted:#4a6080;--mono:'JetBrains Mono',monospace;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
+body::before{content:'';position:fixed;inset:0;background:radial-gradient(ellipse 60% 50% at 50% 30%,rgba(0,229,255,0.06) 0%,transparent 60%);pointer-events:none;}
+.card{position:relative;max-width:480px;width:100%;background:var(--s1);border:1px solid var(--b1);border-radius:16px;overflow:hidden;animation:pop .5s cubic-bezier(.175,.885,.32,1.275);}
+@keyframes pop{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}
+.card-top{padding:32px;text-align:center;border-bottom:1px solid var(--b1);}
+.icon{font-size:52px;margin-bottom:16px;animation:bounce 1s ease .3s both;}
+@keyframes bounce{0%{transform:scale(0)}60%{transform:scale(1.15)}100%{transform:scale(1)}}
+h1{font-size:22px;font-weight:700;margin-bottom:8px;}
+h1.ok{color:var(--green);}h1.err{color:var(--red);}
+.sub{font-size:12px;color:var(--muted);line-height:1.6;}
+.card-body{padding:24px 32px;}
+.info-row{display:flex;gap:10px;margin-bottom:8px;font-size:12px;}
+.info-row .k{color:var(--muted);min-width:120px;}
+.info-row .v{color:var(--cyan);}
+.trust-bar-wrap{margin:16px 0;}
+.trust-label{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:6px;}
+.trust-bar{height:6px;background:var(--b1);border-radius:3px;overflow:hidden;}
+.trust-fill{height:100%;border-radius:3px;background:linear-gradient(90deg,var(--green),#00ff88);transition:width 1s .5s;}
+.action{text-align:center;padding:20px 32px;border-top:1px solid var(--b1);}
+.btn{display:inline-block;padding:12px 28px;background:linear-gradient(135deg,#1a4dcc,#2979ff);
+  color:#fff;text-decoration:none;border-radius:8px;font-size:13px;font-weight:700;
+  box-shadow:0 4px 18px rgba(41,121,255,.35);transition:all .2s;}
+.btn:hover{transform:translateY(-1px);}
+.err-detail{background:rgba(255,82,82,.08);border:1px solid rgba(255,82,82,.2);
+  border-radius:8px;padding:12px 16px;font-size:12px;color:var(--red);margin-top:16px;}
+</style>
+</head>
+<body>
+<div class="card" id="card">
+  <div class="card-top">
+    <div class="icon" id="icon">⌛</div>
+    <h1 id="title">Verifiziere…</h1>
+    <p class="sub" id="subtitle">Einen Moment bitte.</p>
+  </div>
+  <div class="card-body" id="body" style="display:none"></div>
+  <div class="action" id="action" style="display:none">
+    <a href="/" class="btn" id="backBtn">Zurück zur Demo →</a>
+  </div>
+</div>
+
+<script>
+(async () => {
+  const params  = new URLSearchParams(location.search);
+  const token   = params.get('token');
+  const session = params.get('session');
+
+  const icon  = document.getElementById('icon');
+  const title = document.getElementById('title');
+  const sub   = document.getElementById('subtitle');
+  const body  = document.getElementById('body');
+  const action= document.getElementById('action');
+  const btn   = document.getElementById('backBtn');
+
+  function show(ok, t, s, extra='') {
+    icon.textContent = ok ? '✅' : '❌';
+    title.className  = ok ? 'ok' : 'err';
+    title.textContent = t;
+    sub.textContent   = s;
+    if (extra) { body.innerHTML = extra; body.style.display='block'; }
+    action.style.display = 'block';
+  }
+
+  if (!token || !session) {
+    return show(false, 'Ungültiger Link', 'Token oder Session fehlt.', '');
+  }
+
+  // The server handles verification via GET /hhttps/email/verify
+  // which redirects here with result params. But we may also be
+  // called directly — check URL for result params first.
+  const ev = params.get('email_verify');
+
+  if (ev === 'success') {
+    const level  = params.get('level')  || 'email-verified';
+    const score  = parseInt(params.get('score') || '65');
+    const domain = params.get('domain') || '';
+    const sid    = params.get('session') || session;
+
+    const levelLabels = {
+      'official-email': 'Offizielle Behörden-E-Mail',
+      'email-verified': 'E-Mail verifiziert'
+    };
+
+    btn.href = `/?verified_session=${sid}&score=${score}&level=${encodeURIComponent(level)}&domain=${encodeURIComponent(domain)}`;
+
+    show(true, 'E-Mail bestätigt!', 'Dein Trust Score wurde erhöht.', `
+      <div class="info-row"><span class="k">Domain:</span><span class="v">${domain}</span></div>
+      <div class="info-row"><span class="k">Level:</span><span class="v">${levelLabels[level]||level}</span></div>
+      <div class="trust-bar-wrap">
+        <div class="trust-label"><span>Trust Score</span><span>${score}/100</span></div>
+        <div class="trust-bar"><div class="trust-fill" id="tf" style="width:0%"></div></div>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:12px;">
+        Klicke auf "Zurück zur Demo", um deinen HHTTPS-Token mit der verifizierten Rolle auszustellen.
+      </p>
+    `);
+    setTimeout(() => { const tf = document.getElementById('tf'); if(tf) tf.style.width=score+'%'; }, 100);
+
+  } else if (ev === 'error') {
+    const reason = params.get('reason') || 'Unbekannter Fehler';
+    show(false, 'Verifikation fehlgeschlagen', 'Der Link ist möglicherweise abgelaufen.',
+      `<div class="err-detail">${decodeURIComponent(reason)}</div>`);
+  } else {
+    // Direct call — shouldn't normally happen, redirect to server
+    window.location.href = `/hhttps/email/verify?token=${token}&session=${session}`;
+  }
+})();
+</script>
+</body>
+</html>

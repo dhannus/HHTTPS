@@ -1,0 +1,67 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+*.tgz
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pm2-*.log
+
+# Runtime keys (server generates these automatically)
+server/keys/
+keys/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+
+# PHP
+vendor/
+composer.lock
+
+# Testing
+coverage/
+.nyc_output/
+
+# Backups
+*.bak
+*.backup
+_backup_*/
+
+# Local server data
+*.db
+*.sqlite
+*.sqlite3
+
+# PM2 ecosystem
+ecosystem.config.local.js

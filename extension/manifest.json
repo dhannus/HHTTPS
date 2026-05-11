@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "HHTTPS — HumanProof",
+  "version": "1.1.0",
+  "description": "Zeigt an, ob eine Website HHTTPS unterstützt und ob du als Mensch verifiziert bist. Kompatibel mit HHTTPS-Protokoll v0.4.1.",
+  "author": "Daniel Hannuschka · HumanProof Initiative",
+  "homepage_url": "https://hhttps.org",
+
+  "icons": {
+    "16":  "icons/icon16.png",
+    "32":  "icons/icon32.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "32":  "icons/icon32.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "HHTTPS — HumanProof"
+  },
+
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+
+  "permissions": [
+    "storage",
+    "activeTab",
+    "alarms"
+  ],
+
+  "host_permissions": [
+    "https://hhttps.org/*",
+    "https://iamhmn.org/*",
+    "<all_urls>"
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

@@ -1,0 +1,1440 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HHTTPS v4.1 — Role Identity API | HumanProof</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,30..100,0..1&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
+<style>
+:root {
+  --bg:     #03050a;
+  --s1:     #070d18;
+  --s2:     #0b1525;
+  --b1:     #132035;
+  --b2:     #1c3050;
+  --cyan:   #00e5ff;
+  --blue:   #2979ff;
+  --green:  #00e676;
+  --amber:  #ffab40;
+  --red:    #ff5252;
+  --violet: #e040fb;
+  --text:   #e0ecff;
+  --muted:  #4a6080;
+  /* Pastel accents (matching iamhmn.org brand palette) */
+  --p-sage:    #A8B89E;
+  --p-terra:   #C97D5B;
+  --p-apricot: #F2B894;
+  --p-lavender:#B5A8D9;
+  --p-rose:    #DDB4B0;
+  --p-cream:   #F8F1E4;
+  --syne:   'Syne', sans-serif;
+  --fraunces:'Fraunces', serif;
+  --mono:   'JetBrains Mono', monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--text);
+  font-family:var(--mono);font-size:13px;line-height:1.6;
+  min-height:100vh;overflow-x:hidden;
+}
+body::before{
+  content:'';position:fixed;inset:0;
+  background:
+    radial-gradient(ellipse 70% 50% at 20% 0%,   rgba(41,121,255,0.07) 0%,transparent 60%),
+    radial-gradient(ellipse 50% 40% at 85% 100%,  rgba(0,229,255,0.06) 0%,transparent 60%),
+    radial-gradient(ellipse 40% 30% at 50% 50%,   rgba(224,64,251,0.03) 0%,transparent 60%);
+  pointer-events:none;z-index:0;
+}
+.w{position:relative;z-index:1;max-width:920px;margin:0 auto;padding:36px 20px 80px;}
+
+/* ─ top ─ */
+.topbar{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:52px;padding-bottom:16px;border-bottom:1px solid var(--b1);}
+.logo{display:flex;align-items:center;gap:14px;}
+.logo .v{
+  font-family:var(--syne);font-size:42px;font-weight:800;letter-spacing:-0.02em;
+  background:linear-gradient(90deg, var(--cyan) 0%, var(--p-apricot) 35%, var(--p-terra) 65%, var(--violet) 100%);
+  background-size:200% auto;
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  animation:hue-shift 6s ease-in-out infinite;
+  line-height:1;
+}
+@keyframes hue-shift {
+  0%, 100% { background-position: 0% center; }
+  50%      { background-position: 100% center; }
+}
+.logo .tag{font-size:10px;color:var(--muted);border:1px solid var(--b2);
+  padding:3px 8px;border-radius:3px;letter-spacing:1px;align-self:center;}
+.links{display:flex;gap:14px;font-size:11px;}
+.links a{color:var(--cyan);text-decoration:none;transition:color .2s;}
+.links a:hover{color:var(--p-apricot);}
+
+/* ─ hero ─ */
+.hero{margin-bottom:52px;}
+.hero h1{font-family:var(--syne);font-size:clamp(24px,4vw,38px);
+  font-weight:700;line-height:1.15;margin-bottom:14px;letter-spacing:-0.01em;}
+.hero h1 span{
+  background:linear-gradient(90deg, var(--cyan), var(--p-apricot));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.hero p{color:var(--muted);max-width:560px;line-height:1.7;margin-bottom:20px;}
+.hero p em{color:var(--p-apricot);font-style:normal;}
+.caps{display:inline-flex;gap:8px;flex-wrap:wrap;}
+.cap{background:var(--s1);border:1px solid var(--b2);border-radius:4px;
+  padding:4px 10px;font-size:11px;color:var(--muted);}
+.cap.hi{color:var(--p-apricot);border-color:rgba(242,184,148,0.3);}
+
+/* ─ response preview ─ */
+.resp-preview{
+  background:var(--s1);border:1px solid var(--b1);border-radius:12px;
+  overflow:hidden;margin-bottom:40px;
+}
+.rp-bar{padding:10px 16px;background:rgba(0,0,0,.4);border-bottom:1px solid var(--b1);
+  display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);}
+.wd{width:9px;height:9px;border-radius:50%;}
+.wd.r{background:#ff5f57;}.wd.y{background:#ffbd2e;}.wd.g{background:#28ca42;}
+.rp-body{display:grid;grid-template-columns:1fr 1fr;gap:0;}
+.rp-col{padding:16px 18px;}
+.rp-col:first-child{border-right:1px solid var(--b1);}
+.rp-col h4{font-size:10px;color:var(--muted);letter-spacing:1.5px;
+  margin-bottom:10px;text-transform:uppercase;}
+.hline{display:flex;gap:8px;padding:4px 0;font-size:11px;border-bottom:1px solid rgba(255,255,255,.03);}
+.hline .hk{color:var(--blue);min-width:200px;flex-shrink:0;}
+.hline .hv{word-break:break-all;transition:color .3s;}
+.hv.c{color:var(--cyan);}.hv.g{color:var(--green);}.hv.a{color:var(--amber);}.hv.m{color:var(--muted);}
+.hv.r{color:var(--red);}
+
+/* ─ flow card ─ */
+.flow{background:var(--s1);border:1px solid var(--b1);border-radius:14px;
+  overflow:hidden;margin-bottom:32px;}
+.flow-head{padding:14px 20px;background:rgba(0,0,0,.3);border-bottom:1px solid var(--b1);
+  display:flex;align-items:center;justify-content:space-between;}
+.flow-title{font-family:var(--syne);font-size:14px;font-weight:700;color:var(--cyan);}
+.live{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);}
+.ldot{width:7px;height:7px;border-radius:50%;background:var(--muted);transition:all .3s;}
+.ldot.on{background:var(--green);box-shadow:0 0 6px var(--green);}
+.ldot.err{background:var(--red);box-shadow:0 0 6px var(--red);}
+.ldot.pend{background:var(--amber);animation:blink 1s infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+.flow-body{padding:24px 22px;}
+
+/* ─ stepper ─ */
+.stepper{display:flex;gap:2px;margin-bottom:24px;
+  background:rgba(0,0,0,.3);border-radius:8px;padding:4px;}
+.st{flex:1;text-align:center;padding:9px 6px;border-radius:6px;
+  cursor:pointer;transition:all .25s;display:flex;flex-direction:column;align-items:center;gap:3px;}
+.st .n{width:22px;height:22px;border-radius:50%;border:1px solid var(--b2);
+  display:flex;align-items:center;justify-content:center;font-size:11px;
+  color:var(--muted);transition:all .25s;}
+.st .l{font-size:11px;color:var(--muted);}
+.st.active .n{border-color:var(--cyan);color:var(--cyan);box-shadow:0 0 8px rgba(0,229,255,.2);}
+.st.done   .n{border-color:var(--green);color:var(--green);background:rgba(0,230,118,.08);}
+.st.active .l,.st.active .n{color:var(--cyan);}
+.st.done   .l{color:var(--green);}
+
+/* ─ phase ─ */
+.phase{display:none;animation:fi .3s;}
+.phase.show{display:block;}
+@keyframes fi{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+.desc{color:var(--muted);font-size:12px;line-height:1.75;
+  padding:14px 16px;border-left:2px solid var(--b2);margin-bottom:20px;}
+.desc strong{color:var(--text);}
+
+/* ─ fp area ─ */
+.fp{display:flex;align-items:center;justify-content:center;height:90px;margin-bottom:18px;}
+.fpr{width:74px;height:74px;border-radius:50%;border:2px solid var(--b2);
+  display:flex;align-items:center;justify-content:center;font-size:32px;transition:all .5s;}
+.fpr.sc{border-color:var(--cyan);animation:ring 1.5s infinite;
+  box-shadow:0 0 0 4px rgba(0,229,255,.08);}
+.fpr.ok{border-color:var(--green);box-shadow:0 0 20px rgba(0,230,118,.2);}
+.fpr.er{border-color:var(--red);}
+@keyframes ring{0%,100%{box-shadow:0 0 0 4px rgba(0,229,255,.08)}50%{box-shadow:0 0 0 12px rgba(0,229,255,.04)}}
+
+/* ─ role grid ─ */
+.role-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:20px;
+}
+.role-card{
+  background:var(--s2);border:1px solid var(--b1);border-radius:10px;
+  padding:14px 12px;cursor:pointer;transition:all .2s;text-align:center;
+}
+.role-card:hover{border-color:var(--b2);background:var(--s1);}
+.role-card.sel{
+  border-color:var(--cyan);background:rgba(0,229,255,.06);
+  box-shadow:0 0 16px rgba(0,229,255,.1);
+}
+.role-card .ri{font-size:26px;margin-bottom:6px;}
+.role-card .rl{font-size:11px;font-weight:600;color:var(--text);margin-bottom:3px;}
+.role-card .rd{font-size:10px;color:var(--muted);line-height:1.4;}
+.role-card.sel .rl{color:var(--cyan);}
+
+/* ─ verification selector ─ */
+.veri-box{background:rgba(0,0,0,.3);border:1px solid var(--b2);
+  border-radius:8px;padding:16px;margin-bottom:16px;display:none;}
+.veri-box.show{display:block;animation:fi .3s;}
+.veri-box h4{font-size:11px;color:var(--cyan);letter-spacing:1px;margin-bottom:12px;}
+.veri-opts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+.vopt{padding:6px 12px;border-radius:6px;border:1px solid var(--b2);
+  background:var(--s2);cursor:pointer;font-size:11px;color:var(--muted);transition:all .2s;}
+.vopt:hover{border-color:var(--b2);color:var(--text);}
+.vopt.sel{border-color:var(--amber);color:var(--amber);background:rgba(255,171,64,.06);}
+.vfield{width:100%;background:var(--bg);border:1px solid var(--b2);
+  border-radius:6px;padding:9px 12px;color:var(--text);font-family:var(--mono);
+  font-size:12px;outline:none;transition:border-color .2s;margin-bottom:8px;}
+.vfield:focus{border-color:var(--cyan);}
+.vfield::placeholder{color:var(--muted);}
+
+/* ─ trust meter ─ */
+.trust-meter{margin-bottom:16px;}
+.trust-label{display:flex;justify-content:space-between;
+  font-size:11px;color:var(--muted);margin-bottom:6px;}
+.trust-label span:last-child{color:var(--amber);font-weight:600;}
+.trust-bar{height:4px;background:var(--b1);border-radius:2px;overflow:hidden;}
+.trust-fill{height:100%;border-radius:2px;transition:width .5s, background .5s;
+  background:linear-gradient(90deg,var(--blue),var(--cyan));}
+
+/* ─ result token ─ */
+.token-display{display:none;margin-bottom:20px;}
+.token-display.show{display:block;animation:fi .4s;}
+.tk-badge{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.tk-b{background:rgba(0,230,118,.08);border:1px solid rgba(0,230,118,.2);
+  border-radius:20px;padding:4px 12px;font-size:11px;color:var(--green);}
+.tk-raw{font-size:10px;color:var(--muted);word-break:break-all;
+  background:rgba(0,0,0,.4);border:1px solid var(--b1);
+  border-radius:6px;padding:10px 12px;line-height:2;margin-bottom:12px;}
+.tk-claims{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;}
+.tc{background:rgba(0,0,0,.3);border:1px solid var(--b1);border-radius:6px;padding:8px 10px;}
+.tc .k{font-size:9px;color:var(--muted);margin-bottom:2px;letter-spacing:.5px;}
+.tc .v{font-size:11px;color:var(--cyan);}
+
+/* ─ api demo ─ */
+.api-demo{background:var(--s1);border:1px solid var(--b1);
+  border-radius:12px;overflow:hidden;margin-bottom:32px;}
+.api-tabs{display:flex;border-bottom:1px solid var(--b1);}
+.atab{padding:10px 18px;font-size:11px;color:var(--muted);cursor:pointer;
+  border-bottom:2px solid transparent;transition:all .2s;}
+.atab.active{color:var(--cyan);border-bottom-color:var(--cyan);}
+.api-pane{display:none;padding:16px 18px;}
+.api-pane.show{display:block;animation:fi .3s;}
+.codeblock{background:#010408;border:1px solid var(--b1);border-radius:8px;
+  padding:14px 16px;font-size:11px;color:#8899bb;line-height:1.8;overflow-x:auto;
+  white-space:pre;}
+.codeblock .ck{color:var(--blue);}.codeblock .cv{color:var(--green);}.codeblock .cc{color:var(--muted);}
+.codeblock .cm{color:var(--amber);}.codeblock .co{color:var(--cyan);}
+
+/* ─ role table ─ */
+.role-table{width:100%;border-collapse:collapse;font-size:11px;margin-top:8px;}
+.role-table th{padding:8px 10px;text-align:left;border-bottom:1px solid var(--b1);
+  color:var(--muted);font-weight:400;letter-spacing:.8px;}
+.role-table td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.03);}
+.role-table tr:hover td{background:rgba(255,255,255,.02);}
+.badge-role{display:inline-block;padding:2px 7px;border-radius:3px;font-size:10px;
+  background:rgba(0,229,255,.08);border:1px solid rgba(0,229,255,.15);color:var(--cyan);}
+
+/* ─ buttons ─ */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:11px 20px;
+  border-radius:7px;border:none;cursor:pointer;font-family:var(--mono);
+  font-size:12px;font-weight:600;transition:all .2s;}
+.btn-p{background:linear-gradient(135deg,#1a4dcc,#2979ff);color:#fff;
+  box-shadow:0 4px 18px rgba(41,121,255,.3);}
+.btn-p:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(41,121,255,.4);}
+.btn-p:disabled{opacity:.35;cursor:not-allowed;transform:none;}
+.btn-g{background:var(--s2);color:var(--green);border:1px solid rgba(0,230,118,.2);}
+.btn-g:hover{border-color:var(--green);}
+.btn-g:disabled{opacity:.35;cursor:not-allowed;}
+.btn-c{background:var(--s2);color:var(--cyan);border:1px solid var(--b2);}
+.btn-c:hover{border-color:var(--cyan);}
+.btn-c:disabled{opacity:.35;cursor:not-allowed;}
+
+/* ─ Token Verify Section (public service) ─ */
+.verify-section{
+  background:linear-gradient(135deg, var(--s1) 0%, rgba(168, 184, 158, 0.04) 100%);
+  border:1px solid var(--b1);
+  border-left:3px solid var(--p-sage);
+  border-radius:12px;
+  overflow:hidden;
+  margin-bottom:52px;
+  position:relative;
+}
+.verify-section::before{
+  content:'';position:absolute;top:0;right:0;
+  width:300px;height:300px;
+  background:radial-gradient(circle, rgba(242, 184, 148, 0.06) 0%, transparent 70%);
+  pointer-events:none;
+}
+.verify-head{
+  padding:14px 22px;
+  border-bottom:1px solid var(--b1);
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(0,0,0,0.2);
+  position:relative;z-index:1;
+}
+.verify-title{
+  font-family:var(--mono);font-size:11px;
+  color:var(--p-sage);letter-spacing:2px;font-weight:600;
+}
+.verify-badge{
+  font-family:var(--mono);font-size:10px;
+  color:var(--muted);letter-spacing:0.5px;
+}
+.verify-body{padding:28px 24px;position:relative;z-index:1;}
+.verify-lead{
+  color:var(--text);max-width:640px;line-height:1.7;
+  margin-bottom:24px;font-size:13px;
+}
+.verify-lead em{color:var(--p-apricot);font-style:normal;font-weight:600;}
+
+.verify-input-row{
+  display:flex;gap:10px;margin-bottom:20px;
+}
+.verify-input{
+  flex:1;background:var(--s2);border:1px solid var(--b2);
+  color:var(--text);font-family:var(--mono);font-size:12px;
+  padding:13px 16px;border-radius:8px;
+  transition:border-color 0.2s, background 0.2s;
+}
+.verify-input:focus{
+  outline:none;border-color:var(--p-apricot);
+  background:rgba(242, 184, 148, 0.05);
+}
+.verify-input::placeholder{color:var(--muted);}
+.verify-btn{
+  background:linear-gradient(135deg, var(--p-terra), var(--p-apricot));
+  color:#FCFAF5;border:none;
+  font-family:var(--syne);font-size:13px;font-weight:700;letter-spacing:0.5px;
+  padding:13px 28px;border-radius:8px;cursor:pointer;
+  transition:transform 0.15s, box-shadow 0.15s;
+  white-space:nowrap;
+}
+.verify-btn:hover{
+  transform:translateY(-1px);
+  box-shadow:0 6px 20px rgba(201, 125, 91, 0.3);
+}
+.verify-btn:disabled{
+  opacity:0.5;cursor:not-allowed;transform:none;
+}
+
+/* ─ Verify result — BIG centered role icon ─ */
+.verify-result{display:none;}
+.verify-result.show{display:block;animation:fade-up 0.4s ease;}
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.vr-hero{
+  text-align:center;
+  padding:32px 20px;
+  background:rgba(0,0,0,0.25);
+  border-radius:12px;
+  border:1px solid var(--b1);
+  margin-bottom:20px;
+  position:relative;
+  overflow:hidden;
+}
+.vr-hero.valid{
+  border-color:rgba(168, 184, 158, 0.4);
+  background:radial-gradient(ellipse at center, rgba(168, 184, 158, 0.1) 0%, rgba(0,0,0,0.25) 70%);
+}
+.vr-hero.invalid{
+  border-color:rgba(255, 82, 82, 0.4);
+  background:radial-gradient(ellipse at center, rgba(255, 82, 82, 0.08) 0%, rgba(0,0,0,0.25) 70%);
+}
+.vr-hero.machine{
+  border-color:rgba(181, 168, 217, 0.4);
+  background:radial-gradient(ellipse at center, rgba(181, 168, 217, 0.08) 0%, rgba(0,0,0,0.25) 70%);
+}
+
+.vr-icon{
+  font-size:96px;line-height:1;
+  display:inline-block;
+  filter:drop-shadow(0 4px 16px rgba(242, 184, 148, 0.25));
+  margin-bottom:14px;
+  animation:icon-pop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+@keyframes icon-pop {
+  from { transform: scale(0.5); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+.vr-status{
+  font-family:var(--fraunces);
+  font-variation-settings: "SOFT" 80, "WONK" 1;
+  font-size:28px;font-weight:500;
+  margin-bottom:6px;
+  letter-spacing:-0.01em;
+}
+.vr-hero.valid .vr-status{color:var(--p-sage);}
+.vr-hero.invalid .vr-status{color:var(--red);}
+.vr-hero.machine .vr-status{color:var(--p-lavender);}
+
+.vr-role-label{
+  font-family:var(--fraunces);
+  font-style:italic;
+  font-size:18px;
+  color:var(--p-apricot);
+  margin-bottom:4px;
+}
+.vr-sub{
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--muted);
+  letter-spacing:1px;
+  text-transform:uppercase;
+}
+
+.vr-trust{
+  margin:14px auto 0;max-width:360px;
+}
+.vr-trust-label{
+  display:flex;justify-content:space-between;
+  font-family:var(--mono);font-size:10px;
+  color:var(--muted);letter-spacing:1px;
+  text-transform:uppercase;margin-bottom:6px;
+}
+.vr-trust-bar{
+  height:6px;background:var(--s2);border-radius:3px;overflow:hidden;
+}
+.vr-trust-fill{
+  height:100%;
+  background:linear-gradient(90deg, var(--p-terra), var(--p-apricot), var(--p-sage));
+  border-radius:3px;
+  transition:width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  width:0%;
+}
+
+.vr-details{
+  background:var(--s2);border:1px solid var(--b1);border-radius:10px;
+  padding:18px 20px;font-size:12px;
+}
+.vr-details-head{
+  font-family:var(--mono);font-size:10px;
+  color:var(--p-sage);letter-spacing:1.5px;
+  margin-bottom:14px;
+}
+.vr-row{
+  display:grid;grid-template-columns:140px 1fr;
+  padding:8px 0;border-bottom:1px solid var(--b1);
+  font-size:12px;
+}
+.vr-row:last-child{border-bottom:none;}
+.vr-key{color:var(--muted);font-family:var(--mono);}
+.vr-val{color:var(--text);font-family:var(--mono);word-break:break-all;}
+.vr-val.ok{color:var(--p-sage);font-weight:600;}
+.vr-val.bad{color:var(--red);font-weight:600;}
+.vr-val.amber{color:var(--p-apricot);font-weight:600;}
+
+@media (max-width: 600px) {
+  .verify-input-row{flex-direction:column;}
+  .vr-icon{font-size:72px;}
+  .vr-status{font-size:22px;}
+  .vr-row{grid-template-columns:1fr;gap:2px;}
+}
+
+/* ─ msg ─ */
+.msg{padding:9px 13px;border-radius:6px;font-size:12px;margin-bottom:12px;display:none;}
+.msg.show{display:block;animation:fi .3s;}
+.msg.e{background:rgba(255,82,82,.08);border:1px solid rgba(255,82,82,.2);color:var(--red);}
+.msg.s{background:rgba(0,230,118,.06);border:1px solid rgba(0,230,118,.18);color:var(--green);}
+.msg.i{background:rgba(41,121,255,.08);border:1px solid rgba(41,121,255,.2);color:#82aaff;}
+.spin{display:inline-block;width:11px;height:11px;border:2px solid transparent;
+  border-top-color:currentColor;border-radius:50%;animation:sp .7s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+footer{margin-top:60px;padding-top:18px;border-top:1px solid var(--b1);
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;
+  font-size:11px;color:var(--muted);}
+footer a{color:var(--cyan);text-decoration:none;}
+
+@media(max-width:600px){
+  .role-grid{grid-template-columns:repeat(2,1fr);}
+  .rp-body{grid-template-columns:1fr;}
+  .rp-col:first-child{border-right:none;border-bottom:1px solid var(--b1);}
+  .tk-claims{grid-template-columns:repeat(2,1fr);}
+  .api-tabs{overflow-x:auto;}
+}
+</style>
+</head>
+<body>
+<div class="w">
+
+<!-- Top -->
+<div class="topbar">
+  <div class="logo">
+    <div class="v">HHTTPS</div>
+    <div class="tag">v0.4.1</div>
+  </div>
+  <div class="links">
+    <a href="/hhttps/info" target="_blank">API Info</a>
+    <a href="/hhttps/roles" target="_blank">Alle Rollen</a>
+    <a href="/spec" target="_blank">Spec</a>
+    <a href="https://iamhmn.org" target="_blank">iamhmn.org</a>
+    <a href="https://github.com/dhannus/HumanProof" target="_blank">GitHub</a>
+  </div>
+</div>
+
+<!-- Hero -->
+<div class="hero">
+  <h1>Mensch oder Maschine?<br><span>Und welche Rolle?</span></h1>
+  <p>HHTTPS v4.1 beantwortet nicht nur <em>„Ist das ein Mensch?"</em>, sondern auch <em>„Welche gesellschaftliche Rolle hat dieser Mensch?"</em> — kryptografisch verifiziert, Zero-Knowledge, offen.</p>
+  <div class="caps">
+    <div class="cap hi">human: true/false</div>
+    <div class="cap hi">role: journalist | student | creative | ...</div>
+    <div class="cap hi">trustScore: 0–100</div>
+    <div class="cap">WebAuthn · Zero-Knowledge · Open Protocol</div>
+  </div>
+</div>
+
+<!-- Live response preview -->
+<div class="resp-preview">
+  <div class="rp-bar">
+    <div class="wd r"></div><div class="wd y"></div><div class="wd g"></div>
+    <span style="margin-left:8px">POST /hhttps/check — Response Headers + Body</span>
+  </div>
+  <div class="rp-body">
+    <div class="rp-col">
+      <h4>Response Headers</h4>
+      <div class="hline"><span class="hk">HHTTPS-Protocol-Version:</span><span class="hv a">0.3-roles</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Human:</span><span class="hv m" id="hHuman">false</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Actor-Type:</span><span class="hv m" id="hActor">unknown</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Status:</span><span class="hv m" id="hStatus">unverified</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Role:</span><span class="hv m" id="hRole">—</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Role-Level:</span><span class="hv m" id="hLevel">—</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Trust-Score:</span><span class="hv m" id="hScore">0</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Token:</span><span class="hv m" id="hToken">—</span></div>
+    </div>
+    <div class="rp-col">
+      <h4>JSON Body</h4>
+      <div class="hline"><span class="hk">hhttps.human:</span><span class="hv m" id="bHuman">false</span></div>
+      <div class="hline"><span class="hk">hhttps.actorType:</span><span class="hv m" id="bActor">unknown</span></div>
+      <div class="hline"><span class="hk">role.id:</span><span class="hv m" id="bRole">—</span></div>
+      <div class="hline"><span class="hk">role.label:</span><span class="hv m" id="bLabel">—</span></div>
+      <div class="hline"><span class="hk">role.level:</span><span class="hv m" id="bLvl">—</span></div>
+      <div class="hline"><span class="hk">role.trustScore:</span><span class="hv m" id="bScore">—</span></div>
+      <div class="hline"><span class="hk">role.privileges:</span><span class="hv m" id="bPriv">—</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Token Verify — Public Service -->
+<div class="verify-section">
+  <div class="verify-head">
+    <span class="verify-title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
+    <span class="verify-badge">🔍 Anyone can verify</span>
+  </div>
+  <div class="verify-body">
+    <p class="verify-lead">
+      Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat?
+      Füg ihn hier ein und sieh sofort, ob er <em>kryptografisch gültig</em> ist und von welcher Rolle er stammt.
+      Keine Anmeldung nötig.
+    </p>
+
+    <div class="verify-input-row">
+      <input type="text"
+             id="verifyTokenInput"
+             class="verify-input"
+             placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
+             autocomplete="off"
+             spellcheck="false" />
+      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()">
+        Prüfen →
+      </button>
+    </div>
+
+    <div class="verify-result" id="verifyResult">
+      <!-- Filled by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- Main flow -->
+<div class="flow">
+  <div class="flow-head">
+    <span class="flow-title">IDENTITÄTS-FLOW — INTERAKTIV</span>
+    <div class="live"><div class="ldot" id="ldot"></div><span id="llabel">bereit</span></div>
+  </div>
+  <div class="flow-body">
+
+    <div class="stepper">
+      <div class="st active" id="st1"><div class="n">1</div><span class="l">Passkey</span></div>
+      <div class="st"        id="st2"><div class="n">2</div><span class="l">Verifizieren</span></div>
+      <div class="st"        id="st3"><div class="n">3</div><span class="l">Rolle wählen</span></div>
+      <div class="st"        id="st3e"><div class="n">✉</div><span class="l">E-Mail</span></div>
+      <div class="st"        id="st4"><div class="n">4</div><span class="l">Token</span></div>
+    </div>
+
+    <div class="msg" id="msgBox"></div>
+
+    <!-- Phase 1: Register -->
+    <div class="phase show" id="p1">
+      <div class="desc">
+        <strong>Schritt 1 — Passkey anlegen (WebAuthn)</strong><br>
+        Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.
+      </div>
+      <div class="fp"><div class="fpr" id="fp1">🫆</div></div>
+      <button class="btn btn-p" id="btnReg" onclick="doRegister()">Passkey anlegen →</button>
+      &nbsp;
+      <button class="btn btn-c" id="btnSkip" onclick="skipToAuth()" title="Wenn du schon einen Passkey hast">Bereits registriert →</button>
+    </div>
+
+    <!-- Phase 2: Auth -->
+    <div class="phase" id="p2">
+      <div class="desc">
+        <strong>Schritt 2 — Menschsein beweisen</strong><br>
+        Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur — <strong>kein biometrisches Datum verlässt das Gerät.</strong>
+      </div>
+      <div class="fp"><div class="fpr" id="fp2">🔐</div></div>
+      <button class="btn btn-p" id="btnAuth" onclick="doAuth()">Fingerabdruck / PIN bestätigen →</button>
+    </div>
+
+    <!-- Phase 3: Role -->
+    <div class="phase" id="p3">
+      <div class="desc">
+        <strong>Schritt 3 — Rolle deklarieren</strong><br>
+        Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.
+      </div>
+
+      <div class="role-grid" id="roleGrid"></div>
+
+      <div class="trust-meter">
+        <div class="trust-label"><span>Trust Score</span><span id="trustVal">60 / 100</span></div>
+        <div class="trust-bar"><div class="trust-fill" id="trustFill" style="width:60%"></div></div>
+      </div>
+
+      <div class="veri-box" id="veriBox">
+        <h4>// OPTIONALE VERIFIKATION</h4>
+        <div class="veri-opts" id="veriOpts"></div>
+        <div id="veriFields"></div>
+      </div>
+
+
+      <!-- Email verification box -->
+      <div class="veri-box show" id="emailBox" style="margin-top:12px;border-color:rgba(0,229,255,0.2);">
+        <h4 style="color:var(--cyan)">// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN</h4>
+        <p style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.6;">
+          Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen.
+          Bildungs-Domains (<code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code>),
+          offizielle Behörden (<code style="color:var(--cyan)">bundestag.de</code>) und
+          Verbände werden automatisch erkannt. <strong style="color:var(--text)">Die Adresse wird nicht gespeichert.</strong>
+        </p>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <input class="vfield" id="emailInput" type="email" placeholder="deine@email.de"
+            style="margin:0;flex:1" oninput="previewEmailDomain(this.value)">
+          <button class="btn btn-c" id="btnSendEmail" onclick="doSendEmail()" style="white-space:nowrap;">
+            ✉ Link senden
+          </button>
+        </div>
+        <div id="domainPreview" style="font-size:11px;color:var(--muted);min-height:16px;"></div>
+        <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>
+        <!-- Email verified badge -->
+        <div id="emailVerifiedBadge" style="display:none;margin-top:10px;
+          background:rgba(0,230,118,0.08);border:1px solid rgba(0,230,118,0.2);
+          border-radius:6px;padding:10px 12px;font-size:12px;color:var(--green);">
+          ✓ E-Mail verifiziert — Trust Score erhöht!
+        </div>
+      </div>
+
+      <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled>
+        Rolle bestätigen + Token ausstellen →
+      </button>
+    </div>
+
+    <!-- Phase 4: Token -->
+    <div class="phase" id="p4">
+      <div class="token-display show" id="tokenDisplay">
+        <div class="tk-badge">
+          <div class="tk-b" id="tkBadge">✓ HHTTPS-Token ausgestellt</div>
+        </div>
+        <div class="tk-raw" id="tkRaw"></div>
+        <div class="tk-claims">
+          <div class="tc"><div class="k">HUMAN</div><div class="v" id="tcH">—</div></div>
+          <div class="tc"><div class="k">ROLE</div><div class="v" id="tcR">—</div></div>
+          <div class="tc"><div class="k">TRUST</div><div class="v" id="tcT">—</div></div>
+          <div class="tc"><div class="k">LEVEL</div><div class="v" id="tcL">—</div></div>
+        </div>
+      </div>
+      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled>
+        /hhttps/check aufrufen — Live-Test →
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- API Demo -->
+<div class="api-demo">
+  <div class="api-tabs">
+    <div class="atab active" onclick="showTab('curl')">cURL</div>
+    <div class="atab" onclick="showTab('js')">JavaScript</div>
+    <div class="atab" onclick="showTab('python')">Python</div>
+    <div class="atab" onclick="showTab('response')">Response</div>
+  </div>
+  <div class="api-pane show" id="tab-curl">
+    <pre class="codeblock"><span class="cc"># HHTTPS-Token im Header senden → Antwort: Mensch + Rolle</span>
+<span class="cm">curl</span> -X POST https://hhttps.funnysearch.eu/hhttps/check \
+  -H <span class="cv">"HHTTPS-Token: &lt;dein-token&gt;"</span> \
+  -H <span class="cv">"Content-Type: application/json"</span>
+
+<span class="cc"># Ohne Token → actorType: "unknown"</span>
+<span class="cm">curl</span> -X POST https://hhttps.funnysearch.eu/hhttps/check
+
+<span class="cc"># Alle verfügbaren Rollen</span>
+<span class="cm">curl</span> https://hhttps.funnysearch.eu/hhttps/roles | jq</pre>
+  </div>
+  <div class="api-pane" id="tab-js">
+    <pre class="codeblock"><span class="cc">// Integration in deine App</span>
+<span class="ck">async function</span> <span class="co">checkHuman</span>(hhttpsToken) {
+  <span class="ck">const</span> res = <span class="ck">await</span> fetch(<span class="cv">'/hhttps/check'</span>, {
+    method: <span class="cv">'POST'</span>,
+    headers: { <span class="cv">'HHTTPS-Token'</span>: hhttpsToken }
+  });
+
+  <span class="ck">const</span> data = <span class="ck">await</span> res.json();
+
+  <span class="ck">if</span> (data.hhttps.human) {
+    console.log(<span class="cv">`Mensch ✓ · Rolle: ${data.role.label}`</span>);
+    console.log(<span class="cv">`Trust Score: ${data.role.trustScore}/100`</span>);
+    console.log(<span class="cv">`Privilegien:`, data.role.privileges</span>);
+  } <span class="ck">else</span> {
+    console.log(<span class="cv">'Bot oder unbekannter Akteur'</span>);
+  }
+}
+
+<span class="cc">// Response-Header direkt prüfen</span>
+<span class="ck">const</span> isHuman = res.headers.get(<span class="cv">'HHTTPS-Human'</span>) === <span class="cv">'true'</span>;
+<span class="ck">const</span> role    = res.headers.get(<span class="cv">'HHTTPS-Role'</span>);    <span class="cc">// z.B. "journalist"</span>
+<span class="ck">const</span> score   = res.headers.get(<span class="cv">'HHTTPS-Trust-Score'</span>); <span class="cc">// z.B. "85"</span></pre>
+  </div>
+  <div class="api-pane" id="tab-python">
+    <pre class="codeblock"><span class="ck">import</span> requests
+
+<span class="ck">def</span> <span class="co">check_human</span>(hhttps_token: str) -> dict:
+    res = requests.post(
+        <span class="cv">"https://hhttps.funnysearch.eu/hhttps/check"</span>,
+        headers={<span class="cv">"HHTTPS-Token"</span>: hhttps_token}
+    )
+    data = res.json()
+
+    <span class="cc"># Header-basierte Prüfung (schnell)</span>
+    is_human    = res.headers.get(<span class="cv">"HHTTPS-Human"</span>) == <span class="cv">"true"</span>
+    role        = res.headers.get(<span class="cv">"HHTTPS-Role"</span>)
+    trust_score = <span class="ck">int</span>(res.headers.get(<span class="cv">"HHTTPS-Trust-Score"</span>, <span class="cv">0</span>))
+
+    <span class="ck">return</span> {
+        <span class="cv">"human"</span>:       is_human,
+        <span class="cv">"role"</span>:        role,
+        <span class="cv">"trust_score"</span>: trust_score,
+        <span class="cv">"privileges"</span>:  data.get(<span class="cv">"role"</span>, {}).get(<span class="cv">"privileges"</span>, [])
+    }</pre>
+  </div>
+  <div class="api-pane" id="tab-response">
+    <pre class="codeblock" id="sampleResponse">{
+  <span class="ck">"hhttps"</span>: {
+    <span class="ck">"version"</span>:    <span class="cv">"0.3-roles"</span>,
+    <span class="ck">"status"</span>:     <span class="cv">"verified"</span>,
+    <span class="ck">"human"</span>:      <span class="cv">true</span>,
+    <span class="ck">"actorType"</span>:  <span class="cv">"human"</span>,
+    <span class="ck">"method"</span>:     <span class="cv">"webauthn-passkey"</span>,
+    <span class="ck">"trustScore"</span>: <span class="cv">85</span>
+  },
+  <span class="ck">"role"</span>: {
+    <span class="ck">"id"</span>:          <span class="cv">"journalist"</span>,
+    <span class="ck">"label"</span>:       <span class="cv">"Journalist"</span>,
+    <span class="ck">"icon"</span>:        <span class="cv">"📰"</span>,
+    <span class="ck">"level"</span>:       <span class="cv">"press-card"</span>,
+    <span class="ck">"levelLabel"</span>:  <span class="cv">"Presseausweis"</span>,
+    <span class="ck">"trustScore"</span>:  <span class="cv">85</span>,
+    <span class="ck">"privileges"</span>: [
+      <span class="cv">"Zugang zu HHTTPS-geschützten Pressebereichen"</span>,
+      <span class="cv">"Verifizierte Quellenangabe in digitalen Publikationen"</span>,
+      <span class="cv">"Schutz vor Identitätsmissbrauch als Journalist durch KI"</span>
+    ],
+    <span class="ck">"userStory"</span>: <span class="cv">"US-012: Als Journalist..."</span>
+  }
+}</pre>
+  </div>
+</div>
+
+<!-- Role table -->
+<div style="margin-bottom:32px;">
+  <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;margin-bottom:12px;">// VERFÜGBARE ROLLEN</div>
+  <table class="role-table" id="roleTableFull"></table>
+</div>
+
+<footer>
+  <div>
+    <strong>Daniel Hannuschka</strong> · Initiative HumanProof ·
+    <a href="mailto:daniel.hannuschka@tweakz.de">daniel.hannuschka@tweakz.de</a> ·
+    <a href="https://github.com/dhannus/HumanProof">GitHub</a> ·
+    <a href="https://iamhmn.org">iamhmn.org</a>
+  </div>
+  <div>🔐 HHTTPS v0.4.1 · EUPL-1.2 · Made in Europe</div>
+</footer>
+
+</div><!-- /wrap -->
+
+<script>
+const { startRegistration, startAuthentication } = SimpleWebAuthnBrowser;
+
+// ── State ──────────────────────────────────────────────────────────────────
+let userId     = localStorage.getItem('hhttps_uid') || null;
+let sessionId  = null;
+let hhttpsToken = null;
+let selRole    = null;
+let selVMethod = 'self-declared';
+let vData      = {};
+
+const ROLES_LOCAL = {
+  citizen:              { icon:'🧑',   label:'Bürger',                 methods:['self-declared'] },
+  journalist:           { icon:'📰',   label:'Journalist',             methods:['self-declared','press-card','email-verified'] },
+  student:              { icon:'🎓',   label:'Schüler / Student',      methods:['self-declared','email-verified','student-id'] },
+  teacher:              { icon:'👨‍🏫', label:'Lehrer / Pädagoge',     methods:['self-declared','school-email','teacher-id'] },
+  researcher:           { icon:'🔬',   label:'Wissenschaftler',        methods:['self-declared','email-verified','orcid'] },
+  creative:             { icon:'🎭',   label:'Kreativschaffender',     methods:['self-declared','association-member','email-verified'] },
+  developer:            { icon:'💻',   label:'Entwickler',             methods:['self-declared','email-verified','github-verified'] },
+  medical_professional: { icon:'🩺',   label:'Arzt / Medizinerin',     methods:['self-declared','approbation-id','medical-email'] },
+  caregiver:            { icon:'🤝',   label:'Pflegekraft',            methods:['self-declared','care-chamber-id','email-verified'] },
+  lawyer:               { icon:'⚖️',  label:'Anwalt / Anwältin',      methods:['self-declared','bar-association-id','lawyer-email'] },
+  notary:               { icon:'📜',   label:'Notar',                  methods:['self-declared','notary-chamber-id'] },
+  civil_servant:        { icon:'🏛️',  label:'Beamte / Behörde',       methods:['self-declared','official-email','service-id'] },
+  politician:           { icon:'🗳️',  label:'Politiker',              methods:['self-declared','official-email','bundestag-verified'] },
+  business:             { icon:'🏢',   label:'Unternehmen',            methods:['self-declared','domain-verified','handelsregister'] },
+  craftsman:            { icon:'🔧',   label:'Handwerker / Meister',   methods:['self-declared','craft-chamber-id','master-certificate'] }
+};
+
+const VMETHOD_LABELS = {
+  'self-declared':       { l:'Selbstdeklariert',   score:30, field:null },
+  'email-verified':      { l:'E-Mail verifiziert', score:70, field:{p:'E-Mail-Adresse', key:'email'} },
+  'github-verified':     { l:'GitHub verifiziert', score:72, field:{p:'GitHub-Username', key:'github'} },
+  'school-email':        { l:'Schul-E-Mail',       score:75, field:{p:'@*.schule.[bundesland].de', key:'email'} },
+  'medical-email':       { l:'Klinik-E-Mail',      score:78, field:{p:'Praxis-/Klinik-E-Mail', key:'email'} },
+  'lawyer-email':        { l:'Kanzlei-E-Mail',     score:78, field:{p:'Kanzlei-E-Mail', key:'email'} },
+  'domain-verified':     { l:'Domain verifiziert', score:82, field:{p:'Firmen-Domain', key:'domain'} },
+  'press-card':          { l:'Presseausweis',      score:85, field:{p:'Presseausweis-Nr.', key:'pressCardId'} },
+  'student-id':          { l:'Matrikelnummer',     score:85, field:{p:'Matrikelnummer + Uni', key:'studentId'} },
+  'association-member':  { l:'Verbandsmitglied',   score:85, field:{p:'Mitgliedsnr. (VDS/BFFS/...)', key:'memberId'} },
+  'teacher-id':          { l:'Lehrer-ID',          score:86, field:{p:'Lehrer-ID des Bundeslandes', key:'teacherId'} },
+  'craft-chamber-id':    { l:'Handwerksrolle',     score:86, field:{p:'Eintrag in der Handwerkskammer', key:'craftId'} },
+  'orcid':               { l:'ORCID',              score:88, field:{p:'ORCID (0000-0000-0000-0000)', key:'orcid'} },
+  'master-certificate':  { l:'Meisterbrief',       score:90, field:{p:'Meisterbrief-Nummer', key:'masterCertId'} },
+  'care-chamber-id':     { l:'Pflegekammer',       score:90, field:{p:'Pflegekammer-Mitgliedsnr.', key:'careId'} },
+  'service-id':          { l:'Dienstausweis',      score:90, field:{p:'Dienstausweis-Nummer', key:'serviceId'} },
+  'official-email':      { l:'Offizielle E-Mail',  score:90, field:{p:'@bundestag.de / @*.bund.de', key:'email'} },
+  'bar-association-id':  { l:'RAK-Eintrag',        score:92, field:{p:'Rechtsanwaltskammer-Eintrag', key:'barId'} },
+  'handelsregister':     { l:'Handelsregister',    score:92, field:{p:'HRB/HRA-Nummer', key:'hrNumber'} },
+  'approbation-id':      { l:'Approbation',        score:93, field:{p:'Approbationsnummer', key:'approbationId'} },
+  'notary-chamber-id':   { l:'Notarkammer',        score:95, field:{p:'Notarkammer-Eintrag', key:'notaryId'} },
+  'bundestag-verified':  { l:'Bundestag-ID',       score:98, field:{p:'Abgeordneten-ID (bundestag.de)', key:'bundestagId'} },
+};
+
+// ── UI helpers ─────────────────────────────────────────────────────────────
+function msg(t, type='i') {
+  const el = document.getElementById('msgBox');
+  el.className = 'msg show ' + type;
+  el.textContent = t;
+  clearTimeout(el._t);
+  el._t = setTimeout(()=>el.classList.remove('show'), 7000);
+}
+function live(state, label) {
+  document.getElementById('ldot').className = 'ldot ' + state;
+  document.getElementById('ldot').textContent;
+  document.getElementById('llabel').textContent = label;
+}
+// ── Public Token Verification (paste a token, see if it's valid) ──────────
+async function verifyPastedToken() {
+  const input = document.getElementById('verifyTokenInput');
+  const btn   = document.getElementById('verifyTokenBtn');
+  const out   = document.getElementById('verifyResult');
+  const tok   = input.value.trim();
+
+  if (!tok) {
+    out.className = 'verify-result show';
+    out.innerHTML = renderVerifyHero('invalid', '🤔', 'Kein Token angegeben', 'Bitte füge einen HHTTPS-Token ein.', null, null);
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Prüfe…';
+  out.className = 'verify-result show';
+  out.innerHTML = '<div class="vr-hero"><div class="vr-icon">⏳</div><div class="vr-status" style="color:var(--muted)">Token wird kryptografisch geprüft …</div></div>';
+
+  try {
+    const res = await fetch('/hhttps/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ token: tok })
+    });
+    const data = await res.json();
+
+    if (!res.ok) {
+      out.innerHTML = renderVerifyHero('invalid', '❌', 'Token ungültig',
+        data.error || 'Signatur oder Token nicht gültig.',
+        null, null) +
+        renderVerifyDetails({
+          status: data.hhttps?.status || 'invalid',
+          error:  data.error
+        });
+      return;
+    }
+
+    // Machine token
+    if (data.hhttps?.actorType === 'bot' || data.machine) {
+      out.innerHTML = renderVerifyHero('machine', '🤖', 'Maschine verifiziert',
+        'Dieser Token wurde von einem Maschinen-Operator ausgestellt (kein Mensch).',
+        null, null) +
+        renderVerifyDetails({
+          status:      data.hhttps?.status,
+          actorType:   'bot',
+          operator:    data.machine?.operatorName,
+          purpose:     data.machine?.purpose,
+          issuer:      data.hhttps?.issuer,
+          issuedAt:    data.machine?.issuedAt,
+          method:      data.hhttps?.method
+        });
+      return;
+    }
+
+    // Human verified
+    const role  = data.role || {};
+    const hh    = data.hhttps || {};
+    const icon  = role.icon || '🧑';
+    const label = role.label || role.id || 'Bürger';
+    const score = role.trustScore || hh.trustScore || 0;
+
+    out.innerHTML = renderVerifyHero('valid', icon,
+      'Mensch verifiziert',
+      label,
+      score,
+      role.levelLabel || role.level) +
+      renderVerifyDetails({
+        status:      hh.status,
+        human:       'true',
+        actorType:   'human',
+        role:        role.id,
+        roleLabel:   role.label,
+        roleLevel:   role.level,
+        levelLabel:  role.levelLabel,
+        trustScore:  score,
+        method:      hh.method,
+        issuer:      hh.issuer,
+        issuedAt:    hh.issuedAt,
+        expiresAt:   hh.expiresAt,
+        privileges:  role.privileges
+      });
+
+  } catch (e) {
+    out.innerHTML = renderVerifyHero('invalid', '⚠️', 'Verbindungsfehler',
+      e.message || 'Server nicht erreichbar.',
+      null, null);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Prüfen →';
+  }
+}
+
+function renderVerifyHero(state, icon, status, sub, trustScore, levelLabel) {
+  let html = `<div class="vr-hero ${state}">`;
+  html += `<div class="vr-icon">${icon}</div>`;
+  html += `<div class="vr-status">${status}</div>`;
+  if (sub) html += `<div class="vr-role-label">${sub}</div>`;
+  if (levelLabel) html += `<div class="vr-sub">${levelLabel}</div>`;
+  if (trustScore !== null && trustScore !== undefined) {
+    html += `
+      <div class="vr-trust">
+        <div class="vr-trust-label"><span>Trust Score</span><span>${trustScore} / 100</span></div>
+        <div class="vr-trust-bar"><div class="vr-trust-fill" style="width:${trustScore}%"></div></div>
+      </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function renderVerifyDetails(d) {
+  const rows = [];
+  const add = (k, v, cls) => {
+    if (v === undefined || v === null || v === '') return;
+    let valStr = v;
+    if (Array.isArray(v)) valStr = v.join(' · ');
+    if (typeof v === 'object') valStr = JSON.stringify(v);
+    rows.push(`<div class="vr-row"><span class="vr-key">${k}</span><span class="vr-val ${cls||''}">${valStr}</span></div>`);
+  };
+  add('status',     d.status,     d.status === 'verified' ? 'ok' : (d.status === 'invalid' ? 'bad' : ''));
+  add('human',      d.human,      d.human === 'true' ? 'ok' : '');
+  add('actorType',  d.actorType,  d.actorType === 'human' ? 'ok' : (d.actorType === 'bot' ? 'amber' : ''));
+  add('role',       d.role);
+  add('role.label', d.roleLabel);
+  add('role.level', d.roleLevel);
+  add('verification', d.levelLabel, 'amber');
+  add('trustScore', d.trustScore ? d.trustScore + ' / 100' : null, 'ok');
+  add('method',     d.method);
+  add('issuer',     d.issuer);
+  add('issuedAt',   d.issuedAt);
+  add('expiresAt',  d.expiresAt);
+  add('operator',   d.operator);
+  add('purpose',    d.purpose);
+  add('privileges', d.privileges);
+  add('error',      d.error,      'bad');
+  return `<div class="vr-details"><div class="vr-details-head">// TOKEN-DETAILS</div>${rows.join('')}</div>`;
+}
+
+// Allow Enter key in the verify input
+document.addEventListener('DOMContentLoaded', () => {
+  const v = document.getElementById('verifyTokenInput');
+  if (v) v.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') verifyPastedToken();
+  });
+});
+
+function setStep(n) {
+  [1,2,3,4].forEach(i => {
+    const t = document.getElementById('st'+i);
+    const p = document.getElementById('p'+i);
+    t.classList.remove('active','done');
+    p.classList.remove('show');
+    if (i < n)  t.classList.add('done');
+    if (i === n){ t.classList.add('active'); p.classList.add('show'); }
+  });
+}
+function setFp(id, st, em='🫆') {
+  const el = document.getElementById('fp'+id);
+  el.className = 'fpr ' + ({scanning:'sc',success:'ok',error:'er'}[st]||'');
+  el.textContent = {scanning:'🫆',success:'✅',error:'❌'}[st] || em;
+}
+function updateHeaders(h, actor, status, role, level, score, token) {
+  const hv = (id, v, cls) => {
+    const el = document.getElementById(id);
+    el.textContent = v; el.className = 'hv ' + (cls||'m');
+  };
+  hv('hHuman',  String(h),  h?'g':'m');
+  hv('hActor',  actor,      actor==='human'?'g':'m');
+  hv('hStatus', status,     status==='verified'?'g':'m');
+  hv('hRole',   role||'—',  role?'a':'m');
+  hv('hLevel',  level||'—', level?'a':'m');
+  hv('hScore',  score||'0', +score>60?'g':+score>30?'a':'m');
+  hv('hToken',  token ? token.slice(0,20)+'…' : '—', token?'c':'m');
+  hv('bHuman',  String(h),  h?'g':'m');
+  hv('bActor',  actor,      actor==='human'?'g':'m');
+  const rl = ROLES_LOCAL[role];
+  hv('bRole',   role||'—',  role?'a':'m');
+  hv('bLabel',  rl?rl.label+'  '+rl.icon:'—', role?'c':'m');
+  hv('bLvl',    level||'—', level?'a':'m');
+  hv('bScore',  score||'—', +score>60?'g':+score>30?'a':'m');
+  hv('bPriv',   role ? '→ '+ROLES_LOCAL[role]?.label+' Privilegien' : '—', role?'c':'m');
+}
+function setTrust(score) {
+  document.getElementById('trustVal').textContent = score + ' / 100';
+  const f = document.getElementById('trustFill');
+  f.style.width = score + '%';
+  f.style.background = score >= 80
+    ? 'linear-gradient(90deg,var(--green),#00ff88)'
+    : score >= 60
+      ? 'linear-gradient(90deg,var(--blue),var(--cyan))'
+      : 'linear-gradient(90deg,var(--red),var(--amber))';
+}
+function showTab(id) {
+  document.querySelectorAll('.atab').forEach((t,i) => {
+    const ids = ['curl','js','python','response'];
+    t.classList.toggle('active', ids[i] === id);
+  });
+  document.querySelectorAll('.api-pane').forEach(p => p.classList.remove('show'));
+  document.getElementById('tab-'+id).classList.add('show');
+}
+
+// ── Build role grid ────────────────────────────────────────────────────────
+function buildRoleGrid() {
+  const g = document.getElementById('roleGrid');
+  g.innerHTML = Object.entries(ROLES_LOCAL).map(([id, r]) => `
+    <div class="role-card" id="rc-${id}" onclick="selectRole('${id}')">
+      <div class="ri">${r.icon}</div>
+      <div class="rl">${r.label}</div>
+    </div>
+  `).join('');
+}
+
+// Build role table
+function buildRoleTable() {
+  const t = document.getElementById('roleTableFull');
+  t.innerHTML = `<tr><th>Rolle</th><th>ID</th><th>Verifikationsmethoden</th></tr>` +
+    Object.entries(ROLES_LOCAL).map(([id, r]) => `
+      <tr>
+        <td>${r.icon} ${r.label}</td>
+        <td><span class="badge-role">${id}</span></td>
+        <td>${r.methods.map(m => VMETHOD_LABELS[m]?.l || m).join(' · ')}</td>
+      </tr>
+    `).join('');
+}
+
+function selectRole(id) {
+  selRole = id; selVMethod = 'self-declared'; vData = {};
+  document.querySelectorAll('.role-card').forEach(c => c.classList.remove('sel'));
+  document.getElementById('rc-'+id).classList.add('sel');
+  document.getElementById('btnDeclare').disabled = false;
+
+  // Build verification options for this role
+  const methods = ROLES_LOCAL[id]?.methods || ['self-declared'];
+  const vb = document.getElementById('veriBox');
+  vb.innerHTML = `<h4>// OPTIONALE VERIFIKATION — ${ROLES_LOCAL[id].label.toUpperCase()}</h4>
+    <div class="veri-opts">${methods.map(m => `
+      <div class="vopt ${m==='self-declared'?'sel':''}" onclick="selectVMethod('${id}','${m}')">${VMETHOD_LABELS[m]?.l||m}</div>
+    `).join('')}</div><div id="veriFields"></div>`;
+  vb.classList.add('show');
+  setTrust(60);
+}
+
+function selectVMethod(roleId, method) {
+  selVMethod = method; vData = {};
+  document.querySelectorAll('.vopt').forEach(v => v.classList.remove('sel'));
+  event.target.classList.add('sel');
+  const vm = VMETHOD_LABELS[method];
+  const score = Math.max(60, vm?.score || 30);
+  setTrust(score);
+  const f = document.getElementById('veriFields');
+  if (vm?.field) {
+    f.innerHTML = `<input class="vfield" id="vfInput"
+      placeholder="${vm.field.p}"
+      oninput="vData['${vm.field.key}']=this.value">`;
+  } else {
+    f.innerHTML = '';
+  }
+}
+
+// ── WebAuthn Register ──────────────────────────────────────────────────────
+async function doRegister() {
+  const btn = document.getElementById('btnReg');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
+  setFp(1,'scanning'); live('pend','registrierung…');
+  try {
+    userId = userId || null;
+    const r1 = await fetch('/hhttps/webauthn/register/start', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ userId })
+    });
+    const { userId: uid, options } = await r1.json();
+    userId = uid; localStorage.setItem('hhttps_uid', userId);
+
+    msg('Bitte Fingerabdruck / Face ID / PIN bestätigen…','i');
+    const attResp = await startRegistration(options);
+
+    const r2 = await fetch('/hhttps/webauthn/register/finish', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ userId, response: attResp })
+    });
+    const d2 = await r2.json();
+    if (!r2.ok) throw new Error(d2.error);
+
+    setFp(1,'success'); live('on','passkey ok');
+    msg('✓ Passkey registriert!','s');
+    setTimeout(() => setStep(2), 700);
+  } catch(e) {
+    setFp(1,'error'); live('err','fehler');
+    msg('Fehler: '+e.message,'e');
+    btn.disabled = false; btn.innerHTML = 'Passkey anlegen →';
+  }
+}
+
+function skipToAuth() { setStep(2); }
+
+// ── WebAuthn Auth ──────────────────────────────────────────────────────────
+async function doAuth() {
+  const btn = document.getElementById('btnAuth');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
+  setFp(2,'scanning'); live('pend','signiere…');
+  try {
+    const r1 = await fetch('/hhttps/webauthn/auth/start', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ userId })
+    });
+    const { sessionId: sid, options } = await r1.json();
+
+    msg('Bitte Fingerabdruck / Face ID / PIN bestätigen…','i');
+    const assertResp = await startAuthentication(options);
+
+    const r2 = await fetch('/hhttps/webauthn/auth/finish', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ sessionId: sid, response: assertResp })
+    });
+    const d2 = await r2.json();
+    if (!r2.ok) throw new Error(d2.error);
+
+    sessionId = d2.sessionId;
+    setFp(2,'success'); live('on','verifiziert ✓');
+    msg('✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.','s');
+    buildRoleGrid();
+    setTimeout(() => setStep(3), 600);
+  } catch(e) {
+    setFp(2,'error'); live('err','fehler');
+    msg('Fehler: '+e.message,'e');
+    btn.disabled = false; btn.innerHTML = 'Fingerabdruck / PIN bestätigen →';
+  }
+}
+
+// ── Role Declaration ───────────────────────────────────────────────────────
+async function doDeclarRole() {
+  if (!selRole || !sessionId) return;
+  const btn = document.getElementById('btnDeclare');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
+  live('pend','ausstellen…');
+
+  // Gather vData from input if present
+  const inp = document.getElementById('vfInput');
+  if (inp) {
+    const key = selVMethod !== 'self-declared'
+      ? Object.values(VMETHOD_LABELS).find(v=>v?.field)?.field?.key
+      : null;
+    if (key) vData[key] = inp.value;
+  }
+
+  try {
+    const r = await fetch('/hhttps/role/declare', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        sessionId, role: selRole,
+        verificationMethod: selVMethod,
+        verificationData: vData
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+
+    hhttpsToken = d.hhttps.token;
+    const rl = ROLES_LOCAL[selRole];
+
+    // Token display
+    const parts = hhttpsToken.split('.');
+    document.getElementById('tkRaw').innerHTML =
+      `<span style="color:var(--red)">${parts[0]}</span>.` +
+      `<span style="color:var(--cyan)">${parts[1]}</span>.` +
+      `<span style="color:var(--green)">${parts[2]}</span>`;
+    document.getElementById('tkBadge').textContent = `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
+    document.getElementById('tcH').textContent = 'true ✓';
+    document.getElementById('tcR').textContent = rl.icon+' '+selRole;
+    document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
+    document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+
+    updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
+    document.getElementById('btnCheck').disabled = false;
+    live('on','token aktiv ✓');
+    msg('✓ '+d.message,'s');
+    setStep(4);
+  } catch(e) {
+    msg('Fehler: '+e.message,'e');
+    btn.disabled = false;
+    btn.innerHTML = 'Rolle bestätigen + Token ausstellen →';
+    live('err','fehler');
+  }
+}
+
+// ── /hhttps/check live call ────────────────────────────────────────────────
+async function doCheck() {
+  const btn = document.getElementById('btnCheck');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Anfrage…';
+  try {
+    const r = await fetch('/hhttps/check', {
+      method:'POST', headers:{ 'HHTTPS-Token': hhttpsToken, 'Content-Type':'application/json' }
+    });
+    const d = await r.json();
+
+    // Update response preview
+    updateHeaders(d.hhttps.human, d.hhttps.actorType, d.hhttps.status,
+      d.role?.id, d.role?.level, d.hhttps.trustScore, hhttpsToken);
+
+    // Update sample response tab
+    document.getElementById('sampleResponse').textContent =
+      JSON.stringify(d, null, 2)
+        .replace(/"([\w]+)":/g, '<span class="ck">"$1"</span>:')
+        .replace(/: "(.*?)"/g, ': <span class="cv">"$1"</span>')
+        .replace(/: (true|false)/g, ': <span class="cv">$1</span>')
+        .replace(/: (\d+)/g, ': <span class="cv">$1</span>');
+
+    msg('✓ /hhttps/check: Mensch='+d.hhttps.human+', Rolle='+d.role?.label,'s');
+    showTab('response');
+  } catch(e) {
+    msg('Fehler: '+e.message,'e');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '/hhttps/check aufrufen — Live-Test →';
+}
+
+
+// ── Email verification ─────────────────────────────────────────────────────
+const DOMAIN_HINTS = {
+  'bundestag.de': {l:'official-email',s:90,t:'🏛️ Offizielle Parlaments-E-Mail'},
+  'bmi.bund.de':  {l:'official-email',s:90,t:'🏛️ Offizielle Behörden-E-Mail'},
+};
+function getDomainHint(email) {
+  const domain = email.split('@')[1]?.toLowerCase() || '';
+  if (DOMAIN_HINTS[domain]) return DOMAIN_HINTS[domain];
+  if (['.uni-','.tu-','.lmu.','.rwth','.tum.de','.fau.de','.fu-berlin','.kit.edu','.hs-','.fh-'].some(d=>domain.includes(d)))
+    return {l:'email-verified',s:75,t:'🎓 Bildungs-Domain erkannt'};
+  if (['spiegel.de','zeit.de','sueddeutsche.de','faz.net','dpa.com','ard.de','zdf.de'].some(d=>domain.endsWith(d)))
+    return {l:'email-verified',s:72,t:'📰 Medien-Domain erkannt'};
+  if (['sprecherverband.de','bffs.de','synchronverband.de','bsd-synchron.de'].some(d=>domain.endsWith(d)))
+    return {l:'email-verified',s:78,t:'🎭 Verbands-Domain erkannt'};
+  return {l:'email-verified',s:65,t:'✉ Standard E-Mail'};
+}
+
+function previewEmailDomain(email) {
+  const el = document.getElementById('domainPreview');
+  if (!email.includes('@')) { el.textContent=''; return; }
+  const h = getDomainHint(email);
+  el.innerHTML = `<span style="color:var(--amber)">${h.t}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
+  if (selRole) setTrust(Math.max(60, h.s));
+}
+
+async function doSendEmail() {
+  if (!sessionId) { msg('Bitte erst WebAuthn durchführen.','e'); return; }
+  const email = document.getElementById('emailInput').value.trim();
+  if (!email || !email.includes('@')) { msgEmail('Bitte gültige E-Mail eingeben.','e'); return; }
+
+  const btn = document.getElementById('btnSendEmail');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+
+  try {
+    const r = await fetch('/hhttps/email/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ sessionId, email, role: selRole || 'citizen' })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+
+    if (d.devMode && d.devToken) {
+      // Dev mode: auto-verify without actual email
+      msgEmail('📧 DEV MODE: Verifiziere automatisch (kein SMTP konfiguriert)…','i');
+      setTimeout(() => autoVerifyDev(d.devToken), 800);
+    } else {
+      msgEmail(`✓ E-Mail gesendet! Bitte prüfe dein Postfach (${d.domain}). Link gültig: ${d.expiresIn}.`,'s');
+    }
+  } catch(e) {
+    msgEmail('Fehler: '+e.message,'e');
+    btn.disabled = false; btn.innerHTML = '✉ Link senden';
+  }
+}
+
+async function autoVerifyDev(rawToken) {
+  // Simulate the verification call (dev mode only)
+  const r = await fetch(`/hhttps/email/verify?token=${rawToken}&session=${sessionId}`);
+  // The server redirects, so we check status via the status endpoint
+  await checkEmailStatus();
+}
+
+async function checkEmailStatus() {
+  if (!sessionId) return;
+  const r = await fetch('/hhttps/email/status', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ sessionId })
+  });
+  const d = await r.json();
+  if (d.emailVerified) {
+    document.getElementById('emailVerifiedBadge').style.display = 'block';
+    document.getElementById('emailVerifiedBadge').textContent =
+      `✓ ${d.emailDomain} verifiziert · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
+    setTrust(Math.max(60, d.trustBonus || 65));
+    msgEmail(`✓ E-Mail-Domain "${d.emailDomain}" verifiziert! Trust Score: ${d.trustBonus}/100`,'s');
+    document.getElementById('btnDeclare').innerHTML = 'Rolle + verifizierte E-Mail → Token ausstellen →';
+  }
+}
+
+function msgEmail(t, type='i') {
+  const el = document.getElementById('emailMsg');
+  el.className = 'msg show ' + type;
+  el.textContent = t;
+}
+
+// Check for email_verify result in URL (after redirect from email link)
+window.addEventListener('load', () => {
+  const p = new URLSearchParams(location.search);
+  if (p.get('verified_session')) {
+    sessionId = p.get('verified_session');
+    const score  = parseInt(p.get('score')||'65');
+    const level  = p.get('level')||'email-verified';
+    const domain = p.get('domain')||'';
+    // Restore state
+    document.getElementById('emailVerifiedBadge').style.display = 'block';
+    document.getElementById('emailVerifiedBadge').textContent =
+      `✓ ${domain} verifiziert · ${level} · Trust Score: ${score}/100`;
+    setTrust(Math.max(60, score));
+    buildRoleGrid();
+    setStep(3);
+    msg('✓ E-Mail bestätigt! Bitte Rolle wählen und Token ausstellen.','s');
+    history.replaceState({}, '', '/');
+  }
+  if (p.get('email_verify') === 'success') {
+    checkEmailStatus();
+    history.replaceState({}, '', '/');
+  }
+});
+
+// Poll for email verification every 5 seconds when on step 3
+let pollInterval = null;
+const origSetStep = setStep;
+// Wrap setStep to start/stop polling
+window.setStep = function(n) {
+  origSetStep(n);
+  if (n === 3) {
+    pollInterval = setInterval(() => { if (sessionId) checkEmailStatus(); }, 5000);
+  } else {
+    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+  }
+};
+
+// Override doDeclarRole to use v2 endpoint (with email support)
+const origDeclare = doDeclarRole;
+window.doDeclarRole = async function() {
+  const btn = document.getElementById('btnDeclare');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
+  live('pend','ausstellen…');
+  const inp = document.getElementById('vfInput');
+  if (inp) {
+    const vm = VMETHOD_LABELS[selVMethod];
+    if (vm?.field) vData[vm.field.key] = inp.value;
+  }
+  try {
+    const r = await fetch('/hhttps/role/declare', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ sessionId, role: selRole,
+        verificationMethod: selVMethod, verificationData: vData })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error);
+    hhttpsToken = d.hhttps.token;
+    const rl = ROLES_LOCAL[selRole];
+    const parts = hhttpsToken.split('.');
+    document.getElementById('tkRaw').innerHTML =
+      `<span style="color:var(--red)">${parts[0]}</span>.` +
+      `<span style="color:var(--cyan)">${parts[1]}</span>.` +
+      `<span style="color:var(--green)">${parts[2]}</span>`;
+    const badge = d.role.emailVerified ? `✓ ${rl.icon} ${rl.label} · E-Mail ✉ verifiziert` : `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
+    document.getElementById('tkBadge').textContent = badge;
+    document.getElementById('tcH').textContent = 'true ✓';
+    document.getElementById('tcR').textContent = rl.icon+' '+selRole;
+    document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
+    document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+    updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
+    document.getElementById('btnCheck').disabled = false;
+    live('on','token aktiv ✓');
+    msg('✓ '+d.message,'s');
+    setStep(4);
+  } catch(e) {
+    msg('Fehler: '+e.message,'e');
+    btn.disabled = false;
+    btn.innerHTML = 'Rolle bestätigen + Token ausstellen →';
+    live('err','fehler');
+  }
+};
+
+// ── Init ───────────────────────────────────────────────────────────────────
+buildRoleTable();
+if (!window.PublicKeyCredential) {
+  msg('⚠ WebAuthn wird von diesem Browser nicht unterstützt.','e');
+  document.getElementById('btnReg').disabled = true;
+}
+if (userId) {
+  msg('Passkey gefunden — direkt zu Schritt 2.','i');
+  setTimeout(() => setStep(2), 300);
+}
+</script>
+</body>
+</html>

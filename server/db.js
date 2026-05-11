@@ -1,0 +1,492 @@
+/**
+ * HHTTPS v4.1 — Database Access Layer
+ *
+ * Replaces all in-memory Maps with PostgreSQL-backed persistence.
+ * Uses connection pooling for performance and prepared statements for safety.
+ *
+ * Required environment variables (from .env):
+ *   DB_HOST     — default: localhost
+ *   DB_PORT     — default: 5432
+ *   DB_NAME     — default: hhttps
+ *   DB_USER     — default: hhttps
+ *   DB_PASSWORD — required
+ *
+ * The pool is shared across all queries. Reconnects automatically.
+ */
+
+import pg from 'pg';
+const { Pool } = pg;
+
+let _pool = null;
+
+export function init() {
+  if (_pool) return _pool;
+
+  _pool = new Pool({
+    host:     process.env.DB_HOST     || 'localhost',
+    port:     parseInt(process.env.DB_PORT || '5432'),
+    database: process.env.DB_NAME     || 'hhttps',
+    user:     process.env.DB_USER     || 'hhttps',
+    password: process.env.DB_PASSWORD,
+    max:                20,           // pool size
+    idleTimeoutMillis:  30000,
+    connectionTimeoutMillis: 5000
+  });
+
+  _pool.on('error', (err) => {
+    console.error('[DB] Unexpected pool error:', err.message);
+  });
+
+  return _pool;
+}
+
+export function pool() { return _pool || init(); }
+
+// Convenience query wrapper with logging on errors
+async function q(text, params = []) {
+  try {
+    const result = await pool().query(text, params);
+    return result;
+  } catch (err) {
+    console.error(`[DB] Query failed: ${err.message}`);
+    console.error(`[DB] SQL: ${text}`);
+    throw err;
+  }
+}
+
+// ─── CREDENTIALS ──────────────────────────────────────────────────────────────
+
+export const credentials = {
+  async create({ credentialId, userId, publicKey, counter, transports, deviceType, backedUp }) {
+    await q(
+      `INSERT INTO credentials (credential_id, user_id, public_key, counter, transports, device_type, backed_up)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [credentialId, userId, publicKey, counter, transports || [], deviceType, backedUp]
+    );
+  },
+
+  async get(credentialId) {
+    const { rows } = await q(`SELECT * FROM credentials WHERE credential_id = $1`, [credentialId]);
+    return rows[0] ? this._normalize(rows[0]) : null;
+  },
+
+  async findByUserId(userId) {
+    const { rows } = await q(`SELECT * FROM credentials WHERE user_id = $1`, [userId]);
+    return rows.map(r => this._normalize(r));
+  },
+
+  async updateCounter(credentialId, counter) {
+    await q(
+      `UPDATE credentials SET counter = $1, last_used_at = NOW() WHERE credential_id = $2`,
+      [counter, credentialId]
+    );
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM credentials`);
+    return rows[0].n;
+  },
+
+  _normalize(r) {
+    return {
+      credentialId:        r.credential_id,
+      userId:              r.user_id,
+      credentialPublicKey: r.public_key,        // BYTEA → Buffer
+      counter:             Number(r.counter),
+      transports:          r.transports || [],
+      deviceType:          r.device_type,
+      backedUp:            r.backed_up,
+      registeredAt:        r.registered_at
+    };
+  }
+};
+
+// ─── CHALLENGES ───────────────────────────────────────────────────────────────
+
+export const challenges = {
+  async create(challengeId, challenge, userId, context, ttlMs = 120_000) {
+    await q(
+      `INSERT INTO challenges (challenge_id, challenge, user_id, context, expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + ($5 || ' milliseconds')::interval)
+       ON CONFLICT (challenge_id) DO UPDATE SET
+         challenge = EXCLUDED.challenge,
+         user_id = EXCLUDED.user_id,
+         context = EXCLUDED.context,
+         expires_at = EXCLUDED.expires_at,
+         created_at = NOW()`,
+      [challengeId, challenge, userId, context, ttlMs]
+    );
+  },
+
+  async get(challengeId) {
+    const { rows } = await q(
+      `SELECT challenge, user_id, expires_at FROM challenges
+       WHERE challenge_id = $1 AND expires_at > NOW()`,
+      [challengeId]
+    );
+    if (!rows[0]) return null;
+    return {
+      challenge: rows[0].challenge,
+      userId:    rows[0].user_id,
+      expires:   new Date(rows[0].expires_at).getTime()
+    };
+  },
+
+  async delete(challengeId) {
+    await q(`DELETE FROM challenges WHERE challenge_id = $1`, [challengeId]);
+  }
+};
+
+// ─── SESSIONS ─────────────────────────────────────────────────────────────────
+
+export const sessions = {
+  async create(sessionId, data, ttlMs = 600_000) {
+    await q(
+      `INSERT INTO sessions (
+        session_id, user_id, credential_id, device_type, backed_up,
+        verified, trust_score, expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8 || ' milliseconds')::interval)`,
+      [
+        sessionId, data.userId, data.credentialId, data.deviceType, data.backedUp,
+        data.verified !== false, data.trustScore || 60, ttlMs
+      ]
+    );
+  },
+
+  async get(sessionId) {
+    const { rows } = await q(
+      `SELECT * FROM sessions WHERE session_id = $1 AND expires_at > NOW()`,
+      [sessionId]
+    );
+    return rows[0] ? this._normalize(rows[0]) : null;
+  },
+
+  async update(sessionId, patch) {
+    const allowedColumns = {
+      emailVerified:   'email_verified',
+      emailLevel:      'email_level',
+      emailDomain:     'email_domain',
+      emailTrustBonus: 'email_trust_bonus',
+      emailCategory:   'email_category',
+      emailsSent:      'emails_sent',
+      role:            'role',
+      roleLevel:       'role_level',
+      trustScore:      'trust_score'
+    };
+    const sets = []; const vals = []; let i = 1;
+    for (const [k, v] of Object.entries(patch)) {
+      const col = allowedColumns[k];
+      if (col) { sets.push(`${col} = $${i}`); vals.push(v); i++; }
+    }
+    if (!sets.length) return;
+    vals.push(sessionId);
+    await q(`UPDATE sessions SET ${sets.join(', ')} WHERE session_id = $${i}`, vals);
+  },
+
+  async incrementEmailsSent(sessionId) {
+    const { rows } = await q(
+      `UPDATE sessions SET emails_sent = emails_sent + 1 WHERE session_id = $1
+       RETURNING emails_sent`, [sessionId]
+    );
+    return rows[0]?.emails_sent || 0;
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM sessions WHERE expires_at > NOW()`);
+    return rows[0].n;
+  },
+
+  _normalize(r) {
+    return {
+      sessionId:       r.session_id,
+      userId:          r.user_id,
+      credentialId:    r.credential_id,
+      deviceType:      r.device_type,
+      backedUp:        r.backed_up,
+      verified:        r.verified,
+      emailVerified:   r.email_verified,
+      emailLevel:      r.email_level,
+      emailDomain:     r.email_domain,
+      emailTrustBonus: r.email_trust_bonus,
+      emailCategory:   r.email_category,
+      emailsSent:      r.emails_sent,
+      role:            r.role,
+      roleLevel:       r.role_level,
+      trustScore:      r.trust_score,
+      expires:         new Date(r.expires_at).getTime()
+    };
+  }
+};
+
+// ─── TOKENS ───────────────────────────────────────────────────────────────────
+
+export const tokens = {
+  async create({ jti, type, userId, role, roleLevel, trustScore, method, deviceType, operatorId, ttlMs }) {
+    await q(
+      `INSERT INTO tokens (jti, type, user_id, role, role_level, trust_score, method, device_type, operator_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW() + ($10 || ' milliseconds')::interval)`,
+      [jti, type, userId, role, roleLevel, trustScore, method, deviceType, operatorId, ttlMs]
+    );
+  },
+
+  async exists(jti) {
+    const { rows } = await q(
+      `SELECT 1 FROM tokens WHERE jti = $1 AND expires_at > NOW()`, [jti]
+    );
+    return rows.length > 0;
+  },
+
+  async get(jti) {
+    const { rows } = await q(`SELECT * FROM tokens WHERE jti = $1 AND expires_at > NOW()`, [jti]);
+    return rows[0] || null;
+  },
+
+  async delete(jti) {
+    await q(`DELETE FROM tokens WHERE jti = $1`, [jti]);
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM tokens WHERE expires_at > NOW()`);
+    return rows[0].n;
+  }
+};
+
+// ─── REFRESH TOKENS ───────────────────────────────────────────────────────────
+
+export const refreshTokens = {
+  async create({ jti, userId, credentialId, role, ttlMs }) {
+    await q(
+      `INSERT INTO refresh_tokens (jti, user_id, credential_id, role, expires_at)
+       VALUES ($1, $2, $3, $4, NOW() + ($5 || ' milliseconds')::interval)`,
+      [jti, userId, credentialId, role, ttlMs]
+    );
+  },
+
+  async get(jti) {
+    const { rows } = await q(
+      `SELECT * FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW()`, [jti]
+    );
+    return rows[0] || null;
+  },
+
+  async delete(jti) {
+    await q(`DELETE FROM refresh_tokens WHERE jti = $1`, [jti]);
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM refresh_tokens WHERE expires_at > NOW()`);
+    return rows[0].n;
+  }
+};
+
+// ─── REVOKED TOKENS ───────────────────────────────────────────────────────────
+
+export const revokedTokens = {
+  async add(jti, role, reason) {
+    await q(
+      `INSERT INTO revoked_tokens (jti, role, reason) VALUES ($1, $2, $3)
+       ON CONFLICT (jti) DO NOTHING`,
+      [jti, role, reason || null]
+    );
+  },
+
+  async has(jti) {
+    const { rows } = await q(`SELECT 1 FROM revoked_tokens WHERE jti = $1`, [jti]);
+    return rows.length > 0;
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM revoked_tokens`);
+    return rows[0].n;
+  }
+};
+
+// ─── EMAIL VERIFICATIONS ──────────────────────────────────────────────────────
+
+export const emailVerifications = {
+  async create({ token, email, domain, level, trustBonus, category, sessionId, ttlMs = 900_000 }) {
+    await q(
+      `INSERT INTO email_verifications (token, email, domain, level, trust_bonus, category, session_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8 || ' milliseconds')::interval)`,
+      [token, email, domain, level, trustBonus, category, sessionId, ttlMs]
+    );
+  },
+
+  async getAndConsume(token) {
+    const { rows } = await q(
+      `UPDATE email_verifications SET used = TRUE
+       WHERE token = $1 AND used = FALSE AND expires_at > NOW()
+       RETURNING *`,
+      [token]
+    );
+    return rows[0] || null;
+  }
+};
+
+// ─── ROLES DECLARED ───────────────────────────────────────────────────────────
+
+export const rolesDeclared = {
+  async upsert(userId, role, roleLevel, trustScore) {
+    await q(
+      `INSERT INTO roles_declared (user_id, role, role_level, trust_score)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET
+         role = EXCLUDED.role, role_level = EXCLUDED.role_level,
+         trust_score = EXCLUDED.trust_score, updated_at = NOW()`,
+      [userId, role, roleLevel, trustScore]
+    );
+  },
+
+  async get(userId) {
+    const { rows } = await q(`SELECT * FROM roles_declared WHERE user_id = $1`, [userId]);
+    return rows[0] || null;
+  },
+
+  async distribution() {
+    const { rows } = await q(
+      `SELECT role, COUNT(*)::int AS n FROM roles_declared GROUP BY role ORDER BY n DESC`
+    );
+    return rows;
+  }
+};
+
+// ─── MACHINE OPERATORS ────────────────────────────────────────────────────────
+
+export const machineOperators = {
+  async create({ operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash }) {
+    await q(
+      `INSERT INTO machine_operators (operator_id, operator_name, operator_url, purpose, contact_email, api_key_hash)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash]
+    );
+  },
+
+  async get(operatorId) {
+    const { rows } = await q(
+      `SELECT * FROM machine_operators WHERE operator_id = $1 AND active = TRUE`,
+      [operatorId]
+    );
+    return rows[0] || null;
+  },
+
+  async incrementTokensIssued(operatorId) {
+    await q(
+      `UPDATE machine_operators SET tokens_issued = tokens_issued + 1, last_used_at = NOW()
+       WHERE operator_id = $1`, [operatorId]
+    );
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM machine_operators WHERE active = TRUE`);
+    return rows[0].n;
+  }
+};
+
+// ─── WEBHOOKS ─────────────────────────────────────────────────────────────────
+
+export const webhooks = {
+  async create({ id, url, events, secret }) {
+    await q(
+      `INSERT INTO webhooks (webhook_id, url, events, secret) VALUES ($1, $2, $3, $4)`,
+      [id, url, events, secret]
+    );
+  },
+
+  async list() {
+    const { rows } = await q(`SELECT * FROM webhooks WHERE active = TRUE ORDER BY created_at DESC`);
+    return rows.map(r => ({
+      id:           r.webhook_id,
+      url:          r.url,
+      events:       r.events,
+      secret:       r.secret,
+      failures:     r.failures,
+      deliveries:   r.deliveries,
+      lastDelivery: r.last_delivery_at,
+      createdAt:    r.created_at
+    }));
+  },
+
+  async findForEvent(event) {
+    const { rows } = await q(
+      `SELECT * FROM webhooks WHERE active = TRUE AND $1 = ANY(events)`, [event]
+    );
+    return rows.map(r => ({
+      id: r.webhook_id, url: r.url, events: r.events, secret: r.secret,
+      failures: r.failures, deliveries: r.deliveries
+    }));
+  },
+
+  async delete(id) {
+    const { rowCount } = await q(`DELETE FROM webhooks WHERE webhook_id = $1`, [id]);
+    return rowCount > 0;
+  },
+
+  async recordDelivery(webhookId, event, status, statusCode = null, attempt = 1) {
+    await q(
+      `INSERT INTO webhook_deliveries (webhook_id, event, status, status_code, attempt)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [webhookId, event, status, statusCode, attempt]
+    );
+    if (status === 'success') {
+      await q(
+        `UPDATE webhooks SET deliveries = deliveries + 1, failures = 0, last_delivery_at = NOW()
+         WHERE webhook_id = $1`, [webhookId]
+      );
+    } else {
+      await q(`UPDATE webhooks SET failures = failures + 1 WHERE webhook_id = $1`, [webhookId]);
+    }
+  },
+
+  async deactivateIfFailing(webhookId, threshold = 10) {
+    const { rows } = await q(`SELECT failures FROM webhooks WHERE webhook_id = $1`, [webhookId]);
+    if (rows[0]?.failures >= threshold) {
+      await q(`UPDATE webhooks SET active = FALSE WHERE webhook_id = $1`, [webhookId]);
+      return true;
+    }
+    return false;
+  }
+};
+
+// ─── STATS ────────────────────────────────────────────────────────────────────
+
+export const stats = {
+  async increment(metric, by = 1) {
+    await q(
+      `INSERT INTO stats (metric, value) VALUES ($1, $2)
+       ON CONFLICT (metric) DO UPDATE SET value = stats.value + $2, updated_at = NOW()`,
+      [metric, by]
+    );
+  },
+
+  async getAll() {
+    const { rows } = await q(`SELECT metric, value FROM stats`);
+    const out = {};
+    for (const r of rows) out[r.metric] = Number(r.value);
+    return out;
+  }
+};
+
+// ─── CLEANUP ──────────────────────────────────────────────────────────────────
+
+export async function cleanupExpired() {
+  const { rows } = await q(`SELECT * FROM cleanup_expired()`);
+  return rows[0] || {};
+}
+
+// ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
+
+export async function ping() {
+  try {
+    await q('SELECT 1');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function close() {
+  if (_pool) {
+    await _pool.end();
+    _pool = null;
+  }
+}
