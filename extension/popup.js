@@ -47,6 +47,23 @@ async function init() {
   el('copyTokenBtn').addEventListener('click', () => doCopyToken(ident));
   el('logoutBtn').addEventListener('click', () => doLogout(ident));
   el('copySnippetBtn').addEventListener('click', () => doCopySnippet(ident));
+
+  // Sign-mode preference: load current, persist on change
+  await initSignModeSwitch();
+}
+
+async function initSignModeSwitch() {
+  const resp = await sendMsg({ type: 'GET_SIGN_MODE' });
+  const current = resp?.mode || 'alpha';
+  const radios = document.querySelectorAll('input[name="signmode"]');
+  radios.forEach(r => {
+    r.checked = (r.value === current);
+    r.addEventListener('change', async () => {
+      if (r.checked) {
+        await sendMsg({ type: 'SET_SIGN_MODE', mode: r.value });
+      }
+    });
+  });
 }
 
 // ─── Render identity (verified) ─────────────────────────────────────────────

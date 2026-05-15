@@ -295,3 +295,126 @@ async function rebuildSchedules() {
 
 // Initial badge setup when service worker wakes
 updateAllBadges();
+
+// ─── Context Menu ────────────────────────────────────────────────────────────
+// Right-click on any editable field → "Mit HHTTPS signieren"
+chrome.runtime.onInstalled.addListener(() => {
+  setupContextMenu();
+});
+chrome.runtime.onStartup?.addListener(() => {
+  setupContextMenu();
+});
+
+function setupContextMenu() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: 'hhttps-sign-alpha',
+      title: 'Mit HHTTPS signieren (Identität)',
+      contexts: ['editable']
+    });
+    chrome.contextMenus.create({
+      id: 'hhttps-sign-beta',
+      title: 'Mit HHTTPS signieren (Identität + Text)',
+      contexts: ['editable']
+    });
+  });
+}
+
+chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
+  if (!tab?.id) return;
+  // Both menu items now go through the slug-based flow. The "alpha" item
+  // signs without strict text binding (loose hash only, edits-tolerant).
+  // The "beta" item additionally enforces strict text binding at verify time.
+  const mode = info.menuItemId === 'hhttps-sign-beta' ? 'beta' : 'alpha';
+
+  const ident = await getActiveIdentity();
+  if (!ident) {
+    chrome.tabs.create({ url: 'https://hhttps.org' });
+    return;
+  }
+
+  // Always need the current text + the page domain. Ask the content script.
+  try {
+    chrome.tabs.sendMessage(tab.id, {
+      type: 'REQUEST_TEXT_FOR_SIGN',
+      mode
+    });
+  } catch (e) {}
+});
+
+// Receive text + domain from content script, call the slug endpoint, then
+// send the marker back to be inserted.
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'SIGN_REQUEST' && msg.text != null && msg.domain) {
+    createSignatureSlug(msg.text, msg.domain, msg.mode || 'alpha')
+      .then((marker) => {
+        chrome.tabs.sendMessage(sender.tab.id, {
+          type: 'INSERT_SIGNATURE',
+          mode: msg.mode,
+          marker
+        });
+        sendResponse({ ok: true });
+      })
+      .catch((e) => {
+        chrome.tabs.sendMessage(sender.tab.id, {
+          type: 'SIGN_ERROR',
+          error: e.message
+        });
+        sendResponse({ ok: false, error: e.message });
+      });
+    return true;
+  }
+});
+
+// Create a signature slug via the server. Both alpha and beta modes use
+// the same endpoint — the difference is that beta sets bindingType to
+// "document" (strict text hash check) while alpha uses "web" (domain only,
+// loose text hash for tamper-warning).
+async function createSignatureSlug(text, domain, mode) {
+  const ident = await getActiveIdentity();
+  if (!ident) throw new Error('Keine Identität gespeichert');
+  if (!text || !text.trim()) throw new Error('Kein Text zum Signieren');
+  if (!domain) throw new Error('Keine Domain — bitte auf einer Webseite signieren');
+
+  const bindingType = mode === 'beta' ? 'document' : 'web';
+
+  const issuerBase = (ident.issuer || ISSUER_BASE)
+    .replace(/^hhttps:\/\//, 'https://').replace(/\/$/, '');
+  const r = await fetch(`${issuerBase}/hhttps/signatures`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'HHTTPS-Token':  ident.token
+    },
+    body: JSON.stringify({
+      text,
+      mode,
+      bindingType,
+      domain
+    })
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `Server ${r.status}`);
+  }
+  const data = await r.json();
+  if (!data.marker) throw new Error('Keine Marker-Antwort vom Server');
+  return data.marker;
+}
+
+// ─── Sign mode preference (popup writes here, context menu reads) ────────────
+async function getSignMode() {
+  const r = await chrome.storage.local.get(['hhttps_sign_mode']);
+  return r.hhttps_sign_mode || 'alpha';
+}
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'GET_SIGN_MODE') {
+    getSignMode().then((m) => sendResponse({ mode: m }));
+    return true;
+  }
+  if (msg.type === 'SET_SIGN_MODE' && msg.mode) {
+    chrome.storage.local.set({ hhttps_sign_mode: msg.mode })
+      .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+});

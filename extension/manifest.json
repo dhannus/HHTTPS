@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "HHTTPS — HumanProof",
-  "version": "1.2.0",
-  "description": "Deine HHTTPS-Identität — verifiziert als Mensch, mit Rolle und Trust-Score. Auto-Login auf hhttps.org, Signaturen für jede Webseite.",
+  "version": "1.4.3",
+  "description": "Deine HHTTPS-Identität als Browser-Brieftasche — mit Inline-Signaturen und automatischer Siegel-Erkennung auf jeder Webseite.",
   "author": "Daniel Hannuschka · HumanProof Initiative",
   "homepage_url": "https://hhttps.org",
 
@@ -42,14 +42,18 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content-universal.js"],
-      "run_at": "document_end"
+      "run_at": "document_end",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
 
   "permissions": [
     "storage",
     "activeTab",
-    "alarms"
+    "alarms",
+    "contextMenus",
+    "scripting"
   ],
 
   "host_permissions": [

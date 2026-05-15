@@ -373,6 +373,50 @@ body {
   border-color: var(--green-v);
 }
 
+/* Sign-mode switch */
+.mode-switch {
+  margin: 8px 0 4px;
+}
+.mode-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--ink-mute);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.mode-options {
+  display: flex;
+  gap: 6px;
+}
+.mode-opt {
+  flex: 1;
+  cursor: pointer;
+}
+.mode-opt input { display: none; }
+.mode-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  transition: all 0.15s;
+}
+.mode-opt input:checked + .mode-card {
+  border-color: var(--terra);
+  background: linear-gradient(135deg, rgba(242,184,148,0.12), var(--paper));
+  box-shadow: 0 1px 4px rgba(201,125,91,0.15);
+}
+.mode-card-head {
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.mode-card-desc {
+  font-size: 9.5px;
+  color: var(--ink-mute);
+  line-height: 1.4;
+}
+
 /* Footer */
 .footer {
   padding: 10px 16px;
@@ -451,10 +495,35 @@ body {
 <div class="snippet" id="snippet">
   <div class="snippet-head">
     <span>Identität als Signatur</span>
-    <span style="text-transform:none;letter-spacing:0">für Kommentare</span>
+    <span style="text-transform:none;letter-spacing:0">Rechtsklick im Textfeld</span>
+  </div>
+
+  <div class="mode-switch">
+    <div class="mode-label">Signatur-Modus:</div>
+    <div class="mode-options">
+      <label class="mode-opt">
+        <input type="radio" name="signmode" value="alpha" checked>
+        <div class="mode-card">
+          <div class="mode-card-head">🛡️ Identität</div>
+          <div class="mode-card-desc">Stempel mit deiner Rolle. Text darf editiert werden.</div>
+        </div>
+      </label>
+      <label class="mode-opt">
+        <input type="radio" name="signmode" value="beta">
+        <div class="mode-card">
+          <div class="mode-card-head">🔒 Text-gebunden</div>
+          <div class="mode-card-desc">Bindet die Signatur an den genauen Text. Edit bricht Signatur.</div>
+        </div>
+      </label>
+    </div>
+  </div>
+
+  <div class="snippet-head" style="margin-top:14px">
+    <span>Schneller Alpha-Stempel</span>
+    <span style="text-transform:none;letter-spacing:0">zum Kopieren</span>
   </div>
   <div class="snippet-box" id="snippetBox">—</div>
-  <button class="snippet-btn" id="copySnippetBtn">📋 In Zwischenablage kopieren</button>
+  <button class="snippet-btn" id="copySnippetBtn">📋 Kopieren</button>
 </div>
 
 <!-- Current page state -->

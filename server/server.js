@@ -401,6 +401,59 @@ function setHHTPPS(res, opts = {}) {
   if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  machinePurpose);
 }
 
+// ─── Signature helpers (Phase 2.5: Domain-bound slugs) ───────────────────────
+
+// Normalize a hostname to its "apex" form for binding purposes.
+// reddit.com, www.reddit.com, old.reddit.com, np.reddit.com → "reddit.com"
+// This is heuristic and uses a small public-suffix list for the common cases.
+// Not as bulletproof as the full PSL but covers 99% of real domains.
+const TWO_PART_TLDS = new Set([
+  'co.uk', 'co.jp', 'co.kr', 'co.nz', 'co.za', 'co.in', 'co.il',
+  'com.au', 'com.br', 'com.cn', 'com.mx', 'com.tr', 'com.tw', 'com.ar',
+  'org.uk', 'org.au', 'net.au', 'gov.uk', 'gov.au', 'ac.uk', 'ac.jp',
+  'or.jp', 'ne.jp'
+]);
+
+function normalizeApexDomain(hostname) {
+  if (!hostname || typeof hostname !== 'string') return null;
+  let h = hostname.toLowerCase().trim();
+  // Strip protocol and path if accidentally included
+  h = h.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+  if (!/^[a-z0-9.\-]+$/.test(h)) return null;
+  const parts = h.split('.').filter(Boolean);
+  if (parts.length < 2) return parts.join('.') || null;
+  // Check two-part TLD
+  if (parts.length >= 3) {
+    const lastTwo = parts.slice(-2).join('.');
+    if (TWO_PART_TLDS.has(lastTwo)) {
+      return parts.slice(-3).join('.');
+    }
+  }
+  return parts.slice(-2).join('.');
+}
+
+// Slug generator: 12-char Crockford Base32 with prefix "hp-" for "HumanProof"
+// Avoids 0/O/1/I confusion. Example: "hp-7K2-XQ9NMR-3F"
+const SLUG_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+function generateSlug() {
+  const bytes = crypto.randomBytes(12);
+  let out = 'hp-';
+  for (let i = 0; i < 10; i++) {
+    out += SLUG_ALPHABET[bytes[i] % SLUG_ALPHABET.length];
+    if (i === 2 || i === 6) out += '-';
+  }
+  return out;
+}
+
+// Text hashing: strict (byte-exact) vs loose (normalized)
+function hashTextStrict(text) {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+}
+function hashTextLoose(text) {
+  const normalized = (text || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+}
+
 async function issueAccessToken(payload) {
   const jti = uuid();
   const tok = signToken({
@@ -600,6 +653,966 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     return res.status(401).json({ hhttps: { status: 'invalid', human: false }, error: e.message });
   }
 });
+
+// ─── Sign-Text / Verify-Text (Beta mode: bind token to specific text) ────────
+// These endpoints allow a verified user to cryptographically bind a HHTTPS
+// token to a specific piece of text. The result is a short signature that,
+// when later combined with the same text, proves: "this exact text was
+// approved by the holder of this token". Used by the browser extension's
+// Beta signing mode for sensitive content (contracts, formal statements).
+
+app.post('/hhttps/sign-text', limit.check, async (req, res) => {
+  const token = req.headers['hhttps-token'] ||
+                req.headers['authorization']?.replace('Bearer ', '') ||
+                req.body?.token;
+  const text = req.body?.text;
+
+  if (!token) return res.status(400).json({ error: 'token required' });
+  if (typeof text !== 'string' || text.length === 0) {
+    return res.status(400).json({ error: 'text required' });
+  }
+  if (text.length > 100_000) {
+    return res.status(400).json({ error: 'text too long (max 100k chars)' });
+  }
+
+  try {
+    // First, verify the token is currently valid (signature + revocation + expiry)
+    const d = await checkTokenValid(token);
+    if (d.sub === 'machine') {
+      return res.status(403).json({ error: 'machine tokens cannot sign text' });
+    }
+
+    // Build a deterministic content hash
+    const textHash = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+
+    // Issue a separate small JWT that binds the user's token JTI to the text hash.
+    // We keep this short-lived and refer to the original token via its jti.
+    const signature = signToken({
+      sub:        'text-signature',
+      tokenJti:   d.jti,
+      textHash,
+      role:       d.role,
+      roleLevel:  d.roleLevel,
+      trustScore: d.trustScore,
+      ia:         Math.floor(Date.now() / 1000),
+      exp:        d.exp,    // matches the underlying token's expiry
+      iss:        d.iss
+    });
+
+    return res.json({
+      hhttps:    { version: '0.4.1', mode: 'beta-text-bound' },
+      signature,                       // the JWT that proves text + identity
+      textHash,                        // sha256 hex of the signed text
+      role: {
+        id: d.role,
+        label: (ROLES[d.role] || ROLES.citizen).label,
+        icon:  (ROLES[d.role] || ROLES.citizen).icon,
+        level: d.roleLevel,
+        trustScore: d.trustScore
+      },
+      validUntil: new Date(d.exp * 1000).toISOString()
+    });
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+});
+
+app.post('/hhttps/verify-text', limit.check, async (req, res) => {
+  const { signature, text } = req.body || {};
+  if (!signature || typeof text !== 'string') {
+    return res.status(400).json({ error: 'signature and text required' });
+  }
+
+  try {
+    const d = verifyToken(signature);
+    if (d.sub !== 'text-signature') {
+      return res.status(400).json({ error: 'not a text signature' });
+    }
+
+    // Recompute the hash and compare
+    const actualHash = crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+    const hashMatches = actualHash === d.textHash;
+
+    // Also verify the original token has not been revoked (lookup via jti)
+    const revoked = await db.revokedTokens.has(d.tokenJti);
+
+    if (!hashMatches) {
+      return res.json({
+        hhttps: { status: 'invalid', reason: 'text-modified' },
+        match:  false,
+        message: 'Der Text wurde nach dem Signieren verändert.'
+      });
+    }
+    if (revoked) {
+      return res.json({
+        hhttps: { status: 'revoked' },
+        match:  true,
+        message: 'Signatur wurde widerrufen.'
+      });
+    }
+    if (d.exp * 1000 < Date.now()) {
+      return res.json({
+        hhttps: { status: 'expired', match: true },
+        match:  true,
+        message: 'Signatur abgelaufen (Text aber unverändert).'
+      });
+    }
+
+    const roleDef = ROLES[d.role] || ROLES.citizen;
+    return res.json({
+      hhttps: { version: '0.4.1', status: 'verified', mode: 'beta-text-bound', match: true },
+      match: true,
+      role: {
+        id: d.role,
+        label: roleDef.label,
+        icon:  roleDef.icon,
+        level: d.roleLevel,
+        trustScore: d.trustScore
+      },
+      signedAt:   new Date(d.ia  * 1000).toISOString(),
+      validUntil: new Date(d.exp * 1000).toISOString()
+    });
+  } catch (e) {
+    return res.status(401).json({ hhttps: { status: 'invalid' }, error: e.message });
+  }
+});
+
+// ─── Signatures (Phase 2.5: domain-bound, slug-based) ───────────────────────
+// Replaces the v0.4.1 raw-token-in-marker approach. Now:
+//   - Marker is a short slug (e.g. #hhttps:s:hp-7K2-XQ9NMR-3F)
+//   - Slug references a DB record, never reveals the access token
+//   - Each signature is single-use creation, but verifiable forever
+//   - Binding to apex domain prevents cross-site copy/paste theft
+//   - Two text hashes (strict + loose) catch tampering with different tolerance
+
+const VALID_BINDING_TYPES = new Set(['web', 'email', 'document']);
+
+app.post('/hhttps/signatures', limit.check, async (req, res) => {
+  const token = req.headers['hhttps-token'] ||
+                req.headers['authorization']?.replace('Bearer ', '') ||
+                req.body?.token;
+  const { text, mode, bindingType, domain } = req.body || {};
+
+  if (!token) return res.status(400).json({ error: 'token required' });
+  if (typeof text !== 'string' || text.length === 0) {
+    return res.status(400).json({ error: 'text required' });
+  }
+  if (text.length > 100_000) {
+    return res.status(400).json({ error: 'text too long (max 100k chars)' });
+  }
+  const bType = VALID_BINDING_TYPES.has(bindingType) ? bindingType : 'web';
+  if (bType === 'web' && (!domain || typeof domain !== 'string')) {
+    return res.status(400).json({ error: 'domain required for web binding' });
+  }
+
+  try {
+    const d = await checkTokenValid(token);
+    if (d.sub === 'machine') {
+      return res.status(403).json({ error: 'machine tokens cannot create signatures' });
+    }
+
+    const apex = bType === 'web' ? normalizeApexDomain(domain) : null;
+    if (bType === 'web' && !apex) {
+      return res.status(400).json({ error: 'invalid domain format' });
+    }
+
+    // Generate unique slug (retry if collision — extremely rare with 32^10 space)
+    let slug, attempts = 0;
+    do {
+      slug = generateSlug();
+      attempts++;
+      if (attempts > 5) {
+        return res.status(500).json({ error: 'slug generation failed; please retry' });
+      }
+    } while (await db.signatures.slugExists(slug) || await db.signatures.isReservedSlug(slug));
+
+    const roleDef = ROLES[d.role] || ROLES.citizen;
+    const vlevel  = VERIFICATION_LEVELS[d.roleLevel] || {};
+
+    const textPreview = text.length <= 120 ? text : text.slice(0, 117) + '…';
+
+    await db.signatures.create({
+      id:              slug,
+      signerId:        d.uid || d.userId || d.sub,   // pseudonymous user id
+      role:            d.role,
+      roleLabel:       roleDef.label,
+      roleIcon:        roleDef.icon,
+      trustScore:      d.trustScore,
+      level:           d.roleLevel,
+      levelLabel:      vlevel.label,
+      bindingType:     bType,
+      boundDomain:     apex,
+      textHashStrict:  hashTextStrict(text),
+      textHashLoose:   hashTextLoose(text),
+      textLength:      text.length,
+      textPreview,
+      issuer:          `hhttps://${RP_ID}`
+    });
+
+    await db.stats.increment('signatures_created');
+
+    return res.json({
+      hhttps: { version: '0.4.1', mode: 'slug' },
+      id:      slug,
+      marker:  `#hhttps:s:${slug}`,
+      url:     `${BASE_URL}/s/${slug}`,
+      role: {
+        id:    d.role,
+        label: roleDef.label,
+        icon:  roleDef.icon,
+        trustScore: d.trustScore
+      },
+      binding: {
+        type:   bType,
+        domain: apex
+      },
+      createdAt: new Date().toISOString()
+    });
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+});
+
+// Public verify endpoint — anyone can check a slug.
+// Optional ?domain= and ?textPreview= for binding + tamper-detection.
+app.get('/hhttps/s/:slug', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
+    return res.status(400).json({ error: 'invalid slug format' });
+  }
+  const sig = await db.signatures.get(slug);
+  if (!sig) {
+    return res.status(404).json({
+      hhttps: { status: 'unknown' },
+      error:  'signature not found'
+    });
+  }
+
+  await db.signatures.incrementVerify(slug).catch(() => {});
+  await db.stats.increment('signatures_verified').catch(() => {});
+
+  const reqDomain = req.query.domain ? normalizeApexDomain(req.query.domain) : null;
+
+  // First-seen-lock: only record on first valid verification with a domain
+  if (!sig.first_seen_at && reqDomain) {
+    await db.signatures.setFirstSeen(slug, reqDomain).catch(() => {});
+  }
+
+  // Build response
+  const out = {
+    hhttps:    { version: '0.4.1', status: 'verified' },
+    id:        sig.id,
+    role: {
+      id:    sig.role,
+      label: sig.role_label,
+      icon:  sig.role_icon,
+      level: sig.level,
+      levelLabel: sig.level_label,
+      trustScore: sig.trust_score
+    },
+    binding: {
+      type:   sig.binding_type,
+      domain: sig.bound_domain
+    },
+    textPreview: sig.text_preview,
+    textLength:  sig.text_length,
+    firstSeen:   sig.first_seen_at ? {
+      domain: sig.first_seen_domain,
+      at:     sig.first_seen_at
+    } : null,
+    createdAt:   sig.created_at,
+    issuer:      sig.issuer,
+    verifyCount: sig.verify_count + 1   // include this call
+  };
+
+  // Revocation check
+  if (sig.revoked_at) {
+    out.hhttps.status = 'revoked';
+    out.revokedAt     = sig.revoked_at;
+    out.revokeReason  = sig.revoke_reason;
+    return sendJson(req, res, out, {
+      title: 'Signatur widerrufen',
+      subtitle: 'Diese Signatur wurde vom Unterzeichner widerrufen.'
+    });
+  }
+
+  // Domain binding check
+  if (sig.binding_type === 'web' && reqDomain && sig.bound_domain &&
+      reqDomain !== sig.bound_domain) {
+    out.hhttps.status      = 'wrong-domain';
+    out.hhttps.expected    = sig.bound_domain;
+    out.hhttps.observed    = reqDomain;
+    out.warning            = `Diese Signatur wurde für ${sig.bound_domain} ausgestellt, aber auf ${reqDomain} verwendet. Möglicher Diebstahl.`;
+    return sendJson(req, res, out, {
+      title: 'Falsche Domain',
+      subtitle: out.warning
+    });
+  }
+
+  // Text-tampering check — ONLY for `document` binding (Beta mode).
+  // Alpha mode (web binding) is by design an identity stamp, not a text seal:
+  // the user signs "as themselves on this domain"; edits to the surrounding
+  // text are permitted (typo fixes, additions, etc.). Forcing a hash match
+  // here produces false positives because mail clients / forums normalize
+  // whitespace, decode entities, hard-wrap lines, and so on.
+  if (sig.binding_type === 'document' && req.query.textPreview) {
+    try {
+      const preview = Buffer.from(req.query.textPreview, 'base64').toString('utf8');
+      // Strict hash for document binding — every byte counts.
+      const expectedStrict = sig.text_hash_strict;
+      const actualStrict   = hashTextStrict(preview);
+      if (expectedStrict !== actualStrict) {
+        out.hhttps.status = 'text-modified';
+        out.warning       = 'Der Text wurde nach dem Signieren verändert.';
+      }
+    } catch (e) {
+      // Ignore preview parse errors
+    }
+  }
+
+  return sendJson(req, res, out, {
+    title: `Signatur ${slug}`,
+    subtitle: `${sig.role_icon || ''} ${sig.role_label} · Trust ${sig.trust_score}/100`
+  });
+});
+
+// Batch verify (Performance: 1 request for N slugs on a page)
+app.post('/hhttps/signatures/batch', async (req, res) => {
+  const { slugs, domain, textPreviews } = req.body || {};
+  if (!Array.isArray(slugs) || slugs.length === 0) {
+    return res.status(400).json({ error: 'slugs array required' });
+  }
+  if (slugs.length > 100) {
+    return res.status(400).json({ error: 'too many slugs (max 100)' });
+  }
+
+  const cleanSlugs = slugs.filter(s => /^hp-[A-Z0-9\-]+$/i.test(s));
+  const sigs = await db.signatures.getMany(cleanSlugs);
+  const reqDomain = domain ? normalizeApexDomain(domain) : null;
+
+  const out = {};
+  for (const sig of sigs) {
+    const entry = {
+      id: sig.id,
+      role: {
+        id: sig.role, label: sig.role_label, icon: sig.role_icon,
+        level: sig.level, levelLabel: sig.level_label,
+        trustScore: sig.trust_score
+      },
+      binding: { type: sig.binding_type, domain: sig.bound_domain },
+      textPreview: sig.text_preview,
+      createdAt:   sig.created_at,
+      status:      'verified'
+    };
+
+    if (sig.revoked_at) {
+      entry.status = 'revoked';
+      entry.revokedAt = sig.revoked_at;
+    } else if (sig.binding_type === 'web' && reqDomain &&
+               sig.bound_domain && reqDomain !== sig.bound_domain) {
+      entry.status   = 'wrong-domain';
+      entry.expected = sig.bound_domain;
+      entry.observed = reqDomain;
+    } else if (sig.binding_type === 'document' && textPreviews && textPreviews[sig.id]) {
+      // Strict text check only for Beta/document bindings (see single-slug
+      // endpoint above for rationale).
+      try {
+        const preview = Buffer.from(textPreviews[sig.id], 'base64').toString('utf8');
+        if (hashTextStrict(preview) !== sig.text_hash_strict) {
+          entry.status = 'text-modified';
+        }
+      } catch (e) {}
+    }
+    out[sig.id] = entry;
+  }
+
+  // Missing slugs
+  for (const slug of cleanSlugs) {
+    if (!out[slug]) out[slug] = { id: slug, status: 'unknown' };
+  }
+
+  await db.stats.increment('signatures_verified', Object.keys(out).length).catch(() => {});
+
+  return res.json({ hhttps: { version: '0.4.1' }, results: out });
+});
+
+// Revoke a signature (only by original signer)
+app.post('/hhttps/signatures/:slug/revoke', async (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  const token = req.headers['hhttps-token'] ||
+                req.headers['authorization']?.replace('Bearer ', '') ||
+                req.body?.token;
+  const reason = req.body?.reason;
+
+  if (!token) return res.status(401).json({ error: 'token required' });
+  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
+    return res.status(400).json({ error: 'invalid slug' });
+  }
+
+  try {
+    const d = await checkTokenValid(token);
+    const signerId = d.uid || d.userId || d.sub;
+    const ok = await db.signatures.revoke(slug, signerId, reason);
+    if (!ok) {
+      return res.status(403).json({ error: 'not authorized or already revoked' });
+    }
+    await db.stats.increment('signatures_revoked').catch(() => {});
+    return res.json({
+      hhttps: { version: '0.4.1', status: 'revoked' },
+      id:     slug,
+      revokedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+});
+
+// Short-link redirect: /s/:slug → /hhttps/s/:slug (HTML-friendly)
+app.get('/s/:slug', (req, res) => {
+  const slug = (req.params.slug || '').trim();
+  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) return res.status(400).send('Invalid slug');
+  res.redirect(`/hhttps/s/${slug}`);
+});
+
+// ─── OAuth 2.0 / OpenID Connect Provider (Phase 3a) ──────────────────────────
+// Standards-compliant authorization-code flow with PKCE. Pairwise subject IDs
+// by default (each client sees a different pseudonymous user ID, no
+// cross-platform tracking).
+
+const OAUTH_CODE_TTL  = 60;         // seconds
+const OAUTH_TOKEN_TTL = 5 * 60;     // 5 min for third-party access tokens
+const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method']);
+
+// Discovery (RFC 8414 / OpenID Connect Discovery 1.0)
+app.get('/.well-known/openid-configuration', (req, res) => {
+  sendJson(req, res, {
+    issuer:                          `https://${RP_ID}`,
+    authorization_endpoint:          `${BASE_URL}/hhttps/oauth/authorize`,
+    token_endpoint:                  `${BASE_URL}/hhttps/oauth/token`,
+    userinfo_endpoint:               `${BASE_URL}/hhttps/oauth/userinfo`,
+    revocation_endpoint:              `${BASE_URL}/hhttps/oauth/revoke`,
+    jwks_uri:                         `${BASE_URL}/.well-known/jwks.json`,
+    scopes_supported:                 ['openid', 'role', 'verification_method'],
+    response_types_supported:         ['code'],
+    grant_types_supported:            ['authorization_code'],
+    subject_types_supported:          ['pairwise', 'public'],
+    id_token_signing_alg_values_supported: ['ES256'],
+    code_challenge_methods_supported: ['S256', 'plain'],
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+    claims_supported: [
+      'sub', 'iss', 'aud', 'exp', 'iat', 'auth_time',
+      'role', 'role_label', 'role_icon', 'trust_score',
+      'verification_method', 'verification_method_label'
+    ]
+  }, {
+    title: 'OpenID Connect Discovery',
+    subtitle: 'Endpoint metadata for OAuth 2.0 + OIDC clients.'
+  });
+});
+
+// Compute a pairwise subject identifier: stable per (user, client) but
+// different across clients. Uses HMAC with a per-issuer secret.
+function pairwiseSubjectId(userId, clientId, subjectType) {
+  if (subjectType === 'public') {
+    // Returns the user_id as-is (with a hash prefix to make it opaque)
+    return crypto.createHash('sha256').update(`public:${userId}`).digest('hex').slice(0, 32);
+  }
+  // pairwise (default): HMAC(userId + clientId, server-secret)
+  const secret = process.env.PAIRWISE_SECRET || 'hhttps-pairwise-' + RP_ID;
+  return crypto.createHmac('sha256', secret)
+    .update(`${userId}|${clientId}`)
+    .digest('hex')
+    .slice(0, 32);
+}
+
+// Authorize endpoint: shows consent page or auto-approves with active session
+app.get('/hhttps/oauth/authorize', async (req, res) => {
+  const {
+    response_type,
+    client_id,
+    redirect_uri,
+    scope,
+    state,
+    nonce,
+    code_challenge,
+    code_challenge_method
+  } = req.query;
+
+  // Step 1: validate the request
+  if (response_type !== 'code') {
+    return res.status(400).send(renderOAuthError('Nur response_type=code wird unterstützt.', 400));
+  }
+  if (!client_id) {
+    return res.status(400).send(renderOAuthError('client_id ist erforderlich.', 400));
+  }
+  const client = await db.oauthClients.get(client_id);
+  if (!client) {
+    return res.status(400).send(renderOAuthError('Unbekannte client_id. Plattform ist nicht registriert.', 400));
+  }
+  if (!redirect_uri || !client.redirect_uris.includes(redirect_uri)) {
+    return res.status(400).send(renderOAuthError(
+      'redirect_uri stimmt nicht mit dem registrierten Wert überein. Aus Sicherheitsgründen abgelehnt.', 400
+    ));
+  }
+
+  // PKCE: required for public clients (no client_secret_hash)
+  const isPublicClient = !client.client_secret_hash;
+  if (isPublicClient && !code_challenge) {
+    return redirectWithError(redirect_uri, state, 'invalid_request',
+      'PKCE code_challenge ist für public clients erforderlich.');
+  }
+
+  // Scope validation
+  const requestedScopes = (scope || 'openid').split(/\s+/).filter(Boolean);
+  if (!requestedScopes.includes('openid')) {
+    return redirectWithError(redirect_uri, state, 'invalid_scope',
+      'Der Scope "openid" ist erforderlich.');
+  }
+  const unknownScopes = requestedScopes.filter(s => !SCOPES_KNOWN.has(s));
+  if (unknownScopes.length > 0) {
+    return redirectWithError(redirect_uri, state, 'invalid_scope',
+      `Unbekannte Scopes: ${unknownScopes.join(', ')}`);
+  }
+  const deniedScopes = requestedScopes.filter(s => !client.allowed_scopes.includes(s));
+  if (deniedScopes.length > 0) {
+    return redirectWithError(redirect_uri, state, 'invalid_scope',
+      `Plattform darf diese Scopes nicht anfragen: ${deniedScopes.join(', ')}`);
+  }
+
+  // Step 2: render the consent page. The user's session/identity will be
+  // picked up from a cookie OR (when the browser extension is installed)
+  // from localStorage published by hhttps.org itself.
+  // For now we render a server-side consent page that asks the user to
+  // identify (passkey) and approve.
+
+  const params = new URLSearchParams({
+    client_id, redirect_uri,
+    scope:  requestedScopes.join(' '),
+    state:  state || '',
+    nonce:  nonce || '',
+    code_challenge:        code_challenge || '',
+    code_challenge_method: code_challenge_method || ''
+  });
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(renderConsentPage({ client, scopes: requestedScopes, params: params.toString() }));
+});
+
+// Approve endpoint: called from the consent page after the user has
+// authenticated (passkey) and confirmed. Exchanges the user's session for a
+// short-lived authorization code.
+app.post('/hhttps/oauth/approve', async (req, res) => {
+  const { token, client_id, redirect_uri, scope, state, nonce,
+          code_challenge, code_challenge_method } = req.body || {};
+
+  if (!token) return res.status(401).json({ error: 'token required' });
+
+  try {
+    const d = await checkTokenValid(token);
+    if (d.sub === 'machine') {
+      return res.status(403).json({ error: 'machine tokens cannot authorize' });
+    }
+
+    const client = await db.oauthClients.get(client_id);
+    if (!client) return res.status(400).json({ error: 'unknown client' });
+    if (!client.redirect_uris.includes(redirect_uri)) {
+      return res.status(400).json({ error: 'redirect_uri mismatch' });
+    }
+    const scopes = (scope || 'openid').split(/\s+/).filter(Boolean);
+    if (!scopes.includes('openid')) {
+      return res.status(400).json({ error: 'openid scope required' });
+    }
+
+    // Generate authorization code
+    const code = 'hp-' + crypto.randomBytes(24).toString('base64url');
+
+    await db.authCodes.create({
+      code,
+      clientId:           client_id,
+      userId:             d.uid || d.userId || d.sub,
+      redirectUri:        redirect_uri,
+      scopes,
+      pkceChallenge:      code_challenge,
+      pkceMethod:         code_challenge_method || 'plain',
+      state, nonce,
+      role:               d.role,
+      trustScore:         d.trustScore,
+      verificationMethod: d.roleLevel,
+      ttlSec:             OAUTH_CODE_TTL
+    });
+
+    await db.oauthClients.touchLastUsed(client_id);
+    await db.stats.increment('oauth_authorizations');
+
+    // Build redirect URL with code (and state if provided)
+    const url = new URL(redirect_uri);
+    url.searchParams.set('code', code);
+    if (state) url.searchParams.set('state', state);
+
+    return res.json({ redirect: url.toString() });
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+});
+
+// Token endpoint: exchange code for access_token + id_token
+app.post('/hhttps/oauth/token', async (req, res) => {
+  const {
+    grant_type,
+    code,
+    redirect_uri,
+    client_id,
+    client_secret,
+    code_verifier
+  } = req.body || {};
+
+  if (grant_type !== 'authorization_code') {
+    return res.status(400).json({ error: 'unsupported_grant_type' });
+  }
+  if (!code || !client_id) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+
+  const client = await db.oauthClients.get(client_id);
+  if (!client) return res.status(401).json({ error: 'invalid_client' });
+
+  // Authenticate client (secret OR PKCE)
+  const isPublicClient = !client.client_secret_hash;
+  if (!isPublicClient) {
+    if (!client_secret) return res.status(401).json({ error: 'invalid_client' });
+    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
+    if (expected !== client.client_secret_hash) {
+      return res.status(401).json({ error: 'invalid_client' });
+    }
+  }
+
+  // Claim the code (single-use, atomic)
+  const claimed = await db.authCodes.claim(code);
+  if (!claimed) return res.status(400).json({ error: 'invalid_grant', error_description: 'code expired or already used' });
+  if (claimed.client_id !== client_id) {
+    return res.status(400).json({ error: 'invalid_grant', error_description: 'client mismatch' });
+  }
+  if (claimed.redirect_uri !== redirect_uri) {
+    return res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
+  }
+
+  // PKCE verification
+  if (claimed.pkce_challenge) {
+    if (!code_verifier) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier required' });
+    }
+    let computed;
+    if (claimed.pkce_method === 'S256') {
+      computed = crypto.createHash('sha256').update(code_verifier).digest('base64url');
+    } else {
+      computed = code_verifier;
+    }
+    if (computed !== claimed.pkce_challenge) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
+    }
+  }
+
+  // Generate pairwise subject ID
+  const pairwiseId = pairwiseSubjectId(claimed.user_id, client_id, client.subject_type);
+
+  // Record the connection (for "my logins" UI later)
+  await db.connectedPlatforms.record({
+    userId:             claimed.user_id,
+    clientId:           client_id,
+    pairwiseSubjectId:  pairwiseId,
+    scopesGranted:      claimed.scopes
+  });
+
+  // Build the access token (a JWT with limited scope, short TTL)
+  const roleDef = ROLES[claimed.role] || ROLES.citizen;
+  const vMethod = VERIFICATION_LEVELS[claimed.verification_method] || {};
+
+  const accessToken = signToken({
+    iss:        `https://${RP_ID}`,
+    sub:        pairwiseId,
+    aud:        client_id,
+    client_id,
+    scope:      claimed.scopes.join(' '),
+    role:       claimed.role,
+    trustScore: claimed.trust_score
+  }, { expiresIn: OAUTH_TOKEN_TTL });
+
+  // ID token (OIDC) — claims based on requested scopes
+  const idTokenClaims = {
+    iss:       `https://${RP_ID}`,
+    sub:       pairwiseId,
+    aud:       client_id,
+    nonce:     claimed.nonce || undefined,
+    auth_time: Math.floor(Date.now() / 1000)
+  };
+  if (claimed.scopes.includes('role')) {
+    idTokenClaims.role        = claimed.role;
+    idTokenClaims.role_label  = roleDef.label;
+    idTokenClaims.role_icon   = roleDef.icon;
+    idTokenClaims.trust_score = claimed.trust_score;
+  }
+  if (claimed.scopes.includes('verification_method')) {
+    idTokenClaims.verification_method       = claimed.verification_method;
+    idTokenClaims.verification_method_label = vMethod.label || null;
+  }
+  const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
+
+  await db.stats.increment('oauth_tokens_issued');
+  await db.stats.increment('oauth_logins');
+
+  return res.json({
+    access_token: accessToken,
+    token_type:   'Bearer',
+    expires_in:   OAUTH_TOKEN_TTL,
+    id_token:     idToken,
+    scope:        claimed.scopes.join(' ')
+  });
+});
+
+// UserInfo endpoint: returns claims for the bearer token
+app.get('/hhttps/oauth/userinfo', async (req, res) => {
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token) return res.status(401).json({ error: 'unauthorized' });
+
+  try {
+    const d = verifyToken(token);
+    if (!d.client_id) {
+      return res.status(403).json({ error: 'not an oauth access token' });
+    }
+    const scopes = (d.scope || '').split(/\s+/).filter(Boolean);
+    const out = {
+      sub: d.sub,
+      iss: d.iss
+    };
+    if (scopes.includes('role')) {
+      const roleDef = ROLES[d.role] || ROLES.citizen;
+      out.role        = d.role;
+      out.role_label  = roleDef.label;
+      out.role_icon   = roleDef.icon;
+      out.trust_score = d.trustScore;
+    }
+    return res.json(out);
+  } catch (e) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+});
+
+// Revoke endpoint: user disconnects a platform
+app.post('/hhttps/oauth/revoke', async (req, res) => {
+  const { token, client_id } = req.body || {};
+  if (!token || !client_id) return res.status(400).json({ error: 'token + client_id required' });
+
+  try {
+    const d = await checkTokenValid(token);
+    await db.connectedPlatforms.revoke(d.uid || d.userId || d.sub, client_id);
+    return res.json({ status: 'revoked', client_id });
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+});
+
+// ─── OAuth helper rendering ──────────────────────────────────────────────────
+
+function redirectWithError(redirectUri, state, errorCode, errorDescription) {
+  try {
+    const url = new URL(redirectUri);
+    url.searchParams.set('error', errorCode);
+    if (errorDescription) url.searchParams.set('error_description', errorDescription);
+    if (state) url.searchParams.set('state', state);
+    return { redirect: url.toString() };
+  } catch (e) {
+    return null;
+  }
+}
+
+function renderOAuthError(message, status) {
+  return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
+<title>OAuth-Fehler · HHTTPS</title>
+<style>body{font-family:system-ui;background:#F8F1E4;color:#2D2823;padding:60px 20px;text-align:center}
+.box{max-width:520px;margin:0 auto;background:#FCFAF5;border-radius:14px;padding:32px;box-shadow:0 4px 20px rgba(45,40,35,.08)}
+h1{font-family:'Fraunces',serif;color:#C97D5B;margin-bottom:16px}
+p{line-height:1.6;color:#4A413A}
+a{color:#A86246;text-decoration:none}
+</style></head><body><div class="box"><h1>OAuth-Fehler ${status}</h1><p>${message}</p>
+<p><a href="https://hhttps.org">← zurück zu hhttps.org</a></p></div></body></html>`;
+}
+
+function renderConsentPage({ client, scopes, params }) {
+  const verifiedBadge = client.verified
+    ? `<span class="badge badge-verified">✓ Verifizierte Plattform</span>`
+    : `<span class="badge badge-unverified">⚠ Nicht verifiziert</span>`;
+
+  const unverifiedWarning = client.verified ? '' : `
+    <div class="warning">
+      <strong>Achtung — Diese Plattform ist nicht von hhttps.org geprüft.</strong>
+      Klicke nur auf "Erlauben", wenn du der Plattform <em>${escapeHtml(client.name)}</em> wirklich vertraust.
+      Prüfe besonders, ob die URL in der Adressleiste mit <code>${escapeHtml(client.homepage_url || '?')}</code> übereinstimmt.
+    </div>
+  `;
+
+  const scopeRows = scopes.map(s => {
+    const label = {
+      'openid':              { icon: '🆔', title: 'Anonyme Identität',  desc: 'Eine pseudonyme Kennung, die nur diese Plattform sieht.' },
+      'role':                { icon: '🎭', title: 'Rolle + Trust-Score', desc: 'Deine gesellschaftliche Rolle (z. B. Entwickler) und dein Vertrauenswert.' },
+      'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' }
+    }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
+    return `<div class="scope-row">
+      <span class="scope-icon">${label.icon}</span>
+      <div><div class="scope-title">${label.title}</div>
+           <div class="scope-desc">${label.desc}</div></div>
+    </div>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html lang="de"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login bei ${escapeHtml(client.name)} · HHTTPS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..600,30..100,0..1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream:#F8F1E4; --paper:#FCFAF5; --sand:#EDE0C8;
+    --terra:#C97D5B; --terra-dp:#A86246; --apricot:#F2B894;
+    --sage:#A8B89E; --green-v:#5BAF6B;
+    --ink:#2D2823; --ink-soft:#4A413A; --ink-mute:#7A6F62;
+    --line:rgba(45,40,35,0.1);
+    --red:#C97D5B;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Inter', system-ui, sans-serif; background: var(--cream); color: var(--ink); min-height: 100vh; display:flex; align-items:center; justify-content:center; padding: 40px 16px; line-height:1.55; }
+  .wrap { max-width: 540px; width:100%; }
+  .header { text-align: center; margin-bottom: 24px; }
+  .logo { display:inline-flex; align-items:center; gap:10px; }
+  .logo-mark { width:40px; height:40px; border-radius:11px; background: linear-gradient(135deg, var(--terra), var(--apricot)); position:relative; }
+  .logo-mark::after { content:'H'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:'Fraunces',serif; font-weight:600; font-size:22px; color: var(--paper); }
+  .logo-text { font-family:'Fraunces',serif; font-variation-settings:"SOFT" 100,"WONK" 1; font-weight:500; font-size:22px; }
+  .card { background: var(--paper); border-radius: 18px; box-shadow: 0 8px 28px rgba(45,40,35,0.1); border: 1px solid var(--line); overflow:hidden; }
+  .card-head { padding: 28px 28px 20px; border-bottom: 1px solid var(--line); text-align: center; }
+  .client-logo { width:64px; height:64px; border-radius:14px; background: var(--sand); margin: 0 auto 14px; display:flex; align-items:center; justify-content:center; font-size:32px; color: var(--ink-soft); }
+  h1 { font-family:'Fraunces',serif; font-variation-settings:"SOFT" 50,"WONK" 1; font-size:24px; font-weight:500; letter-spacing:-0.01em; margin-bottom:6px; }
+  h1 em { color: var(--terra); font-style:italic; font-variation-settings:"SOFT" 100,"WONK" 1; }
+  .client-url { font-family:'JetBrains Mono',monospace; font-size:12px; color: var(--ink-mute); margin-top: 8px; }
+  .badge { display:inline-block; font-size: 11px; padding: 4px 10px; border-radius: 100px; margin-top: 10px; font-family:'JetBrains Mono',monospace; letter-spacing:0.5px; }
+  .badge-verified { background: rgba(91,175,107,0.15); color: var(--green-v); }
+  .badge-unverified { background: rgba(201,125,91,0.15); color: var(--terra-dp); }
+  .warning { background: rgba(201,125,91,0.08); border-left: 4px solid var(--terra); padding: 14px 18px; margin: 0; font-size:13px; color: var(--ink-soft); }
+  .warning strong { color: var(--terra-dp); display:block; margin-bottom:4px; }
+  .warning code { background: var(--sand); padding: 2px 6px; border-radius: 4px; font-family:'JetBrains Mono',monospace; font-size: 11px; }
+  .scope-list { padding: 20px 28px; }
+  .scope-list-head { font-family:'JetBrains Mono',monospace; font-size:10px; color: var(--ink-mute); letter-spacing:1.5px; text-transform:uppercase; margin-bottom: 14px; }
+  .scope-row { display:flex; gap:14px; padding:10px 0; align-items:flex-start; border-bottom: 1px solid var(--line); }
+  .scope-row:last-child { border-bottom:none; }
+  .scope-icon { font-size:24px; line-height:1; }
+  .scope-title { font-weight:600; margin-bottom:2px; }
+  .scope-desc { font-size: 12px; color: var(--ink-mute); }
+  .actions { padding: 20px 28px 28px; display:flex; gap:10px; }
+  .btn { flex:1; padding: 14px; border-radius: 100px; border: none; font-family:inherit; font-size:14px; font-weight:500; cursor:pointer; transition: all 0.2s; }
+  .btn-allow { background: var(--ink); color: var(--paper); }
+  .btn-allow:hover { background: var(--terra-dp); transform: translateY(-1px); }
+  .btn-allow:disabled { background: var(--ink-mute); cursor: not-allowed; transform: none; }
+  .btn-deny { background: var(--paper); color: var(--ink-soft); border: 1px solid var(--line); }
+  .btn-deny:hover { background: var(--sand); }
+  .footer-note { padding: 14px 28px; background: var(--cream); border-top: 1px solid var(--line); text-align:center; font-size: 11px; color: var(--ink-mute); font-family:'JetBrains Mono',monospace; }
+  .status { padding: 14px 28px; font-size: 13px; text-align:center; display:none; }
+  .status.error { background: rgba(201,125,91,0.1); color: var(--terra-dp); display:block; }
+</style></head><body>
+<div class="wrap">
+  <div class="header">
+    <a class="logo" href="https://hhttps.org" style="text-decoration:none;color:inherit">
+      <div class="logo-mark"></div>
+      <div class="logo-text">HHTTPS</div>
+    </a>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <div class="client-logo">${client.logo_url ? `<img src="${escapeHtml(client.logo_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">` : '🏛️'}</div>
+      <h1><em>${escapeHtml(client.name)}</em> möchte deine Identität sehen</h1>
+      ${client.homepage_url ? `<div class="client-url">${escapeHtml(client.homepage_url)}</div>` : ''}
+      ${verifiedBadge}
+    </div>
+    ${unverifiedWarning}
+    <div class="scope-list">
+      <div class="scope-list-head">Folgende Daten werden geteilt</div>
+      ${scopeRows}
+    </div>
+    <div class="status" id="status"></div>
+    <div class="actions">
+      <button class="btn btn-deny" id="denyBtn">Ablehnen</button>
+      <button class="btn btn-allow" id="allowBtn">Erlauben</button>
+    </div>
+    <div class="footer-note">Nur Rolle und Trust-Score werden geteilt. Keine PII. Du kannst die Verbindung jederzeit auf <a href="https://hhttps.org" style="color:var(--terra-dp);text-decoration:none">hhttps.org</a> widerrufen.</div>
+  </div>
+</div>
+<script>
+const params = new URLSearchParams(${JSON.stringify(params)});
+
+document.getElementById('denyBtn').addEventListener('click', () => {
+  const redirectUri = params.get('redirect_uri');
+  const state = params.get('state') || '';
+  const url = new URL(redirectUri);
+  url.searchParams.set('error', 'access_denied');
+  url.searchParams.set('error_description', 'User denied the request');
+  if (state) url.searchParams.set('state', state);
+  window.location = url.toString();
+});
+
+document.getElementById('allowBtn').addEventListener('click', async () => {
+  const allow = document.getElementById('allowBtn');
+  const status = document.getElementById('status');
+  allow.disabled = true;
+  allow.textContent = 'Wird verarbeitet…';
+
+  // Look for an identity in localStorage (published by hhttps.org main page)
+  // or in browser extension storage. For Phase 3a we use localStorage.
+  let identity = null;
+  try {
+    const raw = localStorage.getItem('hhttps_identity');
+    if (raw) identity = JSON.parse(raw);
+  } catch (e) {}
+
+  if (!identity || !identity.token) {
+    status.className = 'status error';
+    status.textContent = 'Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.';
+    setTimeout(() => {
+      window.location = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
+    }, 2000);
+    return;
+  }
+
+  try {
+    const r = await fetch('/hhttps/oauth/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: identity.token,
+        client_id:             params.get('client_id'),
+        redirect_uri:          params.get('redirect_uri'),
+        scope:                 params.get('scope'),
+        state:                 params.get('state'),
+        nonce:                 params.get('nonce'),
+        code_challenge:        params.get('code_challenge'),
+        code_challenge_method: params.get('code_challenge_method')
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'OAuth-Fehler');
+    window.location = d.redirect;
+  } catch (e) {
+    status.className = 'status error';
+    status.textContent = 'Fehler: ' + e.message;
+    allow.disabled = false;
+    allow.textContent = 'Erlauben';
+  }
+});
+</script>
+</body></html>`;
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
 
 // ─── Roles registry ───────────────────────────────────────────────────────────
 

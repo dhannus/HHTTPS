@@ -771,6 +771,192 @@
       display: inline-block;
     }
 
+    /* ─── Platforms section (Phase 3a showcase) ───────────────────────────── */
+    .platforms {
+      background: linear-gradient(180deg, var(--cream) 0%, var(--cream-deep) 100%);
+      position: relative;
+      overflow: hidden;
+    }
+    .platforms::before {
+      content: '';
+      position: absolute;
+      top: -40%; right: -10%;
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(242, 184, 148, 0.15) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .platforms-hero {
+      max-width: 880px;
+      margin: 0 auto 64px;
+      text-align: center;
+      position: relative;
+    }
+    .platforms-illustration {
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto 32px;
+      display: block;
+    }
+    .platforms-tagline {
+      font-family: 'Fraunces', serif;
+      font-size: 24px;
+      font-weight: 400;
+      font-style: italic;
+      color: var(--terra);
+      font-variation-settings: "SOFT" 100, "WONK" 1;
+      margin-top: 12px;
+    }
+    .platforms-explainer {
+      max-width: 720px;
+      margin: 0 auto 56px;
+      font-size: 17px;
+      line-height: 1.7;
+      color: var(--ink-soft);
+      text-align: center;
+    }
+
+    /* Showcase card for first verified platform */
+    .platform-card {
+      max-width: 720px;
+      margin: 0 auto 32px;
+      background: var(--paper);
+      border-radius: 20px;
+      padding: 40px 44px;
+      box-shadow: 0 12px 40px rgba(45, 40, 35, 0.08);
+      border: 1px solid rgba(45, 40, 35, 0.06);
+      position: relative;
+      overflow: hidden;
+    }
+    .platform-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--sage), var(--apricot), var(--terra));
+    }
+    .platform-card-head {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .platform-card-mark {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, var(--terra), var(--apricot));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Fraunces', serif;
+      font-size: 28px;
+      font-weight: 600;
+      color: var(--paper);
+      flex-shrink: 0;
+    }
+    .platform-card-title {
+      flex: 1;
+    }
+    .platform-card-name {
+      font-family: 'Fraunces', serif;
+      font-size: 22px;
+      font-weight: 500;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+      margin-bottom: 4px;
+    }
+    .platform-card-subtitle {
+      font-size: 14px;
+      color: var(--ink-mute);
+    }
+    .platform-card-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(91, 175, 107, 0.12);
+      color: #2D5A2D;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 100px;
+      margin-bottom: 16px;
+      letter-spacing: 0.3px;
+    }
+    .platform-card-status::before {
+      content: '';
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #5BAF6B;
+      box-shadow: 0 0 0 3px rgba(91, 175, 107, 0.25);
+    }
+    .platform-card p {
+      font-size: 15px;
+      line-height: 1.65;
+      color: var(--ink-soft);
+      margin-bottom: 24px;
+    }
+    .platform-card-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--ink);
+      color: var(--paper);
+      padding: 12px 24px;
+      border-radius: 100px;
+      font-weight: 500;
+      font-size: 15px;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+    .platform-card-cta:hover {
+      background: var(--terra-deep);
+      transform: translateY(-1px);
+    }
+    .platform-card-cta-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--terra-deep);
+      padding: 12px 16px;
+      font-weight: 500;
+      font-size: 14px;
+      text-decoration: none;
+      margin-left: 8px;
+    }
+    .platform-card-cta-secondary:hover {
+      text-decoration: underline;
+    }
+
+    .platforms-footer {
+      max-width: 720px;
+      margin: 56px auto 0;
+      text-align: center;
+      padding-top: 32px;
+      border-top: 1px solid rgba(45, 40, 35, 0.08);
+      font-size: 14px;
+      color: var(--ink-mute);
+    }
+    .platforms-footer strong {
+      color: var(--ink-soft);
+      font-weight: 600;
+    }
+    .platforms-footer a {
+      color: var(--terra-deep);
+      text-decoration: none;
+      font-weight: 500;
+    }
+    .platforms-footer a:hover {
+      text-decoration: underline;
+    }
+
+    @media (max-width: 900px) {
+      .platform-card { padding: 28px 24px; }
+      .platform-card-head { flex-wrap: wrap; }
+      .platforms-tagline { font-size: 20px; }
+      .platforms-explainer { font-size: 15px; }
+    }
+
     /* ─── Developer section ─────────────────────────────────────────────── */
     .dev {
       background: var(--ink);
@@ -1442,6 +1628,7 @@
       <ul class="nav-links">
         <li><a href="#what" data-i18n="nav.what">Was ist HHTTPS?</a></li>
         <li><a href="#featured" data-i18n="nav.featured">Beispiele</a></li>
+        <li><a href="#platforms" data-i18n="nav.platforms">Plattformen</a></li>
         <li><a href="#roles" data-i18n="nav.roles">Rollen</a></li>
         <li><a href="#how" data-i18n="nav.how">So funktioniert's</a></li>
         <li><a href="#vision" data-i18n="nav.vision">Vision</a></li>
@@ -1954,6 +2141,151 @@
           </div>
         </div>
 
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ Platforms — Phase 3a Showcase ═══════════════════════ -->
+  <section class="platforms" id="platforms">
+    <div class="container">
+      <div class="section-header reveal">
+        <span class="section-eyebrow" data-i18n="platforms.eyebrow">Login mit HHTTPS</span>
+        <h2 class="section-title" data-i18n="platforms.title">Eine Identität. Alle Plattformen. Null Tracking.</h2>
+        <p class="section-lead" data-i18n="platforms.lead">
+          Mit einem Klick einloggen auf jeder Plattform, die HHTTPS unterstützt. Deine Rolle reist mit dir — dein Name nicht. Jede Plattform sieht ein anderes Pseudonym.
+        </p>
+      </div>
+
+      <div class="platforms-hero reveal">
+        <!-- Hero illustration: identity → many platforms -->
+        <svg class="platforms-illustration" viewBox="0 0 1200 600" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="platforms-illustration-title">
+          <title id="platforms-illustration-title">Eine Identität, viele Plattformen — keine Datenweitergabe</title>
+
+          <!-- Background gradient blob -->
+          <defs>
+            <radialGradient id="bg-glow" cx="50%" cy="50%">
+              <stop offset="0%" stop-color="#F2B894" stop-opacity="0.15"/>
+              <stop offset="100%" stop-color="#F2B894" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <rect width="1200" height="600" fill="url(#bg-glow)"/>
+
+          <!-- Center: HHTTPS issuer -->
+          <g transform="translate(600, 300)">
+            <circle cx="0" cy="0" r="100" fill="#FCFAF5" stroke="#C97D5B" stroke-width="2"/>
+            <circle cx="0" cy="0" r="115" fill="none" stroke="#C97D5B" stroke-width="0.5" stroke-dasharray="4 4" opacity="0.4"/>
+            <rect x="-35" y="-50" width="70" height="70" rx="18" fill="#C97D5B"/>
+            <text x="0" y="-2" font-family="Fraunces, Georgia, serif" font-size="46" font-weight="600" text-anchor="middle" fill="#FCFAF5">H</text>
+            <text x="0" y="48" font-family="Inter, system-ui, sans-serif" font-size="13" font-weight="600" text-anchor="middle" fill="#2D2823">hhttps.org</text>
+            <text x="0" y="68" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10" text-anchor="middle" fill="#7A6F62" letter-spacing="0.5" data-i18n="platforms.your-identity">DEINE IDENTITÄT</text>
+            <text x="0" y="-130" font-family="JetBrains Mono, ui-monospace, monospace" font-size="11" font-weight="500" text-anchor="middle" fill="#A86246" letter-spacing="1.5" data-i18n="platforms.one-passkey">EIN PASSKEY</text>
+          </g>
+
+          <!-- Platform: top-left (Q&A) -->
+          <g transform="translate(220, 220)">
+            <rect x="-90" y="-50" width="180" height="100" rx="14" fill="#FCFAF5" stroke="#2D2823" stroke-width="0.5" stroke-opacity="0.15"/>
+            <rect x="-90" y="-50" width="180" height="36" rx="14" fill="#EDE0C8"/>
+            <rect x="-90" y="-26" width="180" height="12" fill="#EDE0C8"/>
+            <text x="-72" y="-28" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823">ask.iamhmn.org</text>
+            <circle cx="-72" cy="6" r="11" fill="#A8B89E"/>
+            <text x="-72" y="10" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle" fill="#FCFAF5">💻</text>
+            <text x="-54" y="2" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823" data-i18n="platforms.role.developer">Entwickler</text>
+            <text x="-54" y="16" font-family="JetBrains Mono, ui-monospace, monospace" font-size="9" fill="#7A6F62">Trust 72</text>
+            <text x="-72" y="40" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#7A6F62" data-i18n="platforms.subtitle.qa">Q&amp;A Plattform</text>
+          </g>
+
+          <!-- Platform: top-right (Forum) -->
+          <g transform="translate(980, 220)">
+            <rect x="-90" y="-50" width="180" height="100" rx="14" fill="#FCFAF5" stroke="#2D2823" stroke-width="0.5" stroke-opacity="0.15"/>
+            <rect x="-90" y="-50" width="180" height="36" rx="14" fill="#EDE0C8"/>
+            <rect x="-90" y="-26" width="180" height="12" fill="#EDE0C8"/>
+            <text x="-72" y="-28" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823">forum.beispiel.de</text>
+            <circle cx="-72" cy="6" r="11" fill="#F2B894"/>
+            <text x="-72" y="10" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle" fill="#2D2823">🎨</text>
+            <text x="-54" y="2" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823" data-i18n="platforms.role.creative">Kreative</text>
+            <text x="-54" y="16" font-family="JetBrains Mono, ui-monospace, monospace" font-size="9" fill="#7A6F62">Trust 58</text>
+            <text x="-72" y="40" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#7A6F62" data-i18n="platforms.subtitle.forum">Forum</text>
+          </g>
+
+          <!-- Platform: bottom-left (Petition) -->
+          <g transform="translate(220, 400)">
+            <rect x="-90" y="-50" width="180" height="100" rx="14" fill="#FCFAF5" stroke="#2D2823" stroke-width="0.5" stroke-opacity="0.15"/>
+            <rect x="-90" y="-50" width="180" height="36" rx="14" fill="#EDE0C8"/>
+            <rect x="-90" y="-26" width="180" height="12" fill="#EDE0C8"/>
+            <text x="-72" y="-28" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823">petition.bund.de</text>
+            <circle cx="-72" cy="6" r="11" fill="#5BAF6B"/>
+            <text x="-72" y="10" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle" fill="#FCFAF5">🧑</text>
+            <text x="-54" y="2" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823" data-i18n="platforms.role.citizen">Bürger</text>
+            <text x="-54" y="16" font-family="JetBrains Mono, ui-monospace, monospace" font-size="9" fill="#7A6F62">Trust 85</text>
+            <text x="-72" y="40" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#7A6F62" data-i18n="platforms.subtitle.petition">Petitions-Plattform</text>
+          </g>
+
+          <!-- Platform: bottom-right (Newsroom) -->
+          <g transform="translate(980, 400)">
+            <rect x="-90" y="-50" width="180" height="100" rx="14" fill="#FCFAF5" stroke="#2D2823" stroke-width="0.5" stroke-opacity="0.15"/>
+            <rect x="-90" y="-50" width="180" height="36" rx="14" fill="#EDE0C8"/>
+            <rect x="-90" y="-26" width="180" height="12" fill="#EDE0C8"/>
+            <text x="-72" y="-28" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823">kommentare.zeit.de</text>
+            <circle cx="-72" cy="6" r="11" fill="#A8B89E"/>
+            <text x="-72" y="10" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle" fill="#FCFAF5">📰</text>
+            <text x="-54" y="2" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="600" fill="#2D2823" data-i18n="platforms.role.journalist">Journalist</text>
+            <text x="-54" y="16" font-family="JetBrains Mono, ui-monospace, monospace" font-size="9" fill="#7A6F62">Trust 88</text>
+            <text x="-72" y="40" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#7A6F62" data-i18n="platforms.subtitle.news">Nachrichten</text>
+          </g>
+
+          <!-- Connection lines from center to each platform -->
+          <g fill="none" stroke="#C97D5B" stroke-width="1.5" stroke-linecap="round" opacity="0.5">
+            <path d="M 510 275 Q 400 230 310 220"/>
+            <path d="M 690 275 Q 800 230 890 220"/>
+            <path d="M 510 345 Q 400 390 310 400"/>
+            <path d="M 690 345 Q 800 390 890 400"/>
+          </g>
+
+          <!-- Small role indicators near each line midpoint -->
+          <g font-family="JetBrains Mono, ui-monospace, monospace" font-size="9" fill="#A86246" letter-spacing="0.5">
+            <text x="395" y="242" text-anchor="middle" data-i18n="platforms.label.role-trust">Rolle + Trust</text>
+            <text x="805" y="242" text-anchor="middle" data-i18n="platforms.label.role-trust">Rolle + Trust</text>
+            <text x="395" y="385" text-anchor="middle" data-i18n="platforms.label.role-trust">Rolle + Trust</text>
+            <text x="805" y="385" text-anchor="middle" data-i18n="platforms.label.role-trust">Rolle + Trust</text>
+          </g>
+        </svg>
+
+        <div class="platforms-tagline" data-i18n="platforms.tagline">
+          Jede Plattform sieht ein anderes Pseudonym. Kein Name. Keine E-Mail. Kein Tracking.
+        </div>
+      </div>
+
+      <p class="platforms-explainer reveal" data-i18n="platforms.explainer">
+        Ein einziger Klick — und du bist eingeloggt. Die Plattform erfährt deine Rolle und deinen Trust-Score. Sonst nichts. Verschiedene Plattformen bekommen verschiedene Pseudonyme von dir, damit niemand dich quer-verfolgen kann. Du behältst die volle Kontrolle.
+      </p>
+
+      <!-- Live platform showcase: ask.iamhmn.org -->
+      <div class="platform-card reveal">
+        <div class="platform-card-status">
+          <span data-i18n="platforms.card.status">Verifizierte Plattform · Online seit Mai 2026</span>
+        </div>
+        <div class="platform-card-head">
+          <div class="platform-card-mark">?</div>
+          <div class="platform-card-title">
+            <div class="platform-card-name">ask.iamhmn.org</div>
+            <div class="platform-card-subtitle" data-i18n="platforms.card.subtitle">Q&amp;A für verifizierte Fachleute</div>
+          </div>
+        </div>
+        <p data-i18n="platforms.card.description">
+          Die erste produktiv eingesetzte HHTTPS-Plattform. Eine offene Q&amp;A-Plattform, auf der du dich mit deiner HHTTPS-Identität einloggst. Stelle Fragen zu Medizin, Recht, Technik, Bildung — Antworten kommen ausschließlich von verifizierten Menschen. Bei jeder Antwort siehst du Rolle, Trust-Score und Fachverifikation transparent.
+        </p>
+        <a href="https://ask.iamhmn.org" class="platform-card-cta" data-i18n="platforms.card.cta">
+          Bei ask.iamhmn.org einloggen →
+        </a>
+        <a href="https://hhttps.org" class="platform-card-cta-secondary" data-i18n="platforms.card.cta2">
+          Erst Identität anlegen →
+        </a>
+      </div>
+
+      <div class="platforms-footer reveal">
+        <strong data-i18n="platforms.footer.strong">Mehr Plattformen kommen.</strong>
+        <span data-i18n="platforms.footer.text"> Du betreibst eine Plattform und willst HHTTPS integrieren?</span>
+        <a href="https://github.com/dhannus/HumanProof/blob/main/docs/oauth-integration.md" data-i18n="platforms.footer.cta">OAuth-Integration in 10 Minuten →</a>
       </div>
     </div>
   </section>
@@ -2670,7 +3002,34 @@ hhttps = <span class="tok-fn">HHTPPSClient</span>(<span class="tok-str">"https:/
         'footer.l.imprint':   'Impressum',
         'footer.l.privacy':   'Datenschutz',
         'footer.l.licence':   'Lizenz EUPL-1.2',
-        'footer.l.contact':   'Kontakt'
+        'footer.l.contact':   'Kontakt',
+
+        // ─── Platforms section (Phase 3a) ────────────────────────────────
+        'nav.platforms':                'Plattformen',
+        'platforms.eyebrow':            'Login mit HHTTPS',
+        'platforms.title':              'Eine Identität. Alle Plattformen. Null Tracking.',
+        'platforms.lead':               'Mit einem Klick einloggen auf jeder Plattform, die HHTTPS unterstützt. Deine Rolle reist mit dir — dein Name nicht. Jede Plattform sieht ein anderes Pseudonym.',
+        'platforms.your-identity':      'DEINE IDENTITÄT',
+        'platforms.one-passkey':        'EIN PASSKEY',
+        'platforms.role.developer':     'Entwickler',
+        'platforms.role.creative':      'Kreative',
+        'platforms.role.citizen':       'Bürger',
+        'platforms.role.journalist':    'Journalist',
+        'platforms.subtitle.qa':        'Q&A Plattform',
+        'platforms.subtitle.forum':     'Forum',
+        'platforms.subtitle.petition':  'Petitions-Plattform',
+        'platforms.subtitle.news':      'Nachrichten',
+        'platforms.label.role-trust':   'Rolle + Trust',
+        'platforms.tagline':            'Jede Plattform sieht ein anderes Pseudonym. Kein Name. Keine E-Mail. Kein Tracking.',
+        'platforms.explainer':          'Ein einziger Klick — und du bist eingeloggt. Die Plattform erfährt deine Rolle und deinen Trust-Score. Sonst nichts. Verschiedene Plattformen bekommen verschiedene Pseudonyme von dir, damit niemand dich quer-verfolgen kann. Du behältst die volle Kontrolle.',
+        'platforms.card.status':        'Verifizierte Plattform · Online seit Mai 2026',
+        'platforms.card.subtitle':      'Q&A für verifizierte Fachleute',
+        'platforms.card.description':   'Die erste produktiv eingesetzte HHTTPS-Plattform. Eine offene Q&A-Plattform, auf der du dich mit deiner HHTTPS-Identität einloggst. Stelle Fragen zu Medizin, Recht, Technik, Bildung — Antworten kommen ausschließlich von verifizierten Menschen. Bei jeder Antwort siehst du Rolle, Trust-Score und Fachverifikation transparent.',
+        'platforms.card.cta':           'Bei ask.iamhmn.org einloggen →',
+        'platforms.card.cta2':          'Erst Identität anlegen →',
+        'platforms.footer.strong':      'Mehr Plattformen kommen.',
+        'platforms.footer.text':        ' Du betreibst eine Plattform und willst HHTTPS integrieren?',
+        'platforms.footer.cta':         'OAuth-Integration in 10 Minuten →'
       },
       en: {
         'nav.what':     'What is HHTTPS?',
@@ -2858,7 +3217,34 @@ hhttps = <span class="tok-fn">HHTPPSClient</span>(<span class="tok-str">"https:/
         'footer.l.imprint':   'Imprint',
         'footer.l.privacy':   'Privacy',
         'footer.l.licence':   'Licence EUPL-1.2',
-        'footer.l.contact':   'Contact'
+        'footer.l.contact':   'Contact',
+
+        // ─── Platforms section (Phase 3a) ────────────────────────────────
+        'nav.platforms':                'Platforms',
+        'platforms.eyebrow':            'Login with HHTTPS',
+        'platforms.title':              'One identity. All platforms. Zero tracking.',
+        'platforms.lead':               'One click sign-in on every platform that supports HHTTPS. Your role travels with you — your name does not. Every platform sees a different pseudonym.',
+        'platforms.your-identity':      'YOUR IDENTITY',
+        'platforms.one-passkey':        'ONE PASSKEY',
+        'platforms.role.developer':     'Developer',
+        'platforms.role.creative':      'Creative',
+        'platforms.role.citizen':       'Citizen',
+        'platforms.role.journalist':    'Journalist',
+        'platforms.subtitle.qa':        'Q&A platform',
+        'platforms.subtitle.forum':     'Forum',
+        'platforms.subtitle.petition':  'Petition platform',
+        'platforms.subtitle.news':      'News',
+        'platforms.label.role-trust':   'role + trust',
+        'platforms.tagline':            'Every platform sees a different pseudonym. No name. No email. No tracking.',
+        'platforms.explainer':          'One click — and you are logged in. The platform learns your role and your trust score. Nothing else. Different platforms receive different pseudonyms, so nobody can correlate your activity across them. You stay in full control.',
+        'platforms.card.status':        'Verified platform · Online since May 2026',
+        'platforms.card.subtitle':      'Q&A for verified professionals',
+        'platforms.card.description':   'The first HHTTPS platform live in production. An open Q&A site where you log in with your HHTTPS identity. Ask questions about medicine, law, technology, education — answers come exclusively from verified humans. Every answer displays role, trust score, and verification method transparently.',
+        'platforms.card.cta':           'Sign in to ask.iamhmn.org →',
+        'platforms.card.cta2':          'Create identity first →',
+        'platforms.footer.strong':      'More platforms are coming.',
+        'platforms.footer.text':        ' You run a platform and want to integrate HHTTPS?',
+        'platforms.footer.cta':         'OAuth integration in 10 minutes →'
       }
     };
 

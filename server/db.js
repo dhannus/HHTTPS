@@ -447,6 +447,243 @@ export const webhooks = {
   }
 };
 
+// ─── SIGNATURES (Phase 2.5: domain-bound slugs) ───────────────────────────────
+
+export const signatures = {
+  async create({ id, signerId, role, roleLabel, roleIcon, trustScore,
+                 level, levelLabel, bindingType, boundDomain,
+                 textHashStrict, textHashLoose, textLength, textPreview,
+                 issuer }) {
+    await q(
+      `INSERT INTO signatures
+       (id, signer_id, role, role_label, role_icon, trust_score,
+        level, level_label, binding_type, bound_domain,
+        text_hash_strict, text_hash_loose, text_length, text_preview, issuer)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [id, signerId, role, roleLabel || null, roleIcon || null, trustScore,
+       level || null, levelLabel || null, bindingType, boundDomain || null,
+       textHashStrict, textHashLoose, textLength, textPreview || null,
+       issuer || 'hhttps://hhttps.org']
+    );
+  },
+
+  async get(id) {
+    const { rows } = await q(`SELECT * FROM signatures WHERE id = $1`, [id]);
+    return rows[0] || null;
+  },
+
+  async getMany(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const { rows } = await q(
+      `SELECT * FROM signatures WHERE id = ANY($1::varchar[])`,
+      [ids]
+    );
+    return rows;
+  },
+
+  async slugExists(id) {
+    const { rows } = await q(`SELECT 1 FROM signatures WHERE id = $1`, [id]);
+    return rows.length > 0;
+  },
+
+  async isReservedSlug(id) {
+    const { rows } = await q(`SELECT 1 FROM reserved_slugs WHERE slug = $1`, [id.toLowerCase()]);
+    return rows.length > 0;
+  },
+
+  async incrementVerify(id) {
+    await q(
+      `UPDATE signatures
+       SET verify_count = verify_count + 1, last_verified_at = NOW()
+       WHERE id = $1`,
+      [id]
+    );
+  },
+
+  async setFirstSeen(id, domain) {
+    await q(
+      `UPDATE signatures
+       SET first_seen_domain = $2, first_seen_at = NOW()
+       WHERE id = $1 AND first_seen_at IS NULL`,
+      [id, domain]
+    );
+  },
+
+  async revoke(id, signerId, reason) {
+    const { rows } = await q(
+      `UPDATE signatures
+       SET revoked_at = NOW(), revoke_reason = $3
+       WHERE id = $1 AND signer_id = $2 AND revoked_at IS NULL
+       RETURNING id`,
+      [id, signerId, reason || null]
+    );
+    return rows.length > 0;
+  },
+
+  async listBySigner(signerId, limit = 50) {
+    const { rows } = await q(
+      `SELECT * FROM signatures
+       WHERE signer_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [signerId, limit]
+    );
+    return rows;
+  },
+
+  async count() {
+    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM signatures`);
+    return rows[0].n;
+  }
+};
+
+// ─── OAUTH 2.0 / OIDC (Phase 3a) ──────────────────────────────────────────────
+
+export const oauthClients = {
+  async create({ clientId, clientSecretHash, name, description, homepageUrl,
+                 redirectUris, allowedScopes, subjectType, logoUrl,
+                 contactEmail, ownerUserId }) {
+    await q(
+      `INSERT INTO oauth_clients
+       (client_id, client_secret_hash, name, description, homepage_url,
+        redirect_uris, allowed_scopes, subject_type, logo_url,
+        contact_email, owner_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [clientId, clientSecretHash || null, name, description || null,
+       homepageUrl || null,
+       JSON.stringify(redirectUris || []),
+       JSON.stringify(allowedScopes || ['openid', 'role']),
+       subjectType || 'pairwise',
+       logoUrl || null, contactEmail || null, ownerUserId || null]
+    );
+  },
+
+  async get(clientId) {
+    const { rows } = await q(
+      `SELECT * FROM oauth_clients WHERE client_id = $1 AND is_active = TRUE`,
+      [clientId]
+    );
+    if (!rows[0]) return null;
+    const r = rows[0];
+    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
+    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
+    return r;
+  },
+
+  async listByOwner(ownerUserId) {
+    const { rows } = await q(
+      `SELECT * FROM oauth_clients WHERE owner_user_id = $1 ORDER BY created_at DESC`,
+      [ownerUserId]
+    );
+    return rows.map(r => {
+      try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
+      try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
+      return r;
+    });
+  },
+
+  async setVerified(clientId, verifiedBy) {
+    await q(
+      `UPDATE oauth_clients SET verified = TRUE, verified_at = NOW(), verified_by = $2
+       WHERE client_id = $1`,
+      [clientId, verifiedBy]
+    );
+  },
+
+  async touchLastUsed(clientId) {
+    await q(`UPDATE oauth_clients SET last_used_at = NOW() WHERE client_id = $1`, [clientId]);
+  }
+};
+
+export const authCodes = {
+  async create({ code, clientId, userId, redirectUri, scopes,
+                 pkceChallenge, pkceMethod, state, nonce,
+                 role, trustScore, verificationMethod, ttlSec = 60 }) {
+    await q(
+      `INSERT INTO authorization_codes
+       (code, client_id, user_id, redirect_uri, scopes,
+        pkce_challenge, pkce_method, state, nonce,
+        role, trust_score, verification_method,
+        expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+               NOW() + ($13 || ' seconds')::interval)`,
+      [code, clientId, userId, redirectUri,
+       JSON.stringify(scopes || []),
+       pkceChallenge || null, pkceMethod || null,
+       state || null, nonce || null,
+       role, trustScore, verificationMethod || null, ttlSec]
+    );
+  },
+
+  async claim(code) {
+    // Atomic claim: mark used AND return only if not yet used and not expired
+    const { rows } = await q(
+      `UPDATE authorization_codes
+       SET used = TRUE, used_at = NOW()
+       WHERE code = $1 AND used = FALSE AND expires_at > NOW()
+       RETURNING *`,
+      [code]
+    );
+    if (!rows[0]) return null;
+    const r = rows[0];
+    try { r.scopes = JSON.parse(r.scopes); } catch (e) { r.scopes = []; }
+    return r;
+  },
+
+  async cleanup() {
+    // Periodic cleanup of expired/used codes
+    await q(`DELETE FROM authorization_codes WHERE expires_at < NOW() - INTERVAL '1 hour'`);
+  }
+};
+
+export const connectedPlatforms = {
+  async record({ userId, clientId, pairwiseSubjectId, scopesGranted }) {
+    await q(
+      `INSERT INTO connected_platforms
+       (user_id, client_id, pairwise_subject_id, scopes_granted)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, client_id) DO UPDATE
+       SET last_login_at = NOW(),
+           login_count = connected_platforms.login_count + 1,
+           scopes_granted = EXCLUDED.scopes_granted,
+           revoked_at = NULL`,
+      [userId, clientId, pairwiseSubjectId, JSON.stringify(scopesGranted || [])]
+    );
+  },
+
+  async listByUser(userId) {
+    const { rows } = await q(
+      `SELECT cp.*, oc.name AS client_name, oc.logo_url AS client_logo, oc.verified
+       FROM connected_platforms cp
+       JOIN oauth_clients oc ON oc.client_id = cp.client_id
+       WHERE cp.user_id = $1 AND cp.revoked_at IS NULL
+       ORDER BY cp.last_login_at DESC`,
+      [userId]
+    );
+    return rows.map(r => {
+      try { r.scopes_granted = JSON.parse(r.scopes_granted); } catch (e) { r.scopes_granted = []; }
+      return r;
+    });
+  },
+
+  async revoke(userId, clientId) {
+    await q(
+      `UPDATE connected_platforms SET revoked_at = NOW()
+       WHERE user_id = $1 AND client_id = $2`,
+      [userId, clientId]
+    );
+  },
+
+  async getPairwiseId(userId, clientId) {
+    const { rows } = await q(
+      `SELECT pairwise_subject_id FROM connected_platforms
+       WHERE user_id = $1 AND client_id = $2 AND revoked_at IS NULL`,
+      [userId, clientId]
+    );
+    return rows[0]?.pairwise_subject_id || null;
+  }
+};
+
 // ─── STATS ────────────────────────────────────────────────────────────────────
 
 export const stats = {

@@ -4,7 +4,7 @@
 
 [![License: EUPL-1.2](https://img.shields.io/badge/License-EUPL_1.2-blue.svg)](https://opensource.org/licenses/EUPL-1.2)
 [![Status: Live in Production](https://img.shields.io/badge/Status-Live%20in%20Production-brightgreen)](https://hhttps.org)
-[![Built in Public](https://img.shields.io/badge/Built-In%20Public-lightgrey)](https://github.com/dhannus/HumanProof)
+[![Built in Public](https://img.shields.io/badge/Built-In%20Public-lightgrey)](https://github.com/dhannus/HHTTPS)
 
 Live: **[hhttps.org](https://hhttps.org)** · Demo platform: **[ask.iamhmn.org](https://ask.iamhmn.org)** · Brand site: **[iamhmn.org](https://iamhmn.org)**
 
@@ -238,7 +238,7 @@ hhttps/
 ### Try it as a developer (run your own issuer locally)
 
 ```bash
-git clone https://github.com/dhannus/HumanProof.git hhttps
+git clone https://github.com/dhannus/HHTTPS.git hhttps
 cd hhttps/server
 bash scripts/install-pg.sh     # sets up local PostgreSQL
 npm install
@@ -360,8 +360,8 @@ That's the point. The protocol is positioned as the next-logical-step after HTTP
 
 ## Contact & community
 
-- **Issues:** [GitHub Issues](https://github.com/dhannus/HumanProof/issues) — bug reports, feature requests, protocol discussions
-- **Discussions:** [GitHub Discussions](https://github.com/dhannus/HumanProof/discussions) — open-ended questions, ideas, proposals
+- **Issues:** [GitHub Issues](https://github.com/dhannus/HHTTPS/issues) — bug reports, feature requests, protocol discussions
+- **Discussions:** [GitHub Discussions](https://github.com/dhannus/HHTTPS/discussions) — open-ended questions, ideas, proposals
 - **Email:** [info@iamhmn.org](mailto:info@iamhmn.org)
 - **Mastodon:** *coming soon*
 - **Matrix:** *coming soon*
