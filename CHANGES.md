@@ -1,80 +1,120 @@
-# Sync changes — Phase 3a + 2.5 integration
+# Phase 3b — Developer Self-Service Registration
 
-This sync brings the GitHub repo to the production state (May 2026, Phase 3a complete).
+This sync brings the repo up to date with Phase 3b backend changes deployed on
+production (May 2026).
 
-## Files replaced
+## Files in this sync
 
-### Extension (v1.2.0 → v1.4.3)
-- `extension/manifest.json` — version bump, iframe support (`all_frames`, `match_about_blank`)
-- `extension/background.js` — slug-based signatures, batch verification
-- `extension/content-universal.js` — inline seal renderer, iframe-aware DOM scanning
-- `extension/content-issuer.js` — identity sync on hhttps.org
-- `extension/popup.html` + `popup.js` — updated UI
-- `extension/icons/*` — new state icons (verified, unverified, supported, neutral)
-- `extension/INSTALL.md` — updated
-
-### Server (Phase 2.5 + Phase 3a OAuth)
-- `server/server.js` (2218 lines) — adds:
-  - POST `/hhttps/signatures` (create slug-based signature)
-  - GET `/hhttps/s/:slug` (verify signature)
-  - POST `/hhttps/signatures/batch` (batch verify)
-  - POST `/hhttps/signatures/:slug/revoke`
-  - GET `/.well-known/openid-configuration` (OIDC discovery)
-  - GET `/hhttps/oauth/authorize` (consent page)
-  - POST `/hhttps/oauth/approve`
-  - POST `/hhttps/oauth/token`
-  - GET `/hhttps/oauth/userinfo`
-  - POST `/hhttps/oauth/revoke`
-  - Helper functions: pairwise subject IDs, slug generation, text hashing, domain normalization
-- `server/db.js` — adds `signatures`, `oauthClients`, `authCodes`, `connectedPlatforms` modules
-- `server/public/index.html` — adds `?returnTo=` banner + post-login toast + Connected Platforms section + OAuth API demo with 3 tabs
-- `server/sql/migration-phase-2.5.sql` — signatures table with ownership grants
-- `server/sql/migration-phase-3a.sql` — oauth_clients, authorization_codes, connected_platforms tables
-
-### Sites
-- `sites/iamhmn.html` — adds new "Platforms" section with hero SVG, ask.iamhmn.org showcase card, DE/EN translations
-- `sites/hhttps.html` — NEW reference copy of the issuer UI (identical to server/public/index.html)
-- `sites/spec.html` — unchanged
-
-### Docs
-- `docs/IMAGES_CHECKLIST.md` — NEW (which screenshots are still optional to add)
-
-### Root
-- `README.md` — updated to point to dhannus/HHTTPS (was HumanProof) in 4 URLs
-
-## Files NOT changed
-- `CHANGELOG.md`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `LICENSE`, `SECURITY.md`
-- `server/email.js`, `server/keys.js`, `server/roles.js`, `server/webhooks.js`, `server/package.json`, `server/.env.example`
-- `server/sdk/`, `server/scripts/`
-- `examples/` (all sub-projects untouched)
-- `scripts/`
-- `docs/architecture.md`, `docs/governance.md`, `docs/oauth-integration.md`, `docs/roadmap.md`, `docs/security.md`, `docs/spec.md`, `docs/threat-model.md`
-- `docs/integration-guide.md`
-- `docs/protocol/*.md`
-- `docs/images/*.svg`
-
-## Deploy steps after sync
-
-```bash
-# 1. Unzip and replace
-cd ~/HHTTPS  # your local clone
-# Copy all files from HHTTPS-sync over the existing repo (preserves untouched files)
-rsync -av --exclude='.git' /path/to/HHTTPS-sync/ ./
-
-# 2. Stage and commit
-git add .
-git status  # review
-git commit -m "Phase 3a complete: OAuth provider, slug-based signatures, extension v1.4.3, redirect fix"
-git push
+```
+server/
+├── server.js                          ← UPDATED (Phase 3b endpoints + dotenv import)
+├── db.js                              ← UPDATED (admins, clientStats, adminActions modules)
+├── email.js                           ← UPDATED (Brevo-ready, Reply-To, Phase 3b templates)
+└── sql/
+    ├── migration-phase-3b.sql         ← NEW (Phase 3b tables + admin flag)
+    └── migration-phase-3b.1.sql       ← NEW (domain_email_match column)
 ```
 
-## After push verification
+## What's new
 
-Check on GitHub:
-- Languages bar should show: HTML, JavaScript, Shell, Python, SQL
-- README still renders with hero illustration
-- 1 new file in docs/: IMAGES_CHECKLIST.md
-- sites/iamhmn.html grew (+386 lines)
-- sites/hhttps.html is NEW
-- server/server.js much bigger (+~1500 lines)
-- server/sql/ has 3 migration files
+### Database
+- New table `admins` — membership-style admin privileges
+- New table `client_stats_daily` — privacy-preserving per-day login counts (no user IDs)
+- New table `admin_actions` — append-only audit log of admin actions
+- Extended `oauth_clients` with verification workflow:
+  - `verification_status` (state machine)
+  - `email_token`, `email_verified_at`, `dns_token`, `dns_verified_at`
+  - `domain_email_match`, `impressum_url`
+  - `submitted_for_review_at`, `reviewed_at`, `rejection_reason`
+
+### API endpoints (15 new)
+
+Developer self-service (`/hhttps/developers/*`):
+- `POST   /clients` — register new platform (rate-limited 3/day/user)
+- `GET    /clients` — list own platforms
+- `GET    /clients/:id` — detail
+- `PATCH  /clients/:id` — update metadata or contact email
+- `DELETE /clients/:id` — delete draft
+- `GET    /confirm-email?token=...` — email confirmation handler (HTML response)
+- `POST   /clients/:id/dns-check` — verify TXT record at _hhttps-verify.{apex}
+- `POST   /clients/:id/submit-review` — submit to admin queue (with hard-checks)
+- `GET    /clients/:id/stats` — owner's per-platform login stats
+
+Admin (`/hhttps/admin/*` — requires admin membership):
+- `GET  /clients/pending` — admin queue (developer-role sorted first)
+- `GET  /clients` — all clients with status filter
+- `POST /clients/:id/approve` — verify (auto-sends notification email)
+- `POST /clients/:id/reject` — reject with reason
+- `POST /clients/:id/suspend` — suspend with reason
+- `GET  /stats` — system overview
+
+### State machine for `oauth_clients.verification_status`
+
+```
+draft → email_pending → unverified → pending_review → verified
+                                                    ↘ rejected
+                            ↑
+                            └── (after email change, reverts)
+```
+
+Hard requirements for `verified` (enforced in submit-for-review):
+1. Email confirmed (user clicked confirmation link)
+2. Email domain matches platform apex domain (Apex-Match)
+3. DNS TXT record verified at `_hhttps-verify.{apex}`
+4. Impressum URL set
+5. Admin approval
+
+### Email (Brevo integration)
+
+- Three new templates: platform registration, verified notification, rejected notification
+- Optional `Reply-To` header via `SMTP_REPLY_TO` env (for non-receivable noreply addresses)
+- Branding cleanup: HumanProof → HHTTPS Project, GitHub URL updated
+
+## Deploy steps (already done on production May 2026)
+
+```bash
+# 1. Apply migrations
+sudo -u postgres psql -d hhttps -f /var/www/hhttps/sql/migration-phase-3b.sql
+sudo -u postgres psql -d hhttps -f /var/www/hhttps/sql/migration-phase-3b.1.sql
+
+# 2. Bootstrap yourself as admin
+sudo -u postgres psql -d hhttps -c "
+  INSERT INTO admins (user_id, note) 
+  VALUES ('<your-user-id>', 'Project operator');
+"
+
+# 3. Install dotenv (for .env auto-loading)
+cd /var/www/hhttps && npm install dotenv
+
+# 4. Update .env with SMTP credentials (Brevo example)
+# SMTP_HOST=smtp-relay.brevo.com
+# SMTP_PORT=587
+# SMTP_USER=<your-brevo-account-email>
+# SMTP_PASS=<your-brevo-smtp-key>
+# SMTP_FROM=noreply@hhttps.org
+# SMTP_FROM_NAME=HHTTPS Issuer
+# SMTP_REPLY_TO=info@yourdomain.example  # optional, for non-receivable noreply
+
+# 5. Restart PM2 (full stop/start, not reload, to pick up new env via dotenv)
+sudo pm2 stop hhttps-v4
+sudo pm2 delete hhttps-v4
+cd /var/www/hhttps
+sudo pm2 start server.js --name hhttps-v4
+sudo pm2 save
+```
+
+## Brevo Setup Gotchas
+
+For others setting up email later:
+1. Add domain (`hhttps.org`) in Brevo → get 3 DNS TXT records
+2. Add those TXT records at your DNS host (does NOT change MX records)
+3. Generate SMTP key in Brevo → SMTP & API → SMTP
+4. **Authorize your VPS IP in Brevo** → Senders & IP → Authorized IPs
+   (Without this, SMTP-AUTH succeeds but mails are silently dropped)
+5. Verify by sending a test mail — check Brevo Statistics → Email logs
+
+## What's next (Phase 3b UI)
+
+Phase 3b backend is complete. The UI for /developers landing, dashboard,
+register form, and admin queue is the next deliverable. Backend endpoints
+above are sufficient to drive that UI entirely from the browser.

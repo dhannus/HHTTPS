@@ -592,6 +592,353 @@ export const oauthClients = {
 
   async touchLastUsed(clientId) {
     await q(`UPDATE oauth_clients SET last_used_at = NOW() WHERE client_id = $1`, [clientId]);
+  },
+
+  // ──────── Phase 3b — Developer Self-Service ────────
+
+  /** Create a draft client (called from /developers/clients). */
+  async createDraft({ clientId, name, description, homepageUrl, redirectUris,
+                      contactEmail, impressumUrl, logoUrl, ownerUserId,
+                      domainEmailMatch, emailToken, emailTokenExpiresAt, dnsToken }) {
+    await q(
+      `INSERT INTO oauth_clients
+        (client_id, name, description, homepage_url, redirect_uris,
+         allowed_scopes, subject_type, contact_email, impressum_url, logo_url,
+         owner_user_id, verification_status, domain_email_match,
+         email_token, email_token_expires_at, dns_token,
+         verified, is_active)
+       VALUES ($1, $2, $3, $4, $5,
+               $6, 'pairwise', $7, $8, $9,
+               $10, 'email_pending', $11,
+               $12, $13, $14,
+               FALSE, TRUE)`,
+      [clientId, name, description || null, homepageUrl,
+       JSON.stringify(redirectUris || []),
+       JSON.stringify(['openid', 'role']),
+       contactEmail, impressumUrl || null, logoUrl || null,
+       ownerUserId, !!domainEmailMatch,
+       emailToken, emailTokenExpiresAt, dnsToken || null]
+    );
+  },
+
+  /** Look up a client by its current email confirmation token. */
+  async getByEmailToken(token) {
+    const { rows } = await q(
+      `SELECT * FROM oauth_clients
+        WHERE email_token = $1
+          AND email_token_expires_at > NOW()
+          AND is_active = TRUE`,
+      [token]
+    );
+    if (!rows[0]) return null;
+    const r = rows[0];
+    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
+    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
+    return r;
+  },
+
+  /** Mark email as confirmed. Moves status from 'email_pending' → 'unverified'. */
+  async confirmEmail(clientId) {
+    await q(
+      `UPDATE oauth_clients
+          SET email_verified_at = NOW(),
+              email_token = NULL,
+              email_token_expires_at = NULL,
+              verification_status = 'unverified'
+        WHERE client_id = $1
+          AND verification_status = 'email_pending'`,
+      [clientId]
+    );
+  },
+
+  /** Regenerate the email confirmation token (e.g. user clicked "resend"). */
+  async refreshEmailToken(clientId, newToken, newExpiry) {
+    await q(
+      `UPDATE oauth_clients
+          SET email_token = $2,
+              email_token_expires_at = $3
+        WHERE client_id = $1`,
+      [clientId, newToken, newExpiry]
+    );
+  },
+
+  /** Update contact email (and recompute domain_email_match externally). */
+  async updateContactEmail(clientId, email, domainEmailMatch, emailToken, expires) {
+    await q(
+      `UPDATE oauth_clients
+          SET contact_email = $2,
+              domain_email_match = $3,
+              email_token = $4,
+              email_token_expires_at = $5,
+              email_verified_at = NULL,
+              verification_status = CASE
+                WHEN verification_status = 'verified' THEN 'unverified'
+                ELSE 'email_pending'
+              END
+        WHERE client_id = $1`,
+      [clientId, email, !!domainEmailMatch, emailToken, expires]
+    );
+  },
+
+  /** Update general metadata (name, description, redirect_uris, etc.) — must
+   *  preserve verification_status. */
+  async updateMetadata(clientId, { name, description, redirectUris, logoUrl, impressumUrl }) {
+    await q(
+      `UPDATE oauth_clients
+          SET name          = COALESCE($2, name),
+              description   = COALESCE($3, description),
+              redirect_uris = COALESCE($4, redirect_uris),
+              logo_url      = COALESCE($5, logo_url),
+              impressum_url = COALESCE($6, impressum_url)
+        WHERE client_id = $1`,
+      [clientId, name || null, description || null,
+       redirectUris ? JSON.stringify(redirectUris) : null,
+       logoUrl || null, impressumUrl || null]
+    );
+  },
+
+  /** Mark DNS as verified. */
+  async setDnsVerified(clientId) {
+    await q(
+      `UPDATE oauth_clients
+          SET dns_verified_at    = NOW(),
+              dns_last_checked_at = NOW()
+        WHERE client_id = $1`,
+      [clientId]
+    );
+  },
+
+  /** Record a failed DNS check (just bumps the last_checked timestamp). */
+  async touchDnsCheck(clientId) {
+    await q(
+      `UPDATE oauth_clients
+          SET dns_last_checked_at = NOW()
+        WHERE client_id = $1`,
+      [clientId]
+    );
+  },
+
+  /** Move client to 'pending_review' state — owner is asking for verification.
+   *  Caller must have verified all preconditions (email confirmed, domain
+   *  match, DNS verified). */
+  async submitForReview(clientId, { ownerRole, ownerTrust }) {
+    await q(
+      `UPDATE oauth_clients
+          SET verification_status = 'pending_review',
+              submitted_for_review_at = NOW(),
+              owner_role_at_submit  = $2,
+              owner_trust_at_submit = $3
+        WHERE client_id = $1
+          AND verification_status = 'unverified'`,
+      [clientId, ownerRole || null, ownerTrust || null]
+    );
+  },
+
+  /** Admin approves a pending client. */
+  async adminApprove(clientId, adminUserId) {
+    await q(
+      `UPDATE oauth_clients
+          SET verification_status = 'verified',
+              verified            = TRUE,
+              verified_at         = NOW(),
+              verified_by         = $2,
+              reviewed_at         = NOW(),
+              rejection_reason    = NULL
+        WHERE client_id = $1`,
+      [clientId, adminUserId]
+    );
+  },
+
+  /** Admin rejects a pending client. */
+  async adminReject(clientId, adminUserId, reason) {
+    await q(
+      `UPDATE oauth_clients
+          SET verification_status = 'rejected',
+              verified            = FALSE,
+              reviewed_at         = NOW(),
+              verified_by         = $2,
+              rejection_reason    = $3
+        WHERE client_id = $1`,
+      [clientId, adminUserId, reason]
+    );
+  },
+
+  /** Admin suspends an active client. */
+  async adminSuspend(clientId, adminUserId, reason) {
+    await q(
+      `UPDATE oauth_clients
+          SET verification_status = 'suspended',
+              verified            = FALSE,
+              reviewed_at         = NOW(),
+              verified_by         = $2,
+              rejection_reason    = $3
+        WHERE client_id = $1`,
+      [clientId, adminUserId, reason]
+    );
+  },
+
+  /** All clients pending admin review, sorted: developer-role first, then by submission age. */
+  async listPendingReview() {
+    const { rows } = await q(
+      `SELECT * FROM oauth_clients
+        WHERE verification_status = 'pending_review'
+        ORDER BY
+          (owner_role_at_submit = 'developer') DESC,
+          owner_trust_at_submit DESC NULLS LAST,
+          submitted_for_review_at ASC`
+    );
+    return rows.map(r => {
+      try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
+      try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
+      return r;
+    });
+  },
+
+  /** All clients owned by a user (any status, including draft). */
+  async listAllByOwner(ownerUserId) {
+    const { rows } = await q(
+      `SELECT * FROM oauth_clients
+        WHERE owner_user_id = $1
+        ORDER BY created_at DESC`,
+      [ownerUserId]
+    );
+    return rows.map(r => {
+      try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
+      try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
+      return r;
+    });
+  },
+
+  /** Count clients created by an owner in last 24h — for rate limiting. */
+  async countRecentByOwner(ownerUserId, hoursBack = 24) {
+    const { rows } = await q(
+      `SELECT COUNT(*)::int AS n FROM oauth_clients
+        WHERE owner_user_id = $1
+          AND created_at > NOW() - ($2 || ' hours')::interval`,
+      [ownerUserId, String(hoursBack)]
+    );
+    return rows[0].n;
+  },
+
+  /** Permanently delete a draft (only allowed for draft / email_pending). */
+  async deleteIfDraft(clientId, ownerUserId) {
+    const { rowCount } = await q(
+      `DELETE FROM oauth_clients
+        WHERE client_id = $1
+          AND owner_user_id = $2
+          AND verification_status IN ('draft', 'email_pending')`,
+      [clientId, ownerUserId]
+    );
+    return rowCount > 0;
+  }
+};
+
+// ─── Admins (Phase 3b) ────────────────────────────────────────────────────
+export const admins = {
+  async isAdmin(userId) {
+    if (!userId) return false;
+    const { rows } = await q(
+      `SELECT 1 FROM admins WHERE user_id = $1 LIMIT 1`,
+      [userId]
+    );
+    return rows.length > 0;
+  },
+
+  async grant(userId, grantedBy, note) {
+    await q(
+      `INSERT INTO admins (user_id, granted_by, note)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId, grantedBy || null, note || null]
+    );
+  },
+
+  async revoke(userId) {
+    const { rowCount } = await q(
+      `DELETE FROM admins WHERE user_id = $1`,
+      [userId]
+    );
+    return rowCount > 0;
+  },
+
+  async list() {
+    const { rows } = await q(
+      `SELECT user_id, granted_at, granted_by, note FROM admins ORDER BY granted_at ASC`
+    );
+    return rows;
+  }
+};
+
+// ─── Client stats (Phase 3b) ──────────────────────────────────────────────
+// Privacy-by-design: per-day per-client per-role-bucket counts. No user IDs.
+export const clientStats = {
+  /** Record a successful login. Called from /hhttps/oauth/token. */
+  async recordLogin(clientId, role, trustScore) {
+    const trustBucket = trustScore >= 70 ? 'high' : (trustScore >= 40 ? 'medium' : 'low');
+    const roleBucket  = role || 'unknown';
+    await q(
+      `INSERT INTO client_stats_daily (client_id, day, role_bucket, trust_bucket, login_count)
+       VALUES ($1, CURRENT_DATE, $2, $3, 1)
+       ON CONFLICT (client_id, day, role_bucket, trust_bucket)
+       DO UPDATE SET login_count = client_stats_daily.login_count + 1`,
+      [clientId, roleBucket, trustBucket]
+    );
+  },
+
+  /** Get aggregated stats for a client. Returns array of daily buckets. */
+  async getDaily(clientId, days = 30) {
+    const { rows } = await q(
+      `SELECT day, role_bucket, trust_bucket, login_count
+         FROM client_stats_daily
+        WHERE client_id = $1
+          AND day >= CURRENT_DATE - ($2 || ' days')::interval
+        ORDER BY day DESC, role_bucket, trust_bucket`,
+      [clientId, String(days)]
+    );
+    return rows;
+  },
+
+  /** Total login count for a client (lifetime). */
+  async getTotal(clientId) {
+    const { rows } = await q(
+      `SELECT COALESCE(SUM(login_count), 0)::int AS n
+         FROM client_stats_daily
+        WHERE client_id = $1`,
+      [clientId]
+    );
+    return rows[0].n;
+  }
+};
+
+// ─── Admin actions audit log (Phase 3b) ───────────────────────────────────
+export const adminActions = {
+  async log(actionType, targetType, targetId, adminUserId, details) {
+    await q(
+      `INSERT INTO admin_actions (action_type, target_type, target_id, admin_user_id, details)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [actionType, targetType, targetId, adminUserId, details ? JSON.stringify(details) : null]
+    );
+  },
+
+  async listForTarget(targetType, targetId, limit = 20) {
+    const { rows } = await q(
+      `SELECT * FROM admin_actions
+        WHERE target_type = $1 AND target_id = $2
+        ORDER BY created_at DESC
+        LIMIT $3`,
+      [targetType, targetId, limit]
+    );
+    return rows;
+  },
+
+  async listRecent(limit = 50) {
+    const { rows } = await q(
+      `SELECT * FROM admin_actions
+        ORDER BY created_at DESC
+        LIMIT $1`,
+      [limit]
+    );
+    return rows;
   }
 };
 

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 /**
  * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
  * HumanProof Initiative · daniel.hannuschka@tweakz.de
@@ -33,7 +34,10 @@ import {
 } from '@simplewebauthn/server';
 
 import { ROLES, VERIFICATION_LEVELS } from './roles.js';
-import { sendVerificationEmail, verifyEmailToken, classifyDomain } from './email.js';
+import {
+  sendVerificationEmail, verifyEmailToken, classifyDomain,
+  sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
+} from './email.js';
 import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
@@ -1360,6 +1364,18 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   await db.stats.increment('oauth_tokens_issued');
   await db.stats.increment('oauth_logins');
 
+  // Phase 3b: per-client privacy-preserving daily stats
+  // (no user IDs, just role/trust buckets)
+  try {
+    await db.clientStats.recordLogin(
+      client_id,
+      idTokenClaims.role || 'unknown',
+      idTokenClaims.trust_score || 0
+    );
+  } catch (err) {
+    console.warn('[STATS] recordLogin failed:', err.message);
+  }
+
   return res.json({
     access_token: accessToken,
     token_type:   'Bearer',
@@ -2143,6 +2159,637 @@ app.post('/hhttps/webhooks/verify', (req, res) => {
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
   res.json({ valid: expected === signature, expected, received: signature });
 });
+
+// ─── Phase 3b: Developer Self-Service + Admin ─────────────────────────────
+//
+// Endpoints for platform operators to register their OAuth clients
+// without manual admin intervention, and for admins (operator of this
+// HHTTPS issuer) to verify, reject, and suspend platforms.
+//
+// State machine for oauth_clients.verification_status:
+//   draft → email_pending → unverified → pending_review → verified
+//                                                       ↘ rejected
+//                              ↑
+//                              └── (after email change, drops back)
+// Plus: verified/unverified/pending_review → suspended (admin action)
+//
+// Hard requirements for `verified`:
+//   1. email_verified_at IS NOT NULL    (user clicked confirmation link)
+//   2. domain_email_match = TRUE        (email's apex matches platform's apex)
+//   3. dns_verified_at IS NOT NULL      (TXT record at _hhttps-verify.<apex>)
+//   4. Admin clicked Approve            (verification_status='verified')
+
+/** Resolve apex domain (last two parts, with two-part TLDs like co.uk handled). */
+function apexDomainFromUrl(urlOrHost) {
+  if (!urlOrHost) return null;
+  let host;
+  try {
+    host = (urlOrHost.includes('://') ? new URL(urlOrHost).hostname : urlOrHost).toLowerCase();
+  } catch (e) {
+    return null;
+  }
+  return normalizeApexDomain(host);
+}
+function apexDomainFromEmail(email) {
+  if (!email || !email.includes('@')) return null;
+  return normalizeApexDomain(email.split('@')[1].toLowerCase());
+}
+
+/** Variant A: email's apex must equal platform's apex.
+ *  Subdomain mail is accepted (e.g. admin@team.example.com for example.com). */
+function emailMatchesPlatform(email, homepageUrl) {
+  const e = apexDomainFromEmail(email);
+  const h = apexDomainFromUrl(homepageUrl);
+  return !!(e && h && e === h);
+}
+
+/** Generate a short random hex token (URL-safe). */
+function randomToken(bytes = 24) {
+  return crypto.randomBytes(bytes).toString('base64url');
+}
+
+/** Resolve current user from request (Authorization header). Returns null
+ *  if no token, throws if token invalid/expired. */
+async function authenticatedUser(req) {
+  const token = req.headers['hhttps-token'] ||
+                req.headers['authorization']?.replace('Bearer ', '');
+  if (!token) return null;
+  const d = await checkTokenValid(token);  // throws on invalid/revoked
+  return {
+    userId:     d.uid || d.userId || d.sub,
+    role:       d.role,
+    trustScore: d.trustScore || 0
+  };
+}
+
+/** Convenience wrapper for routes requiring authentication. */
+async function requireUser(req, res) {
+  try {
+    const u = await authenticatedUser(req);
+    if (!u || !u.userId) {
+      res.status(401).json({ error: 'unauthorized', message: 'Authentication required' });
+      return null;
+    }
+    return u;
+  } catch (err) {
+    res.status(401).json({ error: 'invalid_token', message: err.message });
+    return null;
+  }
+}
+
+async function requireAdmin(req, res) {
+  const u = await requireUser(req, res);
+  if (!u) return null;
+  if (!await db.admins.isAdmin(u.userId)) {
+    res.status(403).json({ error: 'forbidden', message: 'Admin privileges required' });
+    return null;
+  }
+  return u;
+}
+
+/** Validate redirect URI format. Must be a syntactically valid HTTPS URL
+ *  (or http://localhost for dev). */
+function isValidRedirectUri(uri) {
+  if (typeof uri !== 'string' || uri.length > 500) return false;
+  try {
+    const u = new URL(uri);
+    if (u.protocol === 'https:') return true;
+    if (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1')) return true;
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Slug-ify a platform name for client_id generation.
+ *  Returns something like "my-platform-x4z7". */
+function generateClientId(name) {
+  const slug = (name || 'platform')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 32);
+  const tail = crypto.randomBytes(2).toString('hex');
+  return `${slug || 'platform'}-${tail}`;
+}
+
+// ─── POST /hhttps/developers/clients — Register a new platform ─────────────
+app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+
+  const { name, description, homepage_url, redirect_uris, contact_email,
+          impressum_url, logo_url } = req.body || {};
+
+  // Validation
+  if (!name || typeof name !== 'string' || name.length < 2 || name.length > 120) {
+    return res.status(400).json({ error: 'invalid_name',
+      message: 'Name must be 2-120 characters' });
+  }
+  if (!homepage_url || !apexDomainFromUrl(homepage_url)) {
+    return res.status(400).json({ error: 'invalid_homepage',
+      message: 'homepage_url must be a valid HTTPS URL' });
+  }
+  if (!Array.isArray(redirect_uris) || redirect_uris.length === 0 || redirect_uris.length > 10) {
+    return res.status(400).json({ error: 'invalid_redirect_uris',
+      message: 'Provide 1-10 redirect URIs' });
+  }
+  for (const uri of redirect_uris) {
+    if (!isValidRedirectUri(uri)) {
+      return res.status(400).json({ error: 'invalid_redirect_uri',
+        message: `Not a valid redirect URI: ${uri}` });
+    }
+  }
+  if (!contact_email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact_email)) {
+    return res.status(400).json({ error: 'invalid_email',
+      message: 'Valid contact_email required' });
+  }
+  if (description && description.length > 2000) {
+    return res.status(400).json({ error: 'description_too_long',
+      message: 'Description must be ≤ 2000 chars' });
+  }
+
+  // Rate limit: max 3 new clients per user per 24h
+  const recent = await db.oauthClients.countRecentByOwner(u.userId, 24);
+  if (recent >= 3) {
+    return res.status(429).json({ error: 'rate_limited',
+      message: 'You may only register 3 platforms per day' });
+  }
+
+  // Compute domain match + generate tokens
+  const domainMatch  = emailMatchesPlatform(contact_email, homepage_url);
+  const emailToken   = randomToken(24);
+  const emailExpires = new Date(Date.now() + 48 * 3600 * 1000); // 48h
+  const dnsToken     = `hhttps-verify=${randomToken(20)}`;
+  const clientId     = generateClientId(name);
+
+  try {
+    await db.oauthClients.createDraft({
+      clientId,
+      name, description, homepageUrl: homepage_url,
+      redirectUris: redirect_uris,
+      contactEmail: contact_email,
+      impressumUrl: impressum_url,
+      logoUrl: logo_url,
+      ownerUserId: u.userId,
+      domainEmailMatch: domainMatch,
+      emailToken, emailTokenExpiresAt: emailExpires,
+      dnsToken
+    });
+  } catch (err) {
+    console.error('[DEVELOPERS] createDraft failed:', err.message);
+    return res.status(500).json({ error: 'creation_failed', message: err.message });
+  }
+
+  // Send confirmation email
+  try {
+    const confirmUrl = `${BASE_URL}/hhttps/developers/confirm-email?token=${emailToken}`;
+    await sendPlatformRegistrationEmail({
+      to:           contact_email,
+      platformName: name,
+      homepageUrl:  homepage_url,
+      confirmUrl,
+      kind:         'registration'
+    });
+  } catch (err) {
+    console.warn('[DEVELOPERS] platform registration email failed:', err.message);
+    // Continue — user can request resend later
+  }
+
+  res.json({
+    success: true,
+    client_id: clientId,
+    verification_status: 'email_pending',
+    domain_email_match: domainMatch,
+    warnings: domainMatch ? [] : [{
+      code: 'email_domain_mismatch',
+      message: 'Contact email domain does not match platform domain. ' +
+               'Platform can be created and used as "unverified", but cannot be promoted ' +
+               'to "verified" status until you set an email at the platform domain.'
+    }],
+    next_steps: [
+      'Check your inbox and click the confirmation link.',
+      domainMatch
+        ? 'Add a DNS TXT record at _hhttps-verify.<your-domain> with the value shown in your dashboard.'
+        : 'Change your contact email to an address at the platform domain.',
+      'Submit for review once email confirmed, domain matches, and DNS verified.'
+    ]
+  });
+});
+
+// ─── GET /hhttps/developers/confirm-email?token=... ────────────────────────
+// User clicks this link in their email. Returns HTML for visual feedback.
+app.get('/hhttps/developers/confirm-email', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).send('Missing token');
+
+  const client = await db.oauthClients.getByEmailToken(token);
+  if (!client) {
+    return res.status(404).type('html').send(renderSimplePage(
+      'Link ungültig oder abgelaufen',
+      'Der Bestätigungslink ist ungültig oder bereits abgelaufen. Bitte fordere im Dashboard einen neuen Link an.'
+    ));
+  }
+
+  await db.oauthClients.confirmEmail(client.client_id);
+  res.type('html').send(renderSimplePage(
+    'Email bestätigt ✓',
+    `Deine Plattform <strong>${escapeHtml(client.name)}</strong> ist jetzt im Status <code>unverified</code>. ` +
+    `Du kannst dich jetzt einloggen unter <a href="${BASE_URL}/developers">developers</a> und ` +
+    `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.`
+  ));
+});
+
+// ─── GET /hhttps/developers/clients — List my platforms ────────────────────
+app.get('/hhttps/developers/clients', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+  const clients = await db.oauthClients.listAllByOwner(u.userId);
+  res.json({
+    success: true,
+    clients: clients.map(serializeClientForOwner)
+  });
+});
+
+// ─── GET /hhttps/developers/clients/:id — Detail ───────────────────────────
+app.get('/hhttps/developers/clients/:id', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client || client.owner_user_id !== u.userId) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  res.json({ success: true, client: serializeClientForOwner(client) });
+});
+
+// ─── PATCH /hhttps/developers/clients/:id — Update metadata ────────────────
+app.patch('/hhttps/developers/clients/:id', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client || client.owner_user_id !== u.userId) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+
+  const { name, description, redirect_uris, logo_url, impressum_url, contact_email } = req.body || {};
+
+  // Validate updates
+  if (name !== undefined && (typeof name !== 'string' || name.length < 2 || name.length > 120)) {
+    return res.status(400).json({ error: 'invalid_name' });
+  }
+  if (description !== undefined && description !== null && description.length > 2000) {
+    return res.status(400).json({ error: 'description_too_long' });
+  }
+  if (redirect_uris !== undefined) {
+    if (!Array.isArray(redirect_uris) || redirect_uris.length === 0 || redirect_uris.length > 10) {
+      return res.status(400).json({ error: 'invalid_redirect_uris' });
+    }
+    for (const uri of redirect_uris) {
+      if (!isValidRedirectUri(uri)) {
+        return res.status(400).json({ error: 'invalid_redirect_uri', uri });
+      }
+    }
+  }
+
+  // Email change → reset verification
+  if (contact_email !== undefined && contact_email !== client.contact_email) {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact_email)) {
+      return res.status(400).json({ error: 'invalid_email' });
+    }
+    const newMatch = emailMatchesPlatform(contact_email, client.homepage_url);
+    const newToken = randomToken(24);
+    const newExp   = new Date(Date.now() + 48 * 3600 * 1000);
+    await db.oauthClients.updateContactEmail(client.client_id, contact_email, newMatch, newToken, newExp);
+    try {
+      const confirmUrl = `${BASE_URL}/hhttps/developers/confirm-email?token=${newToken}`;
+      await sendPlatformRegistrationEmail({
+        to:           contact_email,
+        platformName: client.name,
+        homepageUrl:  client.homepage_url,
+        confirmUrl,
+        kind:         'email_change'
+      });
+    } catch (err) { console.warn('[DEVELOPERS] email change email failed:', err.message); }
+  }
+
+  // Metadata updates
+  await db.oauthClients.updateMetadata(client.client_id, {
+    name, description, redirectUris: redirect_uris, logoUrl: logo_url, impressumUrl: impressum_url
+  });
+
+  const updated = await db.oauthClients.get(client.client_id);
+  res.json({ success: true, client: serializeClientForOwner(updated) });
+});
+
+// ─── DELETE /hhttps/developers/clients/:id — Delete draft ──────────────────
+app.delete('/hhttps/developers/clients/:id', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+  const deleted = await db.oauthClients.deleteIfDraft(req.params.id, u.userId);
+  if (!deleted) return res.status(409).json({ error: 'cannot_delete',
+    message: 'Only draft/email_pending clients can be deleted. Use suspend instead.' });
+  res.json({ success: true });
+});
+
+// ─── POST /hhttps/developers/clients/:id/dns-check ────────────────────────
+// Triggers a DNS lookup for _hhttps-verify.<apex> and matches against dns_token.
+app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client || client.owner_user_id !== u.userId) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (!client.dns_token) {
+    return res.status(400).json({ error: 'no_dns_token',
+      message: 'This client does not have a DNS token. Internal inconsistency.' });
+  }
+
+  const apex = apexDomainFromUrl(client.homepage_url);
+  if (!apex) {
+    return res.status(400).json({ error: 'no_apex',
+      message: 'Cannot resolve apex domain from homepage_url' });
+  }
+
+  // DNS lookup via Node's dns/promises
+  const { Resolver } = await import('dns/promises');
+  const resolver = new Resolver();
+  resolver.setServers(['1.1.1.1', '8.8.8.8']);
+
+  let found = false;
+  let records = [];
+  try {
+    records = await resolver.resolveTxt(`_hhttps-verify.${apex}`);
+    // records is array of arrays of strings (TXT can have multiple chunks)
+    for (const recordChunks of records) {
+      const joined = recordChunks.join('');
+      if (joined.trim() === client.dns_token.trim()) {
+        found = true;
+        break;
+      }
+    }
+  } catch (err) {
+    await db.oauthClients.touchDnsCheck(client.client_id);
+    return res.json({
+      success: false,
+      dns_verified: false,
+      error: 'dns_lookup_failed',
+      message: `Could not resolve _hhttps-verify.${apex}: ${err.code || err.message}`,
+      expected_record: client.dns_token,
+      expected_host: `_hhttps-verify.${apex}`
+    });
+  }
+
+  await db.oauthClients.touchDnsCheck(client.client_id);
+  if (found) {
+    await db.oauthClients.setDnsVerified(client.client_id);
+    return res.json({ success: true, dns_verified: true });
+  }
+
+  return res.json({
+    success: false,
+    dns_verified: false,
+    error: 'record_not_found',
+    message: 'TXT record exists but value does not match. Make sure the value is exactly the dns_token.',
+    expected_record: client.dns_token,
+    expected_host: `_hhttps-verify.${apex}`,
+    found_records: records.map(r => r.join(''))
+  });
+});
+
+// ─── POST /hhttps/developers/clients/:id/submit-review ─────────────────────
+// Owner asks for admin verification. Checks all hard requirements first.
+app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client || client.owner_user_id !== u.userId) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (client.verification_status !== 'unverified') {
+    return res.status(409).json({ error: 'wrong_state',
+      message: `Cannot submit for review from state '${client.verification_status}'. ` +
+               `Must be 'unverified' (email confirmed, ready for DNS+admin).` });
+  }
+
+  // Hard checks
+  const failures = [];
+  if (!client.email_verified_at) failures.push('Email not confirmed');
+  if (!client.domain_email_match) failures.push('Contact email does not match platform domain');
+  if (!client.dns_verified_at)    failures.push('DNS TXT record not verified');
+  if (!client.impressum_url)      failures.push('Impressum URL missing');
+
+  if (failures.length > 0) {
+    return res.status(412).json({ error: 'preconditions_failed',
+      message: 'The following requirements must be met before submitting for review:',
+      failures });
+  }
+
+  await db.oauthClients.submitForReview(client.client_id, {
+    ownerRole: u.role, ownerTrust: u.trustScore
+  });
+  res.json({ success: true, verification_status: 'pending_review' });
+});
+
+// ─── GET /hhttps/developers/clients/:id/stats ─────────────────────────────
+app.get('/hhttps/developers/clients/:id/stats', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client || client.owner_user_id !== u.userId) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  const days = Math.min(parseInt(req.query.days || '30', 10), 90);
+  const [daily, total] = await Promise.all([
+    db.clientStats.getDaily(client.client_id, days),
+    db.clientStats.getTotal(client.client_id)
+  ]);
+  res.json({ success: true, client_id: client.client_id, days, total, daily });
+});
+
+// ─── Admin endpoints ──────────────────────────────────────────────────────
+
+// GET /hhttps/admin/clients/pending — admin queue
+app.get('/hhttps/admin/clients/pending', async (req, res) => {
+  const a = await requireAdmin(req, res);
+  if (!a) return;
+  const clients = await db.oauthClients.listPendingReview();
+  res.json({ success: true, clients: clients.map(serializeClientForAdmin) });
+});
+
+// POST /hhttps/admin/clients/:id/approve
+app.post('/hhttps/admin/clients/:id/approve', async (req, res) => {
+  const a = await requireAdmin(req, res);
+  if (!a) return;
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client) return res.status(404).json({ error: 'not_found' });
+  if (client.verification_status !== 'pending_review') {
+    return res.status(409).json({ error: 'wrong_state',
+      message: `Can only approve clients in 'pending_review' state. Current: ${client.verification_status}` });
+  }
+  await db.oauthClients.adminApprove(client.client_id, a.userId);
+  await db.adminActions.log('verify_client', 'oauth_client', client.client_id, a.userId,
+    { previous_status: 'pending_review' });
+  // Notify platform owner by email (fire-and-forget — never block the response)
+  if (client.contact_email) {
+    sendPlatformVerifiedEmail({
+      to:           client.contact_email,
+      platformName: client.name,
+      homepageUrl:  client.homepage_url
+    }).catch(err => console.warn('[ADMIN] verified email failed:', err.message));
+  }
+  res.json({ success: true });
+});
+
+// POST /hhttps/admin/clients/:id/reject  body: { reason }
+app.post('/hhttps/admin/clients/:id/reject', async (req, res) => {
+  const a = await requireAdmin(req, res);
+  if (!a) return;
+  const reason = (req.body?.reason || '').toString().slice(0, 1000).trim();
+  if (!reason) return res.status(400).json({ error: 'reason_required' });
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client) return res.status(404).json({ error: 'not_found' });
+  await db.oauthClients.adminReject(client.client_id, a.userId, reason);
+  await db.adminActions.log('reject_client', 'oauth_client', client.client_id, a.userId,
+    { previous_status: client.verification_status, reason });
+  if (client.contact_email) {
+    sendPlatformRejectedEmail({
+      to:           client.contact_email,
+      platformName: client.name,
+      reason
+    }).catch(err => console.warn('[ADMIN] rejected email failed:', err.message));
+  }
+  res.json({ success: true });
+});
+
+// POST /hhttps/admin/clients/:id/suspend  body: { reason }
+app.post('/hhttps/admin/clients/:id/suspend', async (req, res) => {
+  const a = await requireAdmin(req, res);
+  if (!a) return;
+  const reason = (req.body?.reason || '').toString().slice(0, 1000).trim();
+  if (!reason) return res.status(400).json({ error: 'reason_required' });
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client) return res.status(404).json({ error: 'not_found' });
+  await db.oauthClients.adminSuspend(client.client_id, a.userId, reason);
+  await db.adminActions.log('suspend_client', 'oauth_client', client.client_id, a.userId,
+    { previous_status: client.verification_status, reason });
+  res.json({ success: true });
+});
+
+// GET /hhttps/admin/clients — list all (with filter)
+app.get('/hhttps/admin/clients', async (req, res) => {
+  const a = await requireAdmin(req, res);
+  if (!a) return;
+  const status = req.query.status;
+  const { rows } = await db.pool().query(
+    status
+      ? `SELECT * FROM oauth_clients WHERE verification_status = $1 ORDER BY created_at DESC LIMIT 200`
+      : `SELECT * FROM oauth_clients ORDER BY created_at DESC LIMIT 200`,
+    status ? [status] : []
+  );
+  const clients = rows.map(r => {
+    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
+    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
+    return serializeClientForAdmin(r);
+  });
+  res.json({ success: true, clients });
+});
+
+// GET /hhttps/admin/stats — system overview
+app.get('/hhttps/admin/stats', async (req, res) => {
+  const a = await requireAdmin(req, res);
+  if (!a) return;
+  const { rows } = await db.pool().query(
+    `SELECT verification_status, COUNT(*)::int AS n
+       FROM oauth_clients
+       GROUP BY verification_status`
+  );
+  const recentActions = await db.adminActions.listRecent(20);
+  res.json({
+    success: true,
+    clients_by_status: rows,
+    recent_admin_actions: recentActions
+  });
+});
+
+// ─── Helpers used by Phase 3b endpoints ────────────────────────────────────
+
+/** Serialize a client for owner-facing dashboard. Includes sensitive metadata
+ *  (DNS token, contact email) but never the client_secret_hash. */
+function serializeClientForOwner(c) {
+  if (!c) return null;
+  const apex = apexDomainFromUrl(c.homepage_url);
+  return {
+    client_id:              c.client_id,
+    name:                   c.name,
+    description:            c.description,
+    homepage_url:           c.homepage_url,
+    redirect_uris:          c.redirect_uris,
+    contact_email:          c.contact_email,
+    impressum_url:          c.impressum_url,
+    logo_url:               c.logo_url,
+    verification_status:    c.verification_status,
+    verified:               c.verified,
+    domain_email_match:     c.domain_email_match,
+    email_verified_at:      c.email_verified_at,
+    dns_verified_at:        c.dns_verified_at,
+    dns_last_checked_at:    c.dns_last_checked_at,
+    dns_token:              c.dns_token,
+    dns_record_host:        apex ? `_hhttps-verify.${apex}` : null,
+    submitted_for_review_at:c.submitted_for_review_at,
+    reviewed_at:            c.reviewed_at,
+    rejection_reason:       c.rejection_reason,
+    created_at:             c.created_at,
+    last_used_at:            c.last_used_at,
+    // Eligibility for next step
+    eligible_for_review: !!(c.verification_status === 'unverified' &&
+                            c.email_verified_at &&
+                            c.domain_email_match &&
+                            c.dns_verified_at &&
+                            c.impressum_url),
+    blockers: [
+      !c.email_verified_at      && 'email_not_verified',
+      !c.domain_email_match     && 'email_domain_mismatch',
+      !c.dns_verified_at        && 'dns_not_verified',
+      !c.impressum_url          && 'impressum_missing'
+    ].filter(Boolean)
+  };
+}
+
+/** Serialize a client for admin queue. Includes everything plus owner_role hints. */
+function serializeClientForAdmin(c) {
+  if (!c) return null;
+  return {
+    ...serializeClientForOwner(c),
+    owner_user_id:          c.owner_user_id,
+    owner_role_at_submit:   c.owner_role_at_submit,
+    owner_trust_at_submit:  c.owner_trust_at_submit
+  };
+}
+
+/** Tiny HTML response template — used by the email confirm callback. */
+function renderSimplePage(title, body) {
+  return `<!doctype html><html lang="de"><head>
+<meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  body{margin:0;font-family:system-ui,sans-serif;background:#03050a;color:#dfe7ea;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px;}
+  .card{max-width:520px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);
+        border-radius:14px;padding:36px 32px;}
+  h1{font-size:24px;margin:0 0 16px;color:#00e5ff;font-weight:600;}
+  p{line-height:1.6;}
+  a{color:#00e5ff;text-decoration:none;border-bottom:1px dashed rgba(0,229,255,.4);}
+  a:hover{border-bottom-color:#00e5ff;}
+  code{font-family:'JetBrains Mono',monospace;background:rgba(0,0,0,.3);padding:2px 6px;border-radius:4px;font-size:13px;}
+</style></head><body>
+<div class="card"><h1>${escapeHtml(title)}</h1><p>${body}</p>
+<p style="margin-top:24px;font-size:13px;opacity:.6;">— HHTTPS Issuer · hhttps.org</p>
+</div></body></html>`;
+}
 
 // ─── Public Stats ─────────────────────────────────────────────────────────────
 
