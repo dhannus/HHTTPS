@@ -1,4 +1,4 @@
-# Contributing to HumanProof / HHTTPS
+# Contributing to HHTTPS / HHTTPS
 
 Thanks for considering a contribution. HHTTPS is a civic-tech project — open to everyone, no commercial gatekeeping.
 
@@ -6,7 +6,7 @@ Thanks for considering a contribution. HHTTPS is a civic-tech project — open t
 
 | What you want to do | What to do |
 |---|---|
-| Report a bug | [Open an issue](https://github.com/dhannus/HumanProof/issues/new) |
+| Report a bug | [Open an issue](https://github.com/dhannus/HHTTPS/issues/new) |
 | Suggest a feature | Open an issue first, discuss before coding |
 | Fix a typo or docs error | Pull request — no issue needed |
 | Add a new role to the spec | Open an issue with reasoning; 14-day public discussion before PR |
@@ -27,8 +27,8 @@ See [`docs/governance.md`](docs/governance.md) for full process.
 ### Server
 
 ```bash
-git clone https://github.com/dhannus/HumanProof.git
-cd HumanProof/server
+git clone https://github.com/dhannus/HHTTPS.git
+cd HHTTPS/server
 bash scripts/install-pg.sh     # sets up PostgreSQL user + db locally
 npm install
 cp .env.example .env           # edit DB_PASSWORD with what install-pg.sh printed
@@ -118,6 +118,6 @@ All contributors are credited in `CHANGELOG.md` and on the project site once we 
 
 ## Questions?
 
-Open a [GitHub Discussion](https://github.com/dhannus/HumanProof/discussions) or email daniel.hannuschka@tweakz.de.
+Open a [GitHub Discussion](https://github.com/dhannus/HHTTPS/discussions) or email daniel.hannuschka@tweakz.de.
 
 Thanks for helping make the internet a place where real humans can be recognized again.
