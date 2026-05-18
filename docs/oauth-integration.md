@@ -479,7 +479,7 @@ Your client is not yet verified. Email [info@iamhmn.org](mailto:info@iamhmn.org)
 
 ## Need help?
 
-- **Specifications**: [`protocol/`](../protocol/)
+- **Specifications**: [`protocol/`](../docs/protocol/)
 - **Reference implementation**: [`examples/express-login/`](../examples/express-login/)
 - **GitHub Discussions**: [github.com/dhannus/HumanProof/discussions](https://github.com/dhannus/HumanProof/discussions)
 - **Email**: [info@iamhmn.org](mailto:info@iamhmn.org)
