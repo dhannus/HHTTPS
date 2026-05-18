@@ -1,55 +1,70 @@
 /**
  * Privacy Pass Token Issuer — RFC 9578 §6 (Token Type 0x0002, VOPRF)
  *
- * Accepts a TokenRequest from a client, blind-evaluates it with the issuer's
- * VOPRF private key, and returns a TokenResponse. The client unblinds the
- * response locally to obtain a valid token.
- *
  * Wire format per RFC 9578 §6.1:
  *
  *   struct {
  *     uint16 token_type;             // 0x0002
- *     uint8  truncated_token_key_id;
+ *     uint8  truncated_token_key_id; // SHA-256(pkS)[31]
  *     uint8  blinded_msg[Ne];        // Ne = 49 bytes for P-384
  *   } TokenRequest;
  *
  *   struct {
  *     uint8  evaluated_msg[Ne];      // 49 bytes
- *     uint8  evaluated_proof[Ns+Ns]; // 96 bytes for P-384 (DLEQ proof)
+ *     uint8  evaluated_proof[Ns+Ns]; // 96 bytes (DLEQ proof: c || s)
  *   } TokenResponse;
  *
  * Content-Type for request:  application/private-token-request
  * Content-Type for response: application/private-token-response
+ *
+ * Implementation strategy: the @cloudflare/voprf-ts library has its own
+ * serialization format that wraps elements in length prefixes. We bridge
+ * between that format and the Privacy Pass wire format by:
+ *   1. Wrapping the raw blinded_msg in a single-element EvaluationRequest
+ *      (which we build by re-serializing in the library's format).
+ *   2. Calling VOPRFServer.blindEvaluate to get an Evaluation.
+ *   3. Pulling the single evaluated element and the DLEQ proof out, then
+ *      concatenating them into the Privacy Pass TokenResponse.
  */
+
+import { Oprf, VOPRFServer, EvaluationRequest } from '@cloudflare/voprf-ts';
 
 import {
   TOKEN_TYPE,
+  SUITE,
   SUITE_NAME,
+  Ne,
+  Ns,
   getPrivateKey,
   getPublicKeyB64Url,
   getNotBefore,
   truncatedKeyId,
 } from './keys.js';
 
-const Ne_P384 = 49;  // compressed EC point size for P-384
-const Ns_P384 = 48;  // scalar size for P-384
+let _server = null;
+
+function getServer() {
+  if (!_server) {
+    _server = new VOPRFServer(SUITE, getPrivateKey());
+  }
+  return _server;
+}
 
 /**
  * Parse a TokenRequest from a raw byte buffer.
- * Throws if the structure or field values are invalid.
+ * Throws on any structural or value mismatch.
  */
 function parseTokenRequest(buf) {
   if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
 
-  // Minimum size: 2 (token_type) + 1 (truncated_key_id) + Ne (blinded_msg)
-  const expected = 2 + 1 + Ne_P384;
-  if (buf.length !== expected) {
-    throw new Error(`TokenRequest length ${buf.length} != expected ${expected}`);
+  const expectedLen = 2 + 1 + Ne;  // 52 bytes
+  if (buf.length !== expectedLen) {
+    throw new Error(`TokenRequest length ${buf.length} != expected ${expectedLen}`);
   }
 
   const tokenType         = buf.readUInt16BE(0);
   const truncatedKeyIdVal = buf.readUInt8(2);
-  const blindedMsg        = buf.subarray(3, 3 + Ne_P384);
+  const blindedMsg        = buf.subarray(3, 3 + Ne);
 
   if (tokenType !== TOKEN_TYPE) {
     throw new Error(`Unsupported token_type 0x${tokenType.toString(16).padStart(4, '0')}`);
@@ -62,17 +77,55 @@ function parseTokenRequest(buf) {
 }
 
 /**
+ * Build an EvaluationRequest from a raw blinded element.
+ *
+ * The library's EvaluationRequest.deserialize expects:
+ *   uint16 count, followed by `count` elements of size Ne each.
+ * We construct that exact buffer with count=1.
+ */
+function blindedToEvalRequest(blindedMsg) {
+  const wireFormat = Buffer.concat([
+    Buffer.from([0x00, 0x01]),   // count = 1, big-endian
+    Buffer.from(blindedMsg),
+  ]);
+  return EvaluationRequest.deserialize(SUITE, wireFormat);
+}
+
+/**
+ * Encode an Evaluation result into the Privacy Pass TokenResponse wire format.
+ * The library gives us a single Elt and a DLEQProof; we serialize each and
+ * concatenate them with no length prefixes (PP format).
+ */
+function evaluationToTokenResponse(evaluation) {
+  if (!evaluation.evaluated || evaluation.evaluated.length !== 1) {
+    throw new Error('Internal: expected exactly one evaluated element');
+  }
+  if (!evaluation.proof) {
+    throw new Error('Internal: VOPRF evaluation missing DLEQ proof');
+  }
+
+  const evaluatedMsg   = evaluation.evaluated[0].serialize();  // Ne bytes
+  const evaluatedProof = evaluation.proof.serialize();          // 2*Ns bytes
+
+  if (evaluatedMsg.length !== Ne) {
+    throw new Error(`Internal: evaluated element size ${evaluatedMsg.length} != ${Ne}`);
+  }
+  if (evaluatedProof.length !== 2 * Ns) {
+    throw new Error(`Internal: proof size ${evaluatedProof.length} != ${2 * Ns}`);
+  }
+
+  return Buffer.concat([Buffer.from(evaluatedMsg), Buffer.from(evaluatedProof)]);
+}
+
+/**
  * POST /privacy-pass/token-request
  *
  * Express handler. Expects a raw body of bytes (Content-Type:
- * application/private-token-request). The Express app must register
- * `express.raw({ type: 'application/private-token-request' })` upstream
- * for this route, OR the body should arrive as a Buffer already.
+ * application/private-token-request). For development convenience, also
+ * accepts base64-encoded body as a JSON field { "token_request": "<b64>" }.
  */
 export async function handleTokenRequest(req, res) {
   try {
-    // The request body should be raw bytes per RFC 9578. Accept Buffer or
-    // base64-encoded string for flexibility during development.
     let body;
     if (Buffer.isBuffer(req.body)) {
       body = req.body;
@@ -86,35 +139,13 @@ export async function handleTokenRequest(req, res) {
 
     const { blindedMsg } = parseTokenRequest(body);
 
-    // ── VOPRF blind evaluation ─────────────────────────────────────────────
-    //
-    // TODO: implement once @cloudflare/voprf-ts is installed.
-    //
-    // Real implementation:
-    //
-    //   import { Oprf, OPRFServer } from '@cloudflare/voprf-ts';
-    //   const suite  = Oprf.Suite.P384_SHA384;
-    //   const server = new OPRFServer(suite, getPrivateKey());
-    //   const { evaluatedElement, proof } = await server.blindEvaluate(blindedMsg);
-    //   const responseBuf = Buffer.concat([evaluatedElement, proof]);
-    //
-    // Until then, return 501 to signal that the protocol stub is in place
-    // but cryptography is not yet wired.
+    // Real VOPRF blind evaluation
+    const evalRequest  = blindedToEvalRequest(blindedMsg);
+    const evaluation   = await getServer().blindEvaluate(evalRequest);
+    const tokenResp    = evaluationToTokenResponse(evaluation);
 
-    void getPrivateKey();  // silence unused-import warning until implemented
-    void blindedMsg;
-
-    return res.status(501)
-      .setHeader('Content-Type', 'application/json')
-      .json({
-        error: 'not_implemented',
-        detail: 'VOPRF blind evaluation pending. See server/privacy-pass/issuer.js',
-      });
-
-    // When implemented, the success branch will be:
-    //
-    //   res.setHeader('Content-Type', 'application/private-token-response');
-    //   res.status(200).send(responseBuf);
+    res.setHeader('Content-Type', 'application/private-token-response');
+    res.status(200).send(tokenResp);
 
   } catch (err) {
     return res.status(400)

@@ -8,16 +8,17 @@
  * in ../keys.js. They MUST NOT share storage, rotation, or trust relationships.
  * This separation preserves Privacy Pass unlinkability guarantees per RFC 9576.
  *
- * Token Type 0x0002 (privately verifiable, VOPRF-based) is chosen for the MVP
- * because it requires less key infrastructure than 0x0001 (Blind RSA) and is
- * sufficient for single-issuer deployments. 0x0001 can be added later for
- * federation.
+ * Token Type 0x0002 (privately verifiable, VOPRF-based) is chosen because it
+ * requires less key infrastructure than 0x0001 (Blind RSA) and is sufficient
+ * for single-issuer deployments. 0x0001 can be added later for federation.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { join, dirname }                                       from 'path';
 import { fileURLToPath }                                       from 'url';
-import { createHash, randomBytes }                             from 'crypto';
+import { createHash }                                          from 'crypto';
+
+import { Oprf, generateKeyPair } from '@cloudflare/voprf-ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const KEYS_DIR  = join(__dirname, 'keys');
@@ -28,48 +29,25 @@ const META_FILE = join(KEYS_DIR, 'meta.json');
 
 // Token Type 0x0002 — VOPRF(P-384, SHA-384) per RFC 9578 §6
 export const TOKEN_TYPE = 0x0002;
+export const SUITE      = Oprf.Suite.P384_SHA384;
 export const SUITE_NAME = 'P384-SHA384';
+export const MODE       = Oprf.Mode.VOPRF;
 
-let _privateKey = null;  // 48-byte scalar
-let _publicKey  = null;  // 49-byte compressed EC point
-let _tokenKeyId = null;  // SHA-256(public_key), 32 bytes
+// Sizes per RFC 9578 §6 / RFC 9497 for P-384:
+export const Ne = 49;   // Serialized element (compressed EC point)
+export const Ns = 48;   // Serialized scalar / SHA-384 output / authenticator size
+
+let _privateKey = null;  // Uint8Array, Ns bytes
+let _publicKey  = null;  // Uint8Array, Ne bytes
+let _tokenKeyId = null;  // Buffer, SHA-256(public_key), 32 bytes
 let _notBefore  = null;  // Unix seconds
 
 /**
- * Compute the truncated_token_key_id used in TokenRequest per RFC 9578 §6.1.
- * This is the least significant byte of the SHA-256 of the public key.
+ * truncated_token_key_id per RFC 9578 §6.1 is the least significant byte of
+ * SHA-256(public_key). Clients use it to identify which issuer key was used.
  */
 export function truncatedKeyId() {
   return _tokenKeyId[_tokenKeyId.length - 1];
-}
-
-/**
- * Generate a fresh VOPRF P-384 key pair using the @cloudflare/voprf-ts library.
- * This function is async because the library's KeyGen is async.
- *
- * NOTE: This is a placeholder implementation. The real VOPRF KeyGen requires
- * the library. Until the library is wired up, we generate placeholder bytes
- * that are correctly sized but cryptographically invalid. The well-known
- * endpoint will still work for discovery testing.
- */
-async function generateVoprfKeyPair() {
-  // TODO: Replace with real VOPRF KeyGen once @cloudflare/voprf-ts is installed.
-  //
-  // Real implementation will look like:
-  //
-  //   import { Oprf, generateKeyPair } from '@cloudflare/voprf-ts';
-  //   const suite = Oprf.Suite.P384_SHA384;
-  //   const mode  = Oprf.Mode.VOPRF;
-  //   const { privateKey, publicKey } = await generateKeyPair(suite, mode);
-  //   return { privateKey, publicKey };
-
-  // Placeholder bytes — DO NOT USE FOR REAL ISSUANCE.
-  // 48-byte scalar (P-384 private key size), 49-byte compressed point (public).
-  console.warn('   [PRIVACY-PASS] Generating PLACEHOLDER keys. Real VOPRF KeyGen pending.');
-  return {
-    privateKey: randomBytes(48),
-    publicKey:  Buffer.concat([Buffer.from([0x03]), randomBytes(48)]),  // compressed marker
-  };
 }
 
 export async function loadOrCreateKeys() {
@@ -83,10 +61,10 @@ export async function loadOrCreateKeys() {
     _notBefore  = meta.notBefore;
     console.log(`   [PRIVACY-PASS] Keys loaded from disk (suite: ${SUITE_NAME})`);
   } else {
-    const { privateKey, publicKey } = await generateVoprfKeyPair();
-
-    _privateKey = privateKey;
-    _publicKey  = publicKey;
+    // Real VOPRF P-384 key pair generation via @cloudflare/voprf-ts
+    const kp = await generateKeyPair(SUITE);
+    _privateKey = Buffer.from(kp.privateKey);
+    _publicKey  = Buffer.from(kp.publicKey);
     _tokenKeyId = createHash('sha256').update(_publicKey).digest();
     _notBefore  = Math.floor(Date.now() / 1000);
 
@@ -95,6 +73,7 @@ export async function loadOrCreateKeys() {
     writeFileSync(META_FILE, JSON.stringify({
       tokenType:  TOKEN_TYPE,
       suite:      SUITE_NAME,
+      mode:       'VOPRF',
       tokenKeyId: _tokenKeyId.toString('base64'),
       notBefore:  _notBefore,
     }, null, 2), { mode: 0o644 });

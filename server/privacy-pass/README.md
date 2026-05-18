@@ -1,6 +1,6 @@
 # Privacy Pass Module (additive)
 
-This module adds an [RFC 9576–9578](https://datatracker.ietf.org/wg/privacypass/about/) compliant Privacy Pass issuer to the HHTTPS server **without touching any existing functionality**.
+This module adds an [RFC 9576–9578](https://datatracker.ietf.org/wg/privacypass/about/) compliant Privacy Pass issuer and verifier to the HHTTPS server **without touching any existing functionality**.
 
 ## Why additive
 
@@ -14,13 +14,26 @@ The HHTTPS Role Layer (Identity API in `../server.js`) and the Privacy Pass Laye
 
 | Component | Status |
 |---|---|
-| Issuer directory (`.well-known/private-token-issuer-directory`) | Implemented |
-| Key generation and persistence (P-384) | Implemented |
-| Token request handling (RFC 9578 §6) | **TODO** — needs VOPRF library integration |
-| Token verification | **TODO** — needs VOPRF library integration |
-| OHTTP issuance (RFC 9458) | Future work |
+| Issuer directory (`.well-known/private-token-issuer-directory`) | ✅ Implemented |
+| Key generation and persistence (VOPRF P-384/SHA-384) | ✅ Implemented |
+| Token request handling (RFC 9578 §6, Token Type 0x0002) | ✅ Implemented |
+| Token verification with DLEQ proof and constant-time comparison | ✅ Implemented |
+| End-to-end roundtrip test (client blind → issue → finalize → verify) | ✅ Passing |
+| Replay protection (`jti`-like nonce tracking) | Pending |
+| OHTTP issuance (RFC 9458) for additional privacy | Future work |
+| Token Type 0x0001 (Blind RSA, publicly verifiable) for federation | Future work |
 
-Run the server now and the discovery and key endpoints work. Issuance returns `501 Not Implemented` until the VOPRF cryptography is wired up.
+## Wire format
+
+Token Type 0x0002 follows RFC 9578 §6:
+
+```
+TokenRequest  (52 bytes)  = token_type(2) || truncated_key_id(1) || blinded_msg(49)
+TokenResponse (145 bytes) = evaluated_msg(49) || evaluated_proof(96)
+Token         (146 bytes) = token_type(2) || nonce(32) || challenge_digest(32) || token_key_id(32) || authenticator(48)
+```
+
+The library [`@cloudflare/voprf-ts`](https://github.com/cloudflare/voprf-ts) provides the underlying VOPRF P-384/SHA-384 implementation; this module bridges between the library's serialization format and the Privacy Pass wire format.
 
 ## Integration with server.js
 
@@ -28,12 +41,7 @@ Two lines added to `../server.js` at the end of the route definitions (see `INST
 
 ## Dependencies
 
-Requires `@cloudflare/voprf-ts` from npm. Install with:
-
-```bash
-cd ../
-npm install @cloudflare/voprf-ts
-```
+- `@cloudflare/voprf-ts ^1.0.0` (added to `../package.json` automatically by the deploy script)
 
 ## References
 
