@@ -22,6 +22,7 @@ import { loadOrCreateKeys }    from './keys.js';
 import { handleIssuerDirectory } from './well-known.js';
 import { handleTokenRequest, handleKeysList } from './issuer.js';
 import { handleVerify }         from './verifier.js';
+import { demoRouter }            from './demo.js';
 
 let _initialized = false;
 
@@ -48,6 +49,9 @@ privacyPassRouter.use(
 privacyPassRouter.post('/token-request', handleTokenRequest);
 privacyPassRouter.get ('/keys',          handleKeysList);
 privacyPassRouter.post('/verify',        express.json({ limit: '4kb' }), handleVerify);
+
+// Demo: combined PP + HHTTPS protected endpoint with HTML page
+privacyPassRouter.use('/demo', demoRouter);
 
 // ─── Well-known router: served at the root of .well-known ─────────────────────
 
