@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Privacy Pass Wallet — hhttps.org</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
+<style>
+:root {
+  --bg:#03050a; --s1:#070d18; --s2:#0b1525; --b1:#132035; --b2:#1c3050;
+  --cyan:#00e5ff; --blue:#2979ff; --green:#00e676; --amber:#ffab40;
+  --red:#ff5252; --violet:#e040fb;
+  --text:#e0ecff; --muted:#4a6080;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { background: var(--bg); color: var(--text); font-family: 'Syne', system-ui, sans-serif; min-height: 100vh; line-height: 1.55; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.wrap { max-width: 980px; margin: 0 auto; padding: 24px 18px 64px; }
+
+.bar { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; margin-bottom: 28px; border-bottom: 1px solid var(--b1); }
+.bar .lg { font-weight: 800; font-size: 18px; letter-spacing: 0.5px; }
+.bar .lg span { color: var(--cyan); }
+.bar a { color: var(--muted); text-decoration: none; font-size: 13px; margin-left: 14px; }
+.bar a:hover { color: var(--text); }
+
+h1 { font-size: 30px; font-weight: 800; line-height: 1.2; margin-bottom: 10px; }
+h1 .a { color: var(--cyan); }
+.lead { color: var(--muted); font-size: 15px; max-width: 720px; margin-bottom: 24px; }
+.lead em { color: var(--text); font-style: normal; }
+
+.card { background: var(--s1); border: 1px solid var(--b1); border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; }
+.card h2 { font-size: 17px; margin-bottom: 10px; }
+.card .sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+
+button { background: var(--cyan); color: var(--bg); border: none; padding: 10px 18px; border-radius: 6px; font-family: inherit; font-weight: 700; font-size: 13px; cursor: pointer; letter-spacing: 0.3px; margin-right: 8px; }
+button:hover:not(:disabled) { filter: brightness(1.1); }
+button:disabled { background: var(--b2); color: var(--muted); cursor: not-allowed; }
+button.alt { background: var(--violet); }
+button.outline { background: transparent; color: var(--text); border: 1px solid var(--b2); }
+button.danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+
+.log { background: var(--bg); border: 1px solid var(--b1); border-radius: 6px; padding: 12px 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.6; color: var(--muted); max-height: 200px; overflow: auto; margin-top: 12px; white-space: pre-wrap; word-break: break-all; }
+.log .ok { color: var(--green); }
+.log .err { color: var(--red); }
+.log .info { color: var(--cyan); }
+.log .dim { color: var(--muted); }
+
+.role-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-top: 12px; }
+.role-tile { background: var(--s2); border: 1px solid var(--b1); border-radius: 6px; padding: 10px 8px; text-align: center; cursor: pointer; font-size: 12px; transition: all 0.15s; }
+.role-tile:hover { border-color: var(--b2); background: var(--b1); }
+.role-tile.sel { border-color: var(--cyan); background: var(--b2); color: var(--cyan); }
+
+.wallet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; margin-top: 12px; }
+.wallet-tile { background: var(--s2); border: 1px solid var(--b1); border-radius: 8px; padding: 12px 14px; }
+.wallet-tile .role-name { font-size: 13px; color: var(--muted); margin-bottom: 6px; text-transform: capitalize; }
+.wallet-tile .count { font-size: 28px; font-weight: 800; color: var(--cyan); font-family: 'JetBrains Mono', monospace; }
+.wallet-tile .label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.wallet-empty { color: var(--muted); font-size: 13px; padding: 16px 0; }
+
+.quota { display: flex; align-items: baseline; gap: 16px; font-size: 13px; margin-top: 10px; color: var(--muted); }
+.quota .v { color: var(--text); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+.pill { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: var(--b1); color: var(--cyan); margin-left: 6px; }
+.pill.green { background: rgba(0,230,118,0.15); color: var(--green); }
+.pill.amber { background: rgba(255,171,64,0.15); color: var(--amber); }
+
+footer { color: var(--muted); font-size: 12px; margin-top: 40px; text-align: center; }
+footer a { color: var(--muted); }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="bar">
+  <div class="lg">iamhmn / HHTTPS <span>· Privacy Pass Wallet</span></div>
+  <div>
+    <a href="/">Hauptseite</a>
+    <a href="/spec">Spec</a>
+    <a href="https://github.com/dhannus/HHTTPS" target="_blank">GitHub</a>
+  </div>
+</div>
+
+<h1><span class="a">Anonyme Mensch-Tokens.</span> In deinem Browser.</h1>
+<p class="lead">
+  Hier holst du dir Privacy-Pass-Tokens, mit denen du dich auf anderen Webseiten <em>anonym</em> als verifizierter Mensch und in deiner gewählten Rolle ausweisen kannst — ohne dass die Webseiten wissen, wer du bist.
+  Authentifiziere dich einmal mit deinem Sicherheitsschlüssel, wähle eine Rolle, und du bekommst <em>10 anonyme Tokens pro 24 Stunden</em>. Die Tokens liegen in deinem Browser. Wir können sie nicht zurückverfolgen.
+</p>
+
+<!-- ─── Step 1: Identify ───────────────────────────────────────────────── -->
+<div class="card" id="card-auth">
+  <h2>1. Authentifizieren</h2>
+  <p class="sub">
+    Du brauchst einen Passkey, Yubikey oder das Smartphone als Hardware-Schlüssel. Wir benutzen dafür den bestehenden HHTTPS-WebAuthn-Flow.
+  </p>
+  <div id="auth-state">
+    <button id="btn-login" onclick="doLogin()">Anmelden / Passkey anlegen →</button>
+  </div>
+  <div class="log" id="log-auth"><span class="dim">Bereit.</span></div>
+</div>
+
+<!-- ─── Step 2: Role ──────────────────────────────────────────────────── -->
+<div class="card hidden" id="card-role">
+  <h2>2. Rolle wählen</h2>
+  <p class="sub">
+    Die Rolle ist Teil der anonymen Attestation. Jede Rolle hat einen eigenen Issuer-Schlüssel, sodass Webseiten Tokens nach Rolle filtern können — ohne dich zu identifizieren.
+  </p>
+  <div class="role-grid" id="role-grid"></div>
+  <div style="margin-top:14px">
+    <button id="btn-role" onclick="doRole()" disabled>Rolle attestieren →</button>
+  </div>
+  <div class="log" id="log-role"><span class="dim">Warte auf Schritt 1.</span></div>
+</div>
+
+<!-- ─── Step 3: Wallet ────────────────────────────────────────────────── -->
+<div class="card hidden" id="card-wallet">
+  <h2>3. Tokens holen <span class="pill" id="role-pill">—</span></h2>
+  <p class="sub">
+    Hole dir einen Vorrat von 10 anonymen Tokens. Diese werden lokal in deinem Browser gespeichert (IndexedDB). Bei Verbrauch kannst du neue holen — bis zur 24h-Obergrenze.
+  </p>
+  <div class="quota" id="quota">
+    <span>Aktuell verbraucht im 24h-Fenster:</span><span class="v" id="quota-used">—</span>
+    <span>Verbleibend:</span><span class="v" id="quota-remaining">—</span>
+  </div>
+  <div style="margin-top:14px">
+    <button id="btn-get-tokens" onclick="getTokens()">10 anonyme Tokens holen →</button>
+    <button class="outline" onclick="refreshWallet()">Aktualisieren</button>
+    <button class="danger" onclick="clearWallet()">Wallet leeren</button>
+  </div>
+  <div class="log" id="log-tokens"><span class="dim">Bereit.</span></div>
+
+  <h2 style="margin-top:24px;font-size:14px;color:var(--muted)">Aktueller Vorrat</h2>
+  <div id="wallet-content" class="wallet-empty">Noch keine Tokens.</div>
+</div>
+
+<footer>
+  <p>HHTTPS Protocol · iamhmn Initiative · EUPL-1.2</p>
+  <p style="margin-top:6px">
+    <a href="https://www.rfc-editor.org/rfc/rfc9576" target="_blank">RFC 9576</a> ·
+    <a href="https://www.rfc-editor.org/rfc/rfc9577" target="_blank">RFC 9577</a> ·
+    <a href="https://www.rfc-editor.org/rfc/rfc9578" target="_blank">RFC 9578</a>
+  </p>
+</footer>
+
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<script type="module">
+import { Oprf, VOPRFClient, EvaluationRequest, Evaluation } from '/privacy-pass/lib/voprf.js';
+
+const SUITE = Oprf.Suite.P384_SHA384;
+const Ne = 49, Ns = 48;
+const { startRegistration, startAuthentication } = SimpleWebAuthnBrowser;
+
+// ─── State ───────────────────────────────────────────────────────────────
+let userId    = localStorage.getItem('hhttps_uid') || crypto.randomUUID();
+let sessionId = null;
+let role      = null;
+
+// ─── IndexedDB wallet ────────────────────────────────────────────────────
+const DB_NAME = 'hhttps-pp-wallet';
+const STORE   = 'tokens';
+
+function openDb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains(STORE)) {
+        const s = db.createObjectStore(STORE, { keyPath: 'id', autoIncrement: true });
+        s.createIndex('by_role', 'role', { unique: false });
+      }
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
+  });
+}
+
+async function walletAdd(items) {
+  const db = await openDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    const s = tx.objectStore(STORE);
+    items.forEach(it => s.add(it));
+    tx.oncomplete = () => res();
+    tx.onerror    = () => rej(tx.error);
+  });
+}
+
+async function walletAll() {
+  const db = await openDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const s = tx.objectStore(STORE);
+    const r = s.getAll();
+    r.onsuccess = () => res(r.result || []);
+    r.onerror   = () => rej(r.error);
+  });
+}
+
+async function walletClear() {
+  const db = await openDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => res();
+    tx.onerror    = () => rej(tx.error);
+  });
+}
+
+// ─── Logging helpers ─────────────────────────────────────────────────────
+function log(id, msg, cls = 'dim') {
+  const el = document.getElementById(id);
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+const L = {
+  auth:   (m, c = 'dim') => log('log-auth',   m, c),
+  role:   (m, c = 'dim') => log('log-role',   m, c),
+  tokens: (m, c = 'dim') => log('log-tokens', m, c),
+};
+
+// ─── Step 1: Login ───────────────────────────────────────────────────────
+window.doLogin = async function () {
+  const btn = document.getElementById('btn-login');
+  btn.disabled = true;
+  L.auth('Versuche Login mit bestehendem Passkey …', 'info');
+
+  try {
+    // Try existing-user login first
+    const r1 = await fetch('/hhttps/webauthn/auth/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId }),
+    });
+    const d1 = await r1.json();
+
+    if (r1.ok && d1.options) {
+      L.auth('✓ Account gefunden, Passkey-Prompt …', 'ok');
+      const a = await startAuthentication(d1.options);
+      const r2 = await fetch('/hhttps/webauthn/auth/finish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: d1.sessionId, response: a }),
+      });
+      const d2 = await r2.json();
+      if (!r2.ok) throw new Error(d2.error);
+      sessionId = d2.sessionId;
+    } else {
+      L.auth('Kein Account vorhanden, lege neuen Passkey an …', 'info');
+      const r1b = await fetch('/hhttps/webauthn/register/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const d1b = await r1b.json();
+      userId = d1b.userId; localStorage.setItem('hhttps_uid', userId);
+
+      const att = await startRegistration(d1b.options);
+      const r2 = await fetch('/hhttps/webauthn/register/finish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, response: att }),
+      });
+      const d2 = await r2.json();
+      if (!r2.ok) throw new Error(d2.error);
+      L.auth('✓ Passkey registriert', 'ok');
+
+      // Auto-login
+      const r3 = await fetch('/hhttps/webauthn/auth/start', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId }),
+      });
+      const d3 = await r3.json();
+      const a = await startAuthentication(d3.options);
+      const r4 = await fetch('/hhttps/webauthn/auth/finish', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: d3.sessionId, response: a }),
+      });
+      const d4 = await r4.json();
+      if (!r4.ok) throw new Error(d4.error);
+      sessionId = d4.sessionId;
+    }
+
+    L.auth('✓ Authentifiziert. Wähle jetzt eine Rolle.', 'ok');
+    document.getElementById('btn-login').textContent = 'Eingeloggt ✓';
+    document.getElementById('card-role').classList.remove('hidden');
+    L.role('Bereit für Rollenwahl.', 'info');
+    buildRoleGrid();
+    refreshWallet();
+
+  } catch (err) {
+    L.auth(`✗ ${err.message}`, 'err');
+    btn.disabled = false;
+  }
+};
+
+// ─── Step 2: Role ────────────────────────────────────────────────────────
+const ROLE_DEFS = {
+  citizen:              { icon: '🧍', label: 'Bürger:in' },
+  journalist:           { icon: '📰', label: 'Journalist:in' },
+  student:              { icon: '🎓', label: 'Student:in' },
+  teacher:              { icon: '🧑‍🏫', label: 'Lehrkraft' },
+  researcher:           { icon: '🔬', label: 'Forscher:in' },
+  creative:             { icon: '🎨', label: 'Kreative:r' },
+  developer:            { icon: '💻', label: 'Entwickler:in' },
+  medical_professional: { icon: '🩺', label: 'Medizin' },
+  caregiver:            { icon: '🤝', label: 'Pflege' },
+  lawyer:               { icon: '⚖️', label: 'Jurist:in' },
+  notary:               { icon: '📜', label: 'Notar:in' },
+  civil_servant:        { icon: '🏛️', label: 'Verwaltung' },
+  politician:           { icon: '🗳️', label: 'Politik' },
+  business:             { icon: '💼', label: 'Business' },
+  craftsman:            { icon: '🔧', label: 'Handwerk' },
+};
+
+function buildRoleGrid() {
+  const grid = document.getElementById('role-grid');
+  grid.innerHTML = '';
+  Object.entries(ROLE_DEFS).forEach(([key, def]) => {
+    const t = document.createElement('div');
+    t.className = 'role-tile';
+    t.innerHTML = `<div style="font-size:22px">${def.icon}</div><div style="margin-top:4px">${def.label}</div>`;
+    t.onclick = () => {
+      document.querySelectorAll('.role-tile').forEach(x => x.classList.remove('sel'));
+      t.classList.add('sel');
+      role = key;
+      document.getElementById('btn-role').disabled = false;
+    };
+    grid.appendChild(t);
+  });
+}
+
+window.doRole = async function () {
+  const btn = document.getElementById('btn-role');
+  btn.disabled = true;
+  L.role(`Rolle "${role}" am HHTTPS-Issuer attestieren …`, 'info');
+
+  try {
+    const r = await fetch('/hhttps/role/declare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId, role,
+        verificationMethod: 'self_declared',
+        verificationData: {},
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+
+    L.role('✓ Rolle attestiert', 'ok');
+    document.getElementById('role-pill').textContent = role;
+    document.getElementById('role-pill').classList.add('green');
+    document.getElementById('card-wallet').classList.remove('hidden');
+    btn.textContent = 'Attestiert ✓';
+    await refreshQuota();
+    await refreshWallet();
+  } catch (err) {
+    L.role(`✗ ${err.message}`, 'err');
+    btn.disabled = false;
+  }
+};
+
+// ─── Step 3: Token issuance ──────────────────────────────────────────────
+async function refreshQuota() {
+  if (!sessionId) return;
+  try {
+    const r = await fetch(`/privacy-pass/issuance/quota?sessionId=${encodeURIComponent(sessionId)}`);
+    if (!r.ok) return;
+    const q = await r.json();
+    document.getElementById('quota-used').textContent      = `${q.used_in_window} / ${q.max_per_window}`;
+    document.getElementById('quota-remaining').textContent = String(q.remaining);
+    document.getElementById('btn-get-tokens').disabled     = q.remaining === 0;
+    if (q.remaining === 0) {
+      L.tokens('⚠ 24h-Kontingent ausgeschöpft. Komm in einem Tag wieder.', 'err');
+    }
+  } catch {}
+}
+
+window.getTokens = async function () {
+  const btn = document.getElementById('btn-get-tokens');
+  btn.disabled = true;
+  L.tokens('Discovery: lade Issuer-Verzeichnis …', 'info');
+
+  try {
+    // Get the per-role public key from the aggregate directory
+    const dirResp = await fetch('/.well-known/private-token-issuer-directory');
+    const dir = await dirResp.json();
+    const roleKey = dir['token-keys'].find(k => k.role === role);
+    if (!roleKey) throw new Error(`No issuer key for role=${role}`);
+
+    const pubKeyBytes = base64urlDecode(roleKey['token-key']);
+    const tokenKeyId  = new Uint8Array(await crypto.subtle.digest('SHA-256', pubKeyBytes));
+    const truncKeyId  = tokenKeyId[tokenKeyId.length - 1];
+    L.tokens(`✓ Issuer für "${role}" geladen`, 'ok');
+
+    // Build N blinded TokenRequests in parallel
+    const N = 10;
+    L.tokens(`Erzeuge ${N} geblindete Token-Anfragen lokal …`, 'info');
+    const client = new VOPRFClient(SUITE, pubKeyBytes);
+
+    const tokenInputs = [];
+    const blinds      = [];
+    const requestBufs = [];
+
+    for (let i = 0; i < N; i++) {
+      const nonce = crypto.getRandomValues(new Uint8Array(32));
+      // A simple per-token challenge digest — origins will provide their own;
+      // here we just need a unique 32-byte value so each token is distinct.
+      const challenge       = new TextEncoder().encode(`${role}-${Date.now()}-${i}-${crypto.randomUUID()}`);
+      const challengeDigest = new Uint8Array(await crypto.subtle.digest('SHA-256', challenge));
+
+      const input = concat([new Uint8Array([0x00, 0x02]), nonce, challengeDigest, tokenKeyId]);
+      const [fd, er] = await client.blind([input]);
+
+      tokenInputs.push({ nonce, challengeDigest, tokenKeyId, finalizeData: fd });
+      const blindedMsg = new Uint8Array(er.blinded[0].serialize());
+      const req = concat([new Uint8Array([0x00, 0x02]), new Uint8Array([truncKeyId]), blindedMsg]);
+      requestBufs.push(req);
+    }
+
+    L.tokens(`POST /privacy-pass/issue (Batch von ${N}) …`, 'info');
+    const r = await fetch('/privacy-pass/issue', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sessionId, role,
+        requests: requestBufs.map(b => b64encode(b)),
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+
+    L.tokens(`✓ Server hat ${d.count} TokenResponses ausgestellt`, 'ok');
+
+    // Finalize each one, store in wallet
+    const wallet = [];
+    for (let i = 0; i < d.responses.length; i++) {
+      const respBytes = Uint8Array.from(atob(d.responses[i]), c => c.charCodeAt(0));
+      const lib = concat([
+        new Uint8Array([0x00, 0x01]),
+        respBytes.subarray(0, Ne),
+        new Uint8Array([Oprf.Mode.VOPRF]),
+        respBytes.subarray(Ne),
+      ]);
+      const ev = Evaluation.deserialize(SUITE, lib);
+      const fin = await client.finalize(tokenInputs[i].finalizeData, ev);
+      const auth = new Uint8Array(fin[0]);
+
+      const fullToken = concat([
+        new Uint8Array([0x00, 0x02]),
+        tokenInputs[i].nonce,
+        tokenInputs[i].challengeDigest,
+        tokenInputs[i].tokenKeyId,
+        auth,
+      ]);
+      wallet.push({
+        role,
+        token:      b64encode(fullToken),
+        issued_at:  Date.now(),
+      });
+    }
+    await walletAdd(wallet);
+    L.tokens(`✓ ${wallet.length} Tokens in der Wallet gespeichert`, 'ok');
+
+    await refreshQuota();
+    await refreshWallet();
+  } catch (err) {
+    L.tokens(`✗ ${err.message}`, 'err');
+    btn.disabled = false;
+  }
+};
+
+window.refreshWallet = async function () {
+  const all = await walletAll();
+  const el  = document.getElementById('wallet-content');
+  if (all.length === 0) {
+    el.className = 'wallet-empty';
+    el.textContent = 'Noch keine Tokens.';
+    return;
+  }
+  // Group by role
+  const counts = {};
+  all.forEach(t => { counts[t.role] = (counts[t.role] || 0) + 1; });
+
+  el.className = 'wallet-grid';
+  el.innerHTML = Object.entries(counts).map(([r, c]) => `
+    <div class="wallet-tile">
+      <div class="role-name">${(ROLE_DEFS[r]?.label || r)}</div>
+      <div class="count">${c}</div>
+      <div class="label">anonyme Tokens</div>
+    </div>
+  `).join('');
+};
+
+window.clearWallet = async function () {
+  if (!confirm('Wirklich alle Tokens in der Wallet löschen?')) return;
+  await walletClear();
+  L.tokens('Wallet geleert.', 'info');
+  refreshWallet();
+};
+
+// ─── Helpers ─────────────────────────────────────────────────────────────
+function concat(arrs) {
+  let n = 0; arrs.forEach(a => n += a.length);
+  const out = new Uint8Array(n);
+  let off = 0; arrs.forEach(a => { out.set(a, off); off += a.length; });
+  return out;
+}
+function base64urlDecode(s) {
+  const pad = s.length % 4 === 0 ? '' : '='.repeat(4 - (s.length % 4));
+  const b64 = (s + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function b64encode(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+// Initial wallet display
+refreshWallet();
+</script>
+</body>
+</html>

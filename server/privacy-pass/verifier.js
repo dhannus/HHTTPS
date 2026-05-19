@@ -1,11 +1,14 @@
 /**
- * Privacy Pass Token Verifier — RFC 9577 §2.2 / RFC 9578 §6.2
+ * Privacy Pass Token Verifier — public endpoint.
  *
- * Thin Express handler that wraps the internal verifier.
- * For real cryptographic logic see ./verifier-internal.js.
+ * POST /privacy-pass/verify { token: <base64> }
+ *   → { valid, role?, reason? }
+ *
+ * The `role` field tells the caller which issuer (and therefore which role
+ * attestation) the token belongs to.
  */
 
-import { parseToken, parseTokenAndVerify } from './verifier-internal.js';
+import { parseToken, parseAndVerify, findIssuerForToken } from './verifier-internal.js';
 
 export async function handleVerify(req, res) {
   try {
@@ -13,22 +16,21 @@ export async function handleVerify(req, res) {
     if (typeof b64 !== 'string') {
       throw new Error('Body must contain { "token": "<base64>" }');
     }
-
-    const tokenBuf = Buffer.from(b64, 'base64');
-    const token    = parseToken(tokenBuf);
-    const valid    = await parseTokenAndVerify(tokenBuf);
+    const buf    = Buffer.from(b64, 'base64');
+    const result = await parseAndVerify(buf);
+    const token  = parseToken(buf);
 
     res.json({
-      valid,
-      ...(valid && {
-        token_type: token.tokenType,
-        nonce:      token.nonce.toString('base64url'),
+      valid: result.valid,
+      ...(result.valid && {
+        role:  result.issuer.role,
+        nonce: token.nonce.toString('base64url'),
       }),
-      ...(!valid && { reason: 'authenticator mismatch' }),
+      ...(!result.valid && { reason: result.reason }),
     });
 
   } catch (err) {
-    return res.status(400).json({
+    res.status(400).json({
       valid: false,
       error: 'invalid_token',
       detail: err.message,
