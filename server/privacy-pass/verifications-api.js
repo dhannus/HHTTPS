@@ -101,19 +101,14 @@ verificationsRouter.post('/email/start', async (req, res) => {
     });
 
     // Send the email using the existing email infrastructure.
-    // The existing sendVerificationEmail expects a slightly different shape;
-    // we reuse the underlying nodemailer transport via a lightweight wrapper.
     const baseUrl = `${req.protocol}://${req.get('host')}`;
     const link    = `${baseUrl}/privacy-pass/email/verify?token=${rawToken}`;
 
     try {
       const emailMod = await import('../email.js');
-      // Reuse the low-level send mechanism
-      if (typeof emailMod.sendPrivacyPassVerification === 'function') {
-        await emailMod.sendPrivacyPassVerification({ to: email, role, link });
-      } else {
-        // Fall back: use the existing sendVerificationEmail's transport directly
-        await sendFallbackEmail(emailMod, email, role, link);
+      const result = await emailMod.sendPrivacyPassVerification({ to: email, role, link });
+      if (result.devMode) {
+        console.warn(`[PP] email transport not configured — dev mode. Link: ${link}`);
       }
     } catch (sendErr) {
       console.error('[PP] email send failed:', sendErr.message);
@@ -135,27 +130,6 @@ verificationsRouter.post('/email/start', async (req, res) => {
     res.status(500).json({ error: 'email_start_failed', detail: err.message });
   }
 });
-
-// Minimal fallback using existing nodemailer config
-async function sendFallbackEmail(emailMod, to, role, link) {
-  // The existing email.js exports a transporter() or createTransport()
-  // We construct a minimal message and call it.
-  const transporter = typeof emailMod.transporter === 'function'
-    ? await emailMod.transporter()
-    : null;
-  if (!transporter) throw new Error('No transporter available');
-
-  const from = process.env.HHTTPS_EMAIL_FROM || 'noreply@hhttps.org';
-  await transporter.sendMail({
-    from,
-    to,
-    subject: `HHTTPS — E-Mail-Verifikation für Rolle "${role}"`,
-    text: `Bitte bestätige deine E-Mail-Adresse für die Rolle "${role}" auf hhttps.org:\n\n${link}\n\nDieser Link ist 15 Minuten gültig.`,
-    html: `<p>Bitte bestätige deine E-Mail-Adresse für die Rolle "<strong>${role}</strong>" auf hhttps.org:</p>
-           <p><a href="${link}" style="display:inline-block;padding:10px 20px;background:#2979ff;color:white;text-decoration:none;border-radius:6px">E-Mail bestätigen</a></p>
-           <p style="color:#888;font-size:12px">Dieser Link ist 15 Minuten gültig. Wenn du das nicht angefordert hast, ignoriere diese Mail.</p>`,
-  });
-}
 
 // ─── GET /email/verify?token=… ───────────────────────────────────────────────
 

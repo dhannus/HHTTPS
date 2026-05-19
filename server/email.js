@@ -460,3 +460,87 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVACY PASS: anonymous wallet email verification
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Send the Privacy Pass wallet's email verification link.
+ *
+ * This is a separate code path from sendVerificationEmail (the legacy HHTTPS
+ * role declaration flow) because:
+ *   - the verify link points to a different endpoint (/privacy-pass/email/verify)
+ *   - the wallet has its own role concept and trust model
+ *   - the email body is shorter and wallet-specific
+ *
+ * Hash-only: the email plaintext is NEVER stored. The caller stores only the
+ * SHA-256 hash. We use the plaintext here just for sending and then discard it.
+ *
+ * @param {object} opts
+ * @param {string} opts.to     Recipient email
+ * @param {string} opts.role   Role identifier (e.g. 'journalist')
+ * @param {string} opts.link   Absolute URL of the verification link
+ * @returns {Promise<{sent: boolean, devMode: boolean}>}
+ */
+export async function sendPrivacyPassVerification({ to, role, link }) {
+  const roleLabels = {
+    citizen:              '🧑 Bürger:in',
+    journalist:           '📰 Journalist:in',
+    student:              '🎓 Student:in',
+    teacher:              '🧑‍🏫 Lehrkraft',
+    researcher:           '🔬 Forscher:in',
+    creative:             '🎭 Kreative:r',
+    developer:            '💻 Entwickler:in',
+    medical_professional: '🩺 Medizin',
+    caregiver:            '🤝 Pflege',
+    lawyer:               '⚖️ Jurist:in',
+    notary:               '📜 Notar:in',
+    civil_servant:        '🏛️ Verwaltung',
+    politician:           '🗳️ Politik',
+    business:             '🏢 Unternehmen',
+    craftsman:            '🔧 Handwerk',
+  };
+  const roleLabel = roleLabels[role] || role;
+
+  const bodyHtml = `
+    <p>Du hast eine E-Mail-Verifikation für deine <strong>Privacy Pass Wallet</strong> angefordert.</p>
+    <div class="info-box">
+      <div class="ib-key">Rolle</div>
+      <div class="ib-val">${roleLabel}</div>
+    </div>
+    <p>Klicke auf den Button, um deine E-Mail-Adresse zu bestätigen. Danach kannst du anonyme Tokens in der Wallet abrufen.</p>
+    <p style="color:#a0b8d8;font-size:12px;margin-top:18px">Der Link ist <strong>15 Minuten</strong> gültig.</p>
+  `;
+
+  const html = emailShell({
+    title:    'Privacy Pass — E-Mail-Verifikation',
+    subtitle: 'HHTTPS · ANONYME WALLET',
+    bodyHtml,
+    ctaUrl:   link,
+    ctaLabel: '✓ E-Mail bestätigen',
+    footerNote: '<strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nur als Hash gespeichert, niemals im Klartext. Die später ausgestellten anonymen Tokens lassen sich nicht zu dir zurückverfolgen.'
+  });
+
+  const text =
+    `HHTTPS Privacy Pass — E-Mail-Verifikation\n\n` +
+    `Rolle: ${roleLabel}\n\n` +
+    `Bestätige deine E-Mail-Adresse:\n${link}\n\n` +
+    `Der Link ist 15 Minuten gültig.\n\n` +
+    `— HHTTPS · hhttps.org`;
+
+  const transporter = createTransport();
+  if (!transporter) {
+    devLog('Privacy Pass verification', to, link, { role });
+    return { sent: false, devMode: true };
+  }
+
+  await transporter.sendMail(buildMailOptions({
+    to,
+    subject: `[HHTTPS Privacy Pass] E-Mail-Verifikation — ${roleLabel}`,
+    text,
+    html,
+  }));
+
+  return { sent: true, devMode: false };
+}
