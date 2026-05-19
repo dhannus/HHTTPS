@@ -18,6 +18,7 @@
 import express from 'express';
 import { getIssuer, ROLES, Ne, TOKEN_TYPE } from './keys.js';
 import { issueTokenResponse }                from './issuer.js';
+import { eligibilityFor }                    from './verifications.js';
 
 // Defaults — tune via env or per-request later
 const DEFAULT_BATCH_SIZE = 10;
@@ -77,6 +78,19 @@ issuanceRouter.post('/issue', async (req, res) => {
       return res.status(403).json({
         error: 'role_mismatch',
         detail: `session role is ${session.role || 'unset'}, requested ${role}`,
+      });
+    }
+
+    // ── Eligibility check: role-specific verification requirements ─────────
+    const eligibility = await eligibilityFor(session.credentialId, role);
+    if (!eligibility.ok) {
+      return res.status(403).json({
+        error: 'not_eligible',
+        detail: eligibility.reason,
+        missing: eligibility.missing,
+        strict: eligibility.strict,
+        completed: eligibility.completed,
+        requirements: eligibility.requirements,
       });
     }
 

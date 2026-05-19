@@ -26,6 +26,7 @@ import { handleTokenRequest,
          handleKeysList }                 from './issuer.js';
 import { handleVerify }                   from './verifier.js';
 import { issuanceRouter }                 from './issuance.js';
+import { verificationsRouter }            from './verifications-api.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -62,6 +63,9 @@ privacyPassRouter.post('/token-request', handleTokenRequest);
 
 // Authenticated batch issuance + quota check (used by wallet)
 privacyPassRouter.use('/', issuanceRouter);
+
+// Verifications (eligibility, email verify, credentials, recovery codes)
+privacyPassRouter.use('/', verificationsRouter);
 
 // Developer-friendly keys overview
 privacyPassRouter.get('/keys', handleKeysList);
