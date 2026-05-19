@@ -15,11 +15,11 @@
  */
 
 import express from 'express';
-import { readFileSync, existsSync }       from 'fs';
 import { dirname, join }                  from 'path';
 import { fileURLToPath }                  from 'url';
 
 import { loadOrCreateKeys }               from './keys.js';
+import { runMigrations }                  from './migrations.js';
 import { handleAggregateDirectory,
          handleRoleDirectory }            from './well-known.js';
 import { handleTokenRequest,
@@ -32,27 +32,10 @@ const PUBLIC_DIR = join(__dirname, 'public');
 
 let _initialized = false;
 
-async function runMigration() {
-  const sqlPath = join(__dirname, '..', 'sql', 'migration-pp.sql');
-  if (!existsSync(sqlPath)) {
-    console.warn('   [PRIVACY-PASS] migration-pp.sql not found, skipping DB migration');
-    return;
-  }
-  try {
-    const sql = readFileSync(sqlPath, 'utf8');
-    const db  = await import('../db.js');
-    await db.pool().query(sql);
-    console.log('   [PRIVACY-PASS] DB migration applied (pp_issuance_log)');
-  } catch (err) {
-    console.error('   [PRIVACY-PASS] DB migration failed:', err.message);
-    // Non-fatal — issuance endpoint will return clearer error if table missing
-  }
-}
-
 export async function initPrivacyPass() {
   if (_initialized) return;
   await loadOrCreateKeys();
-  await runMigration();
+  await runMigrations();
   _initialized = true;
   console.log('   [PRIVACY-PASS] Module initialised');
 }
