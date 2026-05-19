@@ -129,6 +129,21 @@ chown -R www-data:www-data "${SERVER_DIR}/privacy-pass/keys"
 chmod 700 "${SERVER_DIR}/privacy-pass/keys"
 ok "Keys-Verzeichnis vorbereitet (www-data, 0700)"
 
+# Auch geänderte Server-Files mitnehmen, die das Privacy-Pass-Modul nutzt.
+# email.js wird von verifications-api.js aufgerufen, db.js liefert die Pool-Funktion.
+# Wir syncen nur wenn der Repo-Stand neuer ist (rsync -u).
+for f in email.js db.js; do
+  if [[ -f "${RELEASE_DIR}/server/${f}" ]]; then
+    if rsync -au --checksum "${RELEASE_DIR}/server/${f}" "${SERVER_DIR}/${f}" 2>/dev/null; then
+      # Prüfen ob tatsächlich überschrieben wurde
+      if ! cmp -s "${RELEASE_DIR}/server/${f}" "${SERVER_DIR}/${f}.bak" 2>/dev/null; then
+        cp "${SERVER_DIR}/${f}" "${SERVER_DIR}/${f}.bak.$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+      fi
+      ok "Server-Datei ${f} synchronisiert"
+    fi
+  fi
+done
+
 # ─── 3. server.js Patch prüfen / anwenden ─────────────────────────────────────
 step "[3/7] server.js auf Privacy-Pass-Mount prüfen"
 
