@@ -617,6 +617,8 @@
             <li><a href="#token">4. Token Format</a></li>
             <li><a href="#trust">5. Trust Scoring</a></li>
             <li><a href="#integration">6. Integration</a></li>
+            <li><a href="#oauth">6a. Sign in with HHTTPS</a></li>
+            <li><a href="#machine">6b. Machine tokens (bots)</a></li>
             <li><a href="#discovery">7. Discovery</a></li>
             <li><a href="#security">8. Security</a></li>
             <li><a href="#governance">9. Governance</a></li>
@@ -941,6 +943,138 @@ app.<span class="tok-fn">post</span>(<span class="tok-str">'/medical-advice'</sp
               Reference SDKs are available for
               <a href="https://github.com/dhannus/HumanProof/tree/main/sdk">JavaScript and Python</a>,
               with examples for Express, Flask, Django, and FastAPI.
+            </p>
+          </section>
+
+          <section class="doc-section" id="oauth">
+            <span class="anchor">§ 6a</span>
+            <h2>"Sign in with HHTTPS" button</h2>
+            <p>
+              Beyond JWT verification, HHTTPS provides a full OpenID Connect 1.0 flow.
+              Your platform can offer a <em>"Sign in with HHTTPS"</em> button that lets
+              users authenticate with their Passkey and bring along a verified role plus
+              trust score — without sharing any PII with your platform.
+            </p>
+            <p>
+              Subjects are <strong>pairwise</strong>: each client sees a different stable
+              identifier for the same user, so users cannot be tracked across platforms.
+              PKCE is mandatory for public clients (no client secret required).
+            </p>
+
+            <div class="code-card">
+              <div class="code-card-header">
+                <span>Step 1 — Redirect the user to HHTTPS</span>
+                <button class="copy-btn" onclick="copyPre(this)">Copy</button>
+              </div>
+              <pre><span class="tok-key">const</span> verifier  = crypto.<span class="tok-fn">randomBytes</span>(<span class="tok-num">32</span>).<span class="tok-fn">toString</span>(<span class="tok-str">'base64url'</span>);
+<span class="tok-key">const</span> challenge = crypto.<span class="tok-fn">createHash</span>(<span class="tok-str">'sha256'</span>).<span class="tok-fn">update</span>(verifier).<span class="tok-fn">digest</span>(<span class="tok-str">'base64url'</span>);
+<span class="tok-key">const</span> state     = crypto.<span class="tok-fn">randomBytes</span>(<span class="tok-num">16</span>).<span class="tok-fn">toString</span>(<span class="tok-str">'base64url'</span>);
+req.session.pkceVerifier = verifier;
+req.session.oauthState   = state;
+
+<span class="tok-key">const</span> params = <span class="tok-key">new</span> <span class="tok-fn">URLSearchParams</span>({
+  response_type:         <span class="tok-str">'code'</span>,
+  client_id:             <span class="tok-str">'your-client-id'</span>,
+  redirect_uri:          <span class="tok-str">'https://your-site.com/auth/callback'</span>,
+  scope:                 <span class="tok-str">'openid role verification_method'</span>,
+  state,
+  code_challenge:        challenge,
+  code_challenge_method: <span class="tok-str">'S256'</span>
+});
+
+res.<span class="tok-fn">redirect</span>(<span class="tok-str">`https://hhttps.org/hhttps/oauth/authorize?${params}`</span>);</pre>
+            </div>
+
+            <div class="code-card">
+              <div class="code-card-header">
+                <span>Step 2 — Exchange code for token (on callback)</span>
+                <button class="copy-btn" onclick="copyPre(this)">Copy</button>
+              </div>
+              <pre><span class="tok-key">const</span> tokenRes = <span class="tok-key">await</span> <span class="tok-fn">fetch</span>(<span class="tok-str">'https://hhttps.org/hhttps/oauth/token'</span>, {
+  method: <span class="tok-str">'POST'</span>,
+  headers: { <span class="tok-str">'Content-Type'</span>: <span class="tok-str">'application/json'</span> },
+  body: <span class="tok-fn">JSON.stringify</span>({
+    grant_type:    <span class="tok-str">'authorization_code'</span>,
+    code:          req.query.code,
+    redirect_uri:  <span class="tok-str">'https://your-site.com/auth/callback'</span>,
+    client_id:     <span class="tok-str">'your-client-id'</span>,
+    code_verifier: req.session.pkceVerifier
+  })
+});
+
+<span class="tok-key">const</span> { access_token, id_token } = <span class="tok-key">await</span> tokenRes.<span class="tok-fn">json</span>();
+<span class="tok-com">// id_token is a JWT with: sub, role, role_label, trust_score,</span>
+<span class="tok-com">// verification_method, nonce, exp, iat, iss, aud</span></pre>
+            </div>
+
+            <p>
+              Register your platform as an OAuth client by inserting a row into
+              <code>oauth_clients</code> on the HHTTPS server (currently manual — public
+              registration UI is on the roadmap). Discovery document at
+              <code>/.well-known/openid-configuration</code>.
+            </p>
+
+            <p>
+              <strong>Real-world example:</strong> <a href="https://ask.iamhmn.org">ask.iamhmn.org</a>
+              is a Q&amp;A platform that uses this exact flow.
+              <a href="https://github.com/dhannus/ASKIAMHMN">Source code on GitHub</a>.
+            </p>
+          </section>
+
+          <section class="doc-section" id="machine">
+            <span class="anchor">§ 6b</span>
+            <h2>Machine tokens — for bots and automated agents</h2>
+            <p>
+              HHTTPS recognizes that not all useful traffic comes from humans. Bots,
+              AI agents, and automated services can register as <em>machine operators</em>
+              and obtain tokens that carry a transparent <code>actorType: 'bot'</code> claim.
+              Platforms can then treat machines and humans uniformly while keeping the
+              difference visible to users.
+            </p>
+            <p>
+              In pilot mode, bots <strong>self-declare their role</strong> (no verification —
+              no industry standard for AI agent identity yet exists). Role-based logic on
+              the platform still applies, just as it does for human OAuth tokens.
+            </p>
+
+            <div class="code-card">
+              <div class="code-card-header">
+                <span>Step 1 — Register your bot (once, store the API key)</span>
+                <button class="copy-btn" onclick="copyPre(this)">Copy</button>
+              </div>
+              <pre>curl -X POST https://hhttps.org/hhttps/machine/register \
+  -H <span class="tok-str">"Content-Type: application/json"</span> \
+  -d <span class="tok-str">'{
+    "operatorName":  "MyBot",
+    "purpose":       "Answers technical questions on ask.iamhmn.org",
+    "role":          "developer",
+    "contactEmail":  "ops@example.com",
+    "operatorUrl":   "https://example.com/bot"
+  }'</span>
+
+<span class="tok-com"># Response (save apiKey — shown only once):</span>
+<span class="tok-com"># { "operatorId": "op-...", "apiKey": "mk-...", "role": "developer", ... }</span></pre>
+            </div>
+
+            <div class="code-card">
+              <div class="code-card-header">
+                <span>Step 2 — Issue a token (each session)</span>
+                <button class="copy-btn" onclick="copyPre(this)">Copy</button>
+              </div>
+              <pre>curl -X POST https://hhttps.org/hhttps/machine/token \
+  -H <span class="tok-str">"Content-Type: application/json"</span> \
+  -d <span class="tok-str">'{ "operatorId": "op-...", "apiKey": "mk-..." }'</span>
+
+<span class="tok-com"># Returns: { "token": "eyJ...", "expiresAt": "..." }</span>
+<span class="tok-com"># Token claims include: sub=machine, human=false, actorType=bot,</span>
+<span class="tok-com">#                       operatorId, operatorName, purpose, role</span></pre>
+            </div>
+
+            <p>
+              Verify machine tokens the same way as human tokens — same JWKS, same ES256
+              signature. Distinguish them by the <code>actorType</code> claim.
+              Token TTL is short (5 minutes by default) so bots refresh frequently —
+              this gives the issuer the ability to revoke abusive operators quickly.
             </p>
           </section>
 

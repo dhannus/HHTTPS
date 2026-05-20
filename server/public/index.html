@@ -355,6 +355,75 @@ body::before{
 /* ─ Verify result — BIG centered role icon ─ */
 .verify-result{display:none;}
 .verify-result.show{display:block;animation:fade-up 0.4s ease;}
+
+/* ─ USP Section: "Mit HHTTPS bestätigen" + Maschinen ─ */
+.usp-section{
+  background:linear-gradient(135deg, var(--s1) 0%, rgba(181, 168, 217, 0.04) 100%);
+  border:1px solid var(--b1);
+  border-left:3px solid var(--p-lavender);
+  border-radius:12px;
+  overflow:hidden;
+  position:relative;
+  margin-bottom:28px;
+}
+.usp-section::before{
+  content:'';position:absolute;top:0;right:0;
+  width:300px;height:300px;
+  background:radial-gradient(circle, rgba(224, 64, 251, 0.05) 0%, transparent 70%);
+  pointer-events:none;
+}
+.usp-head{
+  padding:14px 22px;
+  border-bottom:1px solid var(--b1);
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(0,0,0,0.2);
+  position:relative;z-index:1;
+}
+.usp-title{
+  font-family:var(--syne);font-size:11px;letter-spacing:1.5px;
+  color:var(--p-lavender);font-weight:700;
+}
+.usp-badge{
+  font-size:10px;letter-spacing:0.5px;
+  color:var(--violet);
+  padding:3px 8px;border-radius:3px;
+  background:rgba(224, 64, 251, 0.1);
+}
+.usp-body{padding:22px;position:relative;z-index:1;}
+.usp-grid{
+  display:grid;grid-template-columns:1fr 1fr;gap:18px;
+}
+@media (max-width:720px){.usp-grid{grid-template-columns:1fr;}}
+.usp-card{
+  background:var(--s2);border:1px solid var(--b1);border-radius:8px;
+  padding:18px 20px;display:flex;flex-direction:column;
+}
+.usp-card-bot{border-color:rgba(224, 64, 251, 0.2);}
+.usp-icon{font-size:24px;margin-bottom:10px;}
+.usp-card h3{
+  font-family:var(--syne);font-size:16px;font-weight:700;
+  margin-bottom:10px;
+  background:linear-gradient(90deg, var(--p-apricot), var(--p-lavender));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+.usp-card p{font-size:12px;color:var(--muted);line-height:1.7;margin-bottom:14px;}
+.usp-card p em{color:var(--text);font-style:normal;}
+.usp-card p code{
+  background:var(--bg);padding:1px 6px;border-radius:3px;
+  color:var(--p-apricot);font-family:var(--mono);font-size:11px;
+}
+.usp-code{
+  background:var(--bg);border:1px solid var(--b1);border-radius:6px;
+  padding:12px 14px;font-family:var(--mono);font-size:11px;
+  color:var(--cyan);overflow-x:auto;line-height:1.6;
+  margin-bottom:14px;white-space:pre;
+}
+.usp-link{
+  font-size:11px;color:var(--p-apricot);text-decoration:none;
+  letter-spacing:0.5px;margin-top:auto;
+  border-bottom:1px solid transparent;transition:border-color 0.2s;
+}
+.usp-link:hover{border-color:var(--p-apricot);}
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -580,6 +649,58 @@ footer a{color:var(--cyan);text-decoration:none;}
 
     <div class="verify-result" id="verifyResult">
       <!-- Filled by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- "Login mit HHTTPS"-Button für Plattformen + Maschinen-Hinweis -->
+<div class="usp-section">
+  <div class="usp-head">
+    <span class="usp-title">FÜR ENTWICKLER & BOT-BETREIBER</span>
+    <span class="usp-badge">⚡ Integration</span>
+  </div>
+  <div class="usp-body">
+    <div class="usp-grid">
+      <!-- Für Plattformen: Login mit HHTTPS -->
+      <div class="usp-card">
+        <div class="usp-icon">🔐</div>
+        <h3>"Mit HHTTPS bestätigen"-Button</h3>
+        <p>
+          Baue auf deiner Plattform einen Button ein, mit dem sich verifizierte Menschen
+          mit Rolle und Vertrauensstufe anmelden — ohne Passwörter, ohne deine Daten zu
+          teilen. Pairwise-Subjects, PKCE, OpenID Connect.
+        </p>
+        <pre class="usp-code">&lt;a href="https://hhttps.org/hhttps/oauth/authorize
+   ?response_type=code
+   &amp;client_id=DEIN_CLIENT
+   &amp;redirect_uri=https://deine-site.de/cb
+   &amp;scope=openid+role+verification_method
+   &amp;code_challenge=...
+   &amp;code_challenge_method=S256"&gt;
+  Mit HHTTPS bestätigen
+&lt;/a&gt;</pre>
+        <a href="/spec#oauth" class="usp-link">Volle Integrations-Anleitung →</a>
+      </div>
+
+      <!-- Für Bots: Maschinen-Token -->
+      <div class="usp-card usp-card-bot">
+        <div class="usp-icon">🤖</div>
+        <h3>Auch Maschinen können hier teilnehmen</h3>
+        <p>
+          Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren,
+          eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet
+          (<code>actorType: bot</code>). So bleiben Plattformen ehrlich.
+        </p>
+        <pre class="usp-code">curl -X POST https://hhttps.org/hhttps/machine/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operatorName": "MeinBot",
+    "purpose": "Q&amp;A Antworten auf ask.iamhmn.org",
+    "role": "developer",
+    "contactEmail": "ops@meinbot.de"
+  }'</pre>
+        <a href="/spec#machine" class="usp-link">Maschinen-Token-Doku →</a>
+      </div>
     </div>
   </div>
 </div>

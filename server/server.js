@@ -2071,24 +2071,44 @@ app.get('/hhttps/protected', async (req, res) => {
 // ─── Machine Tokens ───────────────────────────────────────────────────────────
 
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
-  const { operatorName, operatorUrl, purpose, contactEmail } = req.body;
+  const { operatorName, operatorUrl, purpose, contactEmail, role } = req.body;
   if (!operatorName || !purpose)
     return res.status(400).json({ error: 'operatorName und purpose sind erforderlich.' });
+
+  // Optional self-declared role for the bot. Must be one of the existing
+  // HHTTPS roles. No verification — pilot mode (see migration-phase-4 docs).
+  let normalizedRole = null;
+  let roleLabel = null;
+  let roleIcon = null;
+  if (role) {
+    if (!ROLES[role]) {
+      return res.status(400).json({
+        error: 'invalid_role',
+        detail: `Unbekannte Rolle "${role}". Erlaubte Rollen: ${Object.keys(ROLES).join(', ')}.`,
+      });
+    }
+    normalizedRole = role;
+    roleLabel      = ROLES[role].label;
+    roleIcon       = ROLES[role].icon;
+  }
 
   const operatorId = 'op-' + crypto.randomBytes(8).toString('hex');
   const apiKey     = 'mk-' + crypto.randomBytes(24).toString('hex');
   const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
 
   await db.machineOperators.create({
-    operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash
+    operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash,
+    role: normalizedRole, roleLabel, roleIcon,
   });
 
   res.status(201).json({
     hhttps: { version: '0.4.1' },
     operatorId, apiKey,
+    role: normalizedRole,
+    roleLabel,
     warning: 'Speichere den API-Key sicher — er wird nur einmal angezeigt.',
     tokenEndpoint: `${BASE_URL}/hhttps/machine/token`,
-    message: `Operator "${operatorName}" registriert. Mit apiKey Maschinen-Token ausstellen.`
+    message: `Operator "${operatorName}"${normalizedRole ? ` (Rolle: ${roleLabel})` : ''} registriert. Mit apiKey Maschinen-Token ausstellen.`
   });
 });
 
@@ -2105,12 +2125,21 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
     return res.status(401).json({ error: 'Ungültiger API-Key.' });
 
   const jti   = uuid();
-  const token = signToken({
+  const tokenPayload = {
     jti, sub: 'machine', iss: `hhttps://${RP_ID}`,
     human: false, actorType: 'bot',
     operatorId, operatorName: op.operator_name, purpose: op.purpose,
     ia: Math.floor(Date.now() / 1000)
-  }, { expiresIn: MACHINE_TTL });
+  };
+  // If the operator self-declared a role at /machine/register, propagate it
+  // into the token claims. Origins (like ask.iamhmn.org) can use this for
+  // role-based logic just as they do for human OAuth tokens.
+  if (op.role) {
+    tokenPayload.role       = op.role;
+    tokenPayload.role_label = op.role_label;
+    tokenPayload.role_icon  = op.role_icon;
+  }
+  const token = signToken(tokenPayload, { expiresIn: MACHINE_TTL });
 
   await db.tokens.create({
     jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000
