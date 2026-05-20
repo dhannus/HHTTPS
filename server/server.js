@@ -42,6 +42,10 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 
+// Privacy Pass module (additive, RFC 9576-9578)
+import { initPrivacyPass, privacyPassRouter, privacyPassWellKnownRouter }
+  from './privacy-pass/index.js';
+
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -383,6 +387,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(join(__dirname, 'public')));
+
+// Privacy Pass routes (additive, see privacy-pass/index.js)
+app.use(privacyPassWellKnownRouter);
+app.use('/privacy-pass', privacyPassRouter);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -2866,6 +2874,9 @@ app.get('/hhttps/stats', async (req, res) => {
 async function main() {
   // 1. Init keys
   loadOrCreateKeys();
+
+  // 1b. Init Privacy Pass module (loads VOPRF keys + runs migrations)
+  await initPrivacyPass();
 
   // 2. Init database
   db.init();
