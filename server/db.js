@@ -43,7 +43,7 @@ export function init() {
 export function pool() { return _pool || init(); }
 
 // Convenience query wrapper with logging on errors
-async function q(text, params = []) {
+export async function q(text, params = []) {
   try {
     const result = await pool().query(text, params);
     return result;
@@ -169,6 +169,8 @@ export const sessions = {
       emailTrustBonus: 'email_trust_bonus',
       emailCategory:   'email_category',
       emailsSent:      'emails_sent',
+      githubVerified:    'github_verified',
+      githubTrustBonus:  'github_trust_bonus',
       role:            'role',
       roleLevel:       'role_level',
       trustScore:      'trust_score'
@@ -210,6 +212,8 @@ export const sessions = {
       emailTrustBonus: r.email_trust_bonus,
       emailCategory:   r.email_category,
       emailsSent:      r.emails_sent,
+      githubVerified:   r.github_verified,
+      githubTrustBonus: r.github_trust_bonus,
       role:            r.role,
       roleLevel:       r.role_level,
       trustScore:      r.trust_score,

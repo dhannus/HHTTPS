@@ -46,6 +46,12 @@ import * as db from './db.js';
 import { initPrivacyPass, privacyPassRouter, privacyPassWellKnownRouter }
   from './privacy-pass/index.js';
 
+// External provider verification (GitHub for now; extends to ORCID, LinkedIn)
+import {
+  isGithubConfigured, startGithubVerify, handleGithubCallback,
+  getGithubStatus, startGithubVerifyCleanup
+} from './external-verify.js';
+
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1900,6 +1906,55 @@ app.post('/hhttps/email/status', async (req, res) => {
   });
 });
 
+// ─── GitHub Verification (for `developer` role) ───────────────────────────────
+// Pseudonymity-preserving: GitHub username/ID/repo-count/follower-count are
+// NEVER persisted. Only sha256(github:id:pepper) and the resulting trust
+// score survive. See external-verify.js for the full contract.
+
+app.get('/hhttps/verify/github/start', async (req, res) => {
+  const { session: sessionId } = req.query;
+  if (!sessionId) return res.status(400).send('session parameter required');
+
+  const session = await db.sessions.get(sessionId);
+  if (!session?.verified) return res.status(401).send('Ungültige Session.');
+
+  if (!isGithubConfigured()) {
+    return res.status(503).json({
+      error: 'github_not_configured',
+      detail: 'Dieser HHTTPS-Issuer hat keine GitHub-OAuth-App konfiguriert. Bitte den Betreiber kontaktieren.'
+    });
+  }
+
+  try {
+    const authUrl = await startGithubVerify({ sessionId, redirectBase: BASE_URL });
+    res.redirect(authUrl);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/hhttps/verify/github/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  if (error) return res.redirect(`/?github_verify=error&reason=${encodeURIComponent(error)}`);
+  if (!code || !state) return res.redirect('/?github_verify=error&reason=missing_params');
+
+  try {
+    const result = await handleGithubCallback({ code, state, redirectBase: BASE_URL });
+    const warn = result.alreadyOwnedBy ? '&warning=anchor_collision' : '';
+    res.redirect(
+      `/?github_verify=success&score=${result.trustScore}&session=${result.sessionId}${warn}`
+    );
+  } catch (e) {
+    res.redirect(`/?github_verify=error&reason=${encodeURIComponent(e.message)}`);
+  }
+});
+
+app.post('/hhttps/verify/github/status', async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  res.json(await getGithubStatus(sessionId));
+});
+
 // ─── Role Declaration ─────────────────────────────────────────────────────────
 
 app.post('/hhttps/role/declare', async (req, res) => {
@@ -1916,7 +1971,13 @@ app.post('/hhttps/role/declare', async (req, res) => {
   let trustScore = 60;
   let note       = null;
 
-  if (session.emailVerified && session.emailTrustBonus) {
+  // GitHub takes precedence for developer if both are set, since it's a
+  // stronger pseudonymous signal than mere email-domain classification.
+  if (session.githubVerified && session.githubTrustBonus && role === 'developer') {
+    vMethod    = 'github-verified';
+    trustScore = Math.max(trustScore, session.githubTrustBonus);
+    note       = `GitHub-Konto verifiziert (Trust ${session.githubTrustBonus}).`;
+  } else if (session.emailVerified && session.emailTrustBonus) {
     vMethod    = session.emailLevel || 'email-verified';
     trustScore = Math.max(trustScore, session.emailTrustBonus);
     note = `E-Mail-Domain "${session.emailDomain}" automatisch verifiziert.`;
@@ -2877,6 +2938,9 @@ async function main() {
 
   // 1b. Init Privacy Pass module (loads VOPRF keys + runs migrations)
   await initPrivacyPass();
+
+  // 1c. Start cleanup of expired pending OAuth states (GitHub verify)
+  startGithubVerifyCleanup();
 
   // 2. Init database
   db.init();

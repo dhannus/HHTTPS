@@ -266,7 +266,7 @@ export const VERIFICATION_LEVELS = {
   'self-declared':         { level: 1, label: 'Selbstdeklariert',         trustScore: 30 },
   'webauthn':              { level: 2, label: 'WebAuthn verifiziert',     trustScore: 60 },
   'email-verified':        { level: 3, label: 'E-Mail verifiziert',       trustScore: 70 },
-  'github-verified':       { level: 3, label: 'GitHub verifiziert',       trustScore: 72 },
+  'github-verified':       { level: 3, label: 'GitHub verifiziert',       trustScore: 70 },
   'school-email':          { level: 3, label: 'Schul-E-Mail',             trustScore: 75 },
   'medical-email':         { level: 3, label: 'Klinik-/Praxis-E-Mail',    trustScore: 78 },
   'lawyer-email':          { level: 3, label: 'Kanzlei-E-Mail',           trustScore: 78 },
