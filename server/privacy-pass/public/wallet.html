@@ -186,6 +186,83 @@ input:focus { outline: none; border-color: var(--cyan); }
 .wallet-tile .lab { font-size: 10px; color: var(--muted); margin-top: 4px; }
 .wallet-empty { color: var(--muted); font-size: 12px; padding: 14px 0; font-style: italic; }
 
+/* Two-method chooser demo (Privacy Pass vs HHTTPS) */
+.method-demo {
+  margin-top: 16px;
+  border: 1px solid var(--b1);
+  border-radius: 12px;
+  padding: 20px;
+  background: rgba(0,0,0,0.2);
+}
+.method-demo-q {
+  font-family: var(--syne);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  text-align: center;
+  margin-bottom: 18px;
+}
+.method-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 16px;
+  align-items: center;
+}
+.method {
+  background: var(--s2);
+  border: 1px solid var(--b1);
+  border-radius: 10px;
+  padding: 18px 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.method-ico { font-size: 28px; margin-bottom: 8px; }
+.method h4 {
+  font-family: var(--syne);
+  font-size: 15px;
+  margin-bottom: 8px;
+  color: var(--p-apricot);
+}
+.method p {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: 14px;
+  flex: 1;
+}
+.method button, .method-btn-link {
+  display: inline-block;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--mono);
+  text-decoration: none;
+  cursor: pointer;
+  border: none;
+  text-align: center;
+}
+.method-btn-link {
+  background: transparent;
+  color: var(--cyan);
+  border: 1px solid var(--b2);
+  transition: border-color .2s, color .2s;
+}
+.method-btn-link:hover { border-color: var(--cyan); }
+.method-or {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+@media (max-width: 600px) {
+  .method-grid { grid-template-columns: 1fr; }
+  .method-or { padding: 4px 0; }
+}
+
 /* quota line */
 .quota {
   display: flex; gap: 18px; font-size: 11px; margin-top: 12px; color: var(--muted);
@@ -401,6 +478,46 @@ footer .b { color: var(--text); }
   <div id="wallet-content" class="wallet-empty">Noch keine Tokens.</div>
 </div>
 
+<!-- ═══ Card 5: Token verwenden (Demo) ══════════════════════════════════ -->
+<div class="card hidden" id="card-redeem">
+  <div class="card-head">
+    <div class="card-num">5</div>
+    <h2>Token verwenden</h2>
+  </div>
+  <p class="sub">
+    So sieht es aus, wenn eine Plattform dich verifizieren lässt. <em>Du</em> entscheidest,
+    wie du dich bestätigst: anonym (ein Token wird verbraucht) oder mit deiner verifizierten
+    HHTTPS-Rolle. Probier den Klick hier mit deinem Vorrat aus.
+  </p>
+
+  <div class="method-demo">
+    <div class="method-demo-q">„Bist du ein Mensch?"</div>
+    <div class="method-grid">
+      <div class="method">
+        <div class="method-ico">🕶️</div>
+        <h4>Anonym bestätigen</h4>
+        <p>Verbraucht einen Privacy-Pass-Token. Unverknüpfbar — kein Profil, keine Rolle, kein Trace.</p>
+        <button id="btn-redeem" onclick="redeemDemo()">✓ Anonym bestätigen</button>
+      </div>
+      <div class="method-or">oder</div>
+      <div class="method">
+        <div class="method-ico">🪪</div>
+        <h4>Mit HHTTPS verifizieren</h4>
+        <p>Zeigt deine verifizierte Rolle + Trust-Score (pseudonym). Kein Token-Verbrauch.</p>
+        <a class="method-btn-link" href="https://hhttps.org/" target="_blank" rel="noopener">🪪 Mit HHTTPS verifizieren →</a>
+      </div>
+    </div>
+    <div class="log" id="log-redeem"><span class="dim">Wähle eine Methode.</span></div>
+  </div>
+
+  <p class="sub" style="margin-top:18px;font-size:13px;">
+    <strong style="color:var(--text)">Wann was?</strong> Anonym (Privacy Pass) eignet sich,
+    wenn nur „echter Mensch" zählt — z. B. Abstimmungen, Kommentare, Rate-Limiting ohne Tracking.
+    Mit HHTTPS-Token, wenn die <em>Rolle</em> zählt — z. B. „verifizierter Arzt" oder
+    „Journalistin mit Trust 85".
+  </p>
+</div>
+
 <!-- ═══ Footer ══════════════════════════════════════════════════════════ -->
 <footer>
   <p><span class="b">HHTTPS Protocol</span> · iamhmn Initiative · EUPL-1.2</p>
@@ -481,6 +598,7 @@ const L = {
   role:   (m, c) => log('log-role',   m, c),
   verify: (m, c) => log('log-verify', m, c),
   tokens: (m, c) => log('log-tokens', m, c),
+  redeem: (m, c) => log('log-redeem', m, c),
 };
 
 function setActive(cardId) {
@@ -532,6 +650,14 @@ async function walletClear() {
   return new Promise((res, rej) => {
     const tx = db.transaction(STORE, 'readwrite');
     tx.objectStore(STORE).clear();
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+}
+async function walletRemove(id) {
+  const db = await openDb();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).delete(id);
     tx.oncomplete = res; tx.onerror = () => rej(tx.error);
   });
 }
@@ -817,6 +943,7 @@ window.refreshEligibility = async function () {
       L.verify(`✓ Alle Anforderungen erfüllt. Trust-Score: ${d.trustScore}`, 'ok');
       setDone('card-verify');
       document.getElementById('card-wallet').classList.remove('hidden');
+      document.getElementById('card-redeem').classList.remove('hidden');
       setActive('card-wallet');
       document.getElementById('trust-score').textContent = String(d.trustScore);
       await refreshQuota();
@@ -1073,6 +1200,51 @@ window.clearWallet = async function () {
   await walletClear();
   L.tokens('Wallet geleert.', 'info');
   refreshWallet();
+};
+
+// ─── Step 5: Token einlösen (Demo) ───────────────────────────────────────
+// Demonstrates consuming one anonymous token. Takes a token from the wallet,
+// POSTs it to /privacy-pass/redeem (which verifies the signature AND marks the
+// nonce spent server-side), then removes it from the local wallet on success.
+window.redeemDemo = async function () {
+  const btn = document.getElementById('btn-redeem');
+  const all = await walletAll();
+  if (all.length === 0) {
+    L.redeem('Kein Token im Vorrat — hole oben in Schritt 4 erst welche.', 'err');
+    return;
+  }
+
+  btn.disabled = true;
+  const t = all[0];  // consume the oldest token
+  L.redeem('POST /privacy-pass/redeem — löse einen Token ein …', 'info');
+
+  try {
+    const r = await fetch('/privacy-pass/redeem', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: t.token }),
+    });
+    const d = await r.json();
+
+    if (d.valid && d.redeemed) {
+      await walletRemove(t.id);
+      const remaining = (await walletAll()).length;
+      const label = (ROLE_DEFS[d.role]?.label) || d.role;
+      L.redeem(`✓ Als Mensch bestätigt — anonym (Rolle: ${label}).`, 'ok');
+      L.redeem(`  1 Token verbraucht · ${remaining} im Vorrat · unverknüpfbar.`, 'ok');
+      await refreshWallet();
+    } else if (d.valid && d.reason === 'already_redeemed') {
+      // Server says this nonce was already spent — clean it from the wallet.
+      await walletRemove(t.id);
+      L.redeem('Dieser Token war bereits verbraucht — aus dem Vorrat entfernt.', 'err');
+      await refreshWallet();
+    } else {
+      L.redeem(`✗ Token ungültig: ${d.reason || d.detail || 'unbekannt'}`, 'err');
+    }
+  } catch (e) {
+    L.redeem('Fehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

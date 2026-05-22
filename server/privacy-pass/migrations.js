@@ -94,6 +94,24 @@ const MIGRATIONS = [
         WHERE used_at IS NULL;
     `,
   },
+
+  // ── Redeemed tokens: one-time-use enforcement. When a token is redeemed
+  //    (consumed at a confirm/verify action), its nonce is recorded here.
+  //    A second redemption of the same nonce is rejected as double-spend.
+  //    We store ONLY the nonce (base64url) — no link to any identity, so
+  //    unlinkability is preserved.
+  {
+    name: 'pp_redeemed_v1',
+    sql: `
+      CREATE TABLE IF NOT EXISTS pp_redeemed (
+        nonce         TEXT PRIMARY KEY,
+        role          TEXT,
+        redeemed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS pp_redeemed_at_idx
+        ON pp_redeemed (redeemed_at DESC);
+    `,
+  },
 ];
 
 export async function runMigrations() {

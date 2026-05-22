@@ -24,7 +24,7 @@ import { handleAggregateDirectory,
          handleRoleDirectory }            from './well-known.js';
 import { handleTokenRequest,
          handleKeysList }                 from './issuer.js';
-import { handleVerify }                   from './verifier.js';
+import { handleVerify, handleRedeem }      from './verifier.js';
 import { issuanceRouter }                 from './issuance.js';
 import { verificationsRouter }            from './verifications-api.js';
 
@@ -72,6 +72,7 @@ privacyPassRouter.get('/keys', handleKeysList);
 
 // Public verify endpoint
 privacyPassRouter.post('/verify', express.json({ limit: '4kb' }), handleVerify);
+privacyPassRouter.post('/redeem', express.json({ limit: '4kb' }), handleRedeem);
 
 // Per-role spec-compliant discovery
 privacyPassRouter.get('/r/:role/.well-known/private-token-issuer-directory', handleRoleDirectory);
