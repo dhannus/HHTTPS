@@ -2006,13 +2006,17 @@ app.post('/hhttps/role/declare', async (req, res) => {
   const cred = session.credentialId ? await db.credentials.get(session.credentialId) : null;
 
   // Issue access + refresh token
+  // Note: `method` is the verification method that lifted the trust score
+  // (github-verified, email-verified, orcid, ...). 'webauthn-passkey' is
+  // the baseline assertion that there is a real human; vMethod tells you
+  // WHAT was additionally verified about that human.
   const { token } = await issueAccessToken({
     userId:     session.userId,
     role,
     roleLabel:  roleDef.label,
     roleLevel:  vMethod,
     trustScore,
-    method:     'webauthn-passkey',
+    method:     vMethod,
     deviceType: session.deviceType
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, role);
@@ -2022,11 +2026,11 @@ app.post('/hhttps/role/declare', async (req, res) => {
 
   // Webhooks (fire-and-forget)
   fireEvent('role.declared', { role, roleLevel: vMethod, trustScore });
-  fireEvent('token.issued',  { role, trustScore, method: 'webauthn-passkey' });
+  fireEvent('token.issued',  { role, trustScore, method: vMethod });
 
   setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
                    role, roleLevel: vMethod, trustScore,
-                   token, method: 'webauthn-passkey' });
+                   token, method: vMethod });
   res.setHeader('HHTTPS-Refresh-Token', refresh);
 
   res.json({

@@ -21,7 +21,9 @@
   --red:    #ff5252;
   --violet: #e040fb;
   --text:   #e0ecff;
-  --muted:  #4a6080;
+  --muted:  #6f88aa;
+  /* Stronger muted for body text on dark backgrounds — meets WCAG-AA */
+  --text-muted-strong: #9fb3cf;
   /* Pastel accents (matching iamhmn.org brand palette) */
   --p-sage:    #A8B89E;
   --p-terra:   #C97D5B;
@@ -36,8 +38,20 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{
   background:var(--bg);color:var(--text);
-  font-family:var(--mono);font-size:13px;line-height:1.6;
+  font-family:var(--mono);font-size:16px;line-height:1.6;
   min-height:100vh;overflow-x:hidden;
+}
+
+/* Accessibility: visible focus ring on all interactive elements */
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible{
+  outline: 3px solid var(--cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Minimum touch-target size 44x44 for buttons (WCAG 2.5.5) */
+button, .btn, .vopt{
+  min-height: 44px;
 }
 body::before{
   content:'';position:fixed;inset:0;
@@ -174,19 +188,37 @@ body::before{
 
 /* ─ verification selector ─ */
 .veri-box{background:rgba(0,0,0,.3);border:1px solid var(--b2);
-  border-radius:8px;padding:16px;margin-bottom:16px;display:none;}
+  border-radius:8px;padding:18px;margin-bottom:16px;display:none;}
 .veri-box.show{display:block;animation:fi .3s;}
-.veri-box h4{font-size:11px;color:var(--cyan);letter-spacing:1px;margin-bottom:12px;}
-.veri-opts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
-.vopt{padding:6px 12px;border-radius:6px;border:1px solid var(--b2);
-  background:var(--s2);cursor:pointer;font-size:11px;color:var(--muted);transition:all .2s;}
-.vopt:hover{border-color:var(--b2);color:var(--text);}
-.vopt.sel{border-color:var(--amber);color:var(--amber);background:rgba(255,171,64,.06);}
+.veri-box h4{font-size:13px;color:var(--cyan);letter-spacing:1px;margin-bottom:12px;font-weight:600;}
+.veri-opts{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
+.vopt{padding:10px 16px;border-radius:6px;border:1px solid var(--b2);
+  background:var(--s2);cursor:pointer;font-size:13px;color:var(--text-muted-strong);transition:all .2s;
+  min-height:44px;display:inline-flex;align-items:center;}
+.vopt:hover{border-color:var(--cyan);color:var(--text);}
+.vopt.sel{border-color:var(--amber);color:var(--amber);background:rgba(255,171,64,.08);font-weight:600;}
 .vfield{width:100%;background:var(--bg);border:1px solid var(--b2);
-  border-radius:6px;padding:9px 12px;color:var(--text);font-family:var(--mono);
-  font-size:12px;outline:none;transition:border-color .2s;margin-bottom:8px;}
+  border-radius:6px;padding:12px 14px;color:var(--text);font-family:var(--mono);
+  font-size:14px;outline:none;transition:border-color .2s;margin-bottom:8px;min-height:44px;}
 .vfield:focus{border-color:var(--cyan);}
-.vfield::placeholder{color:var(--muted);}
+.vfield::placeholder{color:var(--text-muted-strong);}
+
+/* Status badge rows shown after a verification succeeds */
+.verify-badge-row{
+  margin-top:14px;padding:12px 14px;border-radius:6px;font-size:13px;
+  background:rgba(0,230,118,0.1);border:1px solid rgba(0,230,118,0.25);color:var(--green);
+}
+.verify-badge-row.verify-badge-github{
+  background:rgba(181,168,217,0.14);border-color:rgba(181,168,217,0.32);color:var(--p-lavender);
+}
+
+/* Tab-style verification option (used for the new single-box layout) */
+.vopt[role="tab"]{
+  position:relative;
+}
+.vopt[role="tab"][aria-selected="true"]{
+  border-color:var(--amber);color:var(--amber);background:rgba(255,171,64,.08);font-weight:600;
+}
 
 /* ─ trust meter ─ */
 .trust-meter{margin-bottom:16px;}
@@ -759,57 +791,21 @@ footer a{color:var(--cyan);text-decoration:none;}
         <div class="trust-bar"><div class="trust-fill" id="trustFill" style="width:60%"></div></div>
       </div>
 
-      <div class="veri-box" id="veriBox">
-        <h4>// OPTIONALE VERIFIKATION</h4>
-        <div class="veri-opts" id="veriOpts"></div>
-        <div id="veriFields"></div>
-      </div>
-
-
-      <!-- Email verification box -->
-      <div class="veri-box show" id="emailBox" style="margin-top:12px;border-color:rgba(0,229,255,0.2);">
-        <h4 style="color:var(--cyan)">// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN</h4>
-        <p style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.6;">
-          Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen.
-          Bildungs-Domains (<code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code>),
-          offizielle Behörden (<code style="color:var(--cyan)">bundestag.de</code>) und
-          Verbände werden automatisch erkannt. <strong style="color:var(--text)">Die Adresse wird nicht gespeichert.</strong>
+      <div class="veri-box show" id="veriBox">
+        <h4 id="veriBoxHeader">// OPTIONALE VERIFIKATION</h4>
+        <p class="veri-intro" id="veriIntro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
+          Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.
         </p>
-        <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <input class="vfield" id="emailInput" type="email" placeholder="deine@email.de"
-            style="margin:0;flex:1" oninput="previewEmailDomain(this.value)">
-          <button class="btn btn-c" id="btnSendEmail" onclick="doSendEmail()" style="white-space:nowrap;">
-            ✉ Link senden
-          </button>
-        </div>
-        <div id="domainPreview" style="font-size:11px;color:var(--muted);min-height:16px;"></div>
-        <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>
-        <!-- Email verified badge -->
-        <div id="emailVerifiedBadge" style="display:none;margin-top:10px;
-          background:rgba(0,230,118,0.08);border:1px solid rgba(0,230,118,0.2);
-          border-radius:6px;padding:10px 12px;font-size:12px;color:var(--green);">
+        <div class="veri-opts" id="veriOpts" role="tablist" aria-label="Verifikationsmethode wählen"></div>
+
+        <!-- Dynamic content area for the chosen method. Filled by JS based on tab selection. -->
+        <div id="veriSlot" style="margin-top:14px;"></div>
+
+        <!-- Status badges (success states, shown after verification completes) -->
+        <div id="emailVerifiedBadge" class="verify-badge-row" style="display:none;">
           ✓ E-Mail verifiziert — Trust Score erhöht!
         </div>
-      </div>
-
-      <!-- GitHub-Verifikation: erscheint nur für Rolle "developer" -->
-      <div class="veri-box" id="githubBox" style="display:none;margin-top:12px;border-color:rgba(181,168,217,0.3);">
-        <h4 style="color:var(--p-lavender)">// GITHUB VERIFIKATION — FÜR ENTWICKLER:INNEN</h4>
-        <p style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.6;">
-          Verbinde dein GitHub-Konto, um deine Entwickler-Rolle zu bestätigen.
-          <strong style="color:var(--text)">Wir speichern keinen Benutzernamen und keine Konto-Daten</strong> —
-          nur einen einseitig-gehashten Anker, aus dem nichts rückrechenbar ist.
-          Account-Alter, Repo-Anzahl und Follower fließen einmalig in einen Trust-Score (60-85) ein
-          und werden danach verworfen.
-        </p>
-        <button class="btn btn-c" id="btnGithubVerify" onclick="startGithubVerify()" style="background:linear-gradient(135deg,#B5A8D9,#9A8BC2);border-color:#B5A8D9;">
-          🔐 Mit GitHub bestätigen
-        </button>
-        <div class="msg" id="githubMsg" style="margin-top:8px;margin-bottom:0;"></div>
-        <!-- GitHub verified badge -->
-        <div id="githubVerifiedBadge" style="display:none;margin-top:10px;
-          background:rgba(181,168,217,0.12);border:1px solid rgba(181,168,217,0.3);
-          border-radius:6px;padding:10px 12px;font-size:12px;color:var(--p-lavender);">
+        <div id="githubVerifiedBadge" class="verify-badge-row verify-badge-github" style="display:none;">
           ✓ GitHub verifiziert — Trust Score <span id="githubTrustValue">—</span>
         </div>
       </div>
@@ -824,6 +820,13 @@ footer a{color:var(--cyan);text-decoration:none;}
       <div class="token-display show" id="tokenDisplay">
         <div class="tk-badge">
           <div class="tk-b" id="tkBadge">✓ HHTTPS-Token ausgestellt</div>
+          <button type="button" id="btnLogout" onclick="doLogout()" class="btn-logout"
+            style="margin-left:auto;font-size:12px;padding:6px 12px;background:transparent;
+                   border:1px solid var(--b2);color:var(--text-muted-strong);
+                   border-radius:6px;cursor:pointer;min-height:36px;"
+            aria-label="Abmelden und alle gespeicherten Token löschen">
+            Abmelden
+          </button>
         </div>
         <div class="tk-raw" id="tkRaw"></div>
         <div class="tk-claims">
@@ -832,6 +835,7 @@ footer a{color:var(--cyan);text-decoration:none;}
           <div class="tc"><div class="k">TRUST</div><div class="v" id="tcT">—</div></div>
           <div class="tc"><div class="k">LEVEL</div><div class="v" id="tcL">—</div></div>
         </div>
+        <div id="tokenExpiryHint" style="margin-top:10px;font-size:12px;color:var(--text-muted-strong);min-height:18px;"></div>
       </div>
       <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled>
         /hhttps/check aufrufen — Live-Test →
@@ -1085,7 +1089,7 @@ const ROLES_LOCAL = {
 const VMETHOD_LABELS = {
   'self-declared':       { l:'Selbstdeklariert',   score:30, field:null },
   'email-verified':      { l:'E-Mail verifiziert', score:70, field:{p:'E-Mail-Adresse', key:'email'} },
-  'github-verified':     { l:'GitHub verifiziert', score:72, field:{p:'GitHub-Username', key:'github'} },
+  'github-verified':     { l:'GitHub verifiziert', score:70, field:null },
   'school-email':        { l:'Schul-E-Mail',       score:75, field:{p:'@*.schule.[bundesland].de', key:'email'} },
   'medical-email':       { l:'Klinik-E-Mail',      score:78, field:{p:'Praxis-/Klinik-E-Mail', key:'email'} },
   'lawyer-email':        { l:'Kanzlei-E-Mail',     score:78, field:{p:'Kanzlei-E-Mail', key:'email'} },
@@ -1406,35 +1410,106 @@ function selectRole(id) {
   document.getElementById('rc-'+id).classList.add('sel');
   document.getElementById('btnDeclare').disabled = false;
 
-  // GitHub verification box: only shown for `developer`
-  const ghBox = document.getElementById('githubBox');
-  if (ghBox) ghBox.style.display = (id === 'developer') ? 'block' : 'none';
+  // Update header to show the chosen role
+  const header = document.getElementById('veriBoxHeader');
+  if (header) header.textContent = `// OPTIONALE VERIFIKATION — ${ROLES_LOCAL[id].label.toUpperCase()}`;
 
-  // Build verification options for this role
-  const methods = ROLES_LOCAL[id]?.methods || ['self-declared'];
-  const vb = document.getElementById('veriBox');
-  vb.innerHTML = `<h4>// OPTIONALE VERIFIKATION — ${ROLES_LOCAL[id].label.toUpperCase()}</h4>
-    <div class="veri-opts">${methods.map(m => `
-      <div class="vopt ${m==='self-declared'?'sel':''}" onclick="selectVMethod('${id}','${m}')">${VMETHOD_LABELS[m]?.l||m}</div>
-    `).join('')}</div><div id="veriFields"></div>`;
-  vb.classList.add('show');
+  // Build tab options for this role. github-verified appears only for developer.
+  let methods = (ROLES_LOCAL[id]?.methods || ['self-declared']).slice();
+  if (id === 'developer' && !methods.includes('github-verified')) {
+    methods.push('github-verified');
+  }
+
+  const opts = document.getElementById('veriOpts');
+  opts.innerHTML = methods.map(m => {
+    const label = VMETHOD_LABELS[m]?.l || m;
+    const selected = m === 'self-declared' ? 'true' : 'false';
+    return `<div class="vopt" role="tab"
+              tabindex="0"
+              aria-selected="${selected}"
+              data-method="${m}"
+              onclick="selectVMethod('${id}','${m}', event)"
+              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectVMethod('${id}','${m}',event)}">${label}</div>`;
+  }).join('');
+
+  // Show the box, clear the slot, default to self-declared
+  document.getElementById('veriBox').classList.add('show');
+  document.getElementById('veriSlot').innerHTML = '';
+  // Mark the self-declared tab as selected by default
+  const first = opts.querySelector('.vopt[data-method="self-declared"]');
+  if (first) first.setAttribute('aria-selected', 'true');
   setTrust(60);
 }
 
-function selectVMethod(roleId, method) {
+function selectVMethod(roleId, method, evt) {
   selVMethod = method; vData = {};
-  document.querySelectorAll('.vopt').forEach(v => v.classList.remove('sel'));
-  event.target.classList.add('sel');
+
+  // Update aria-selected state on tabs
+  document.querySelectorAll('#veriOpts .vopt').forEach(v => {
+    v.setAttribute('aria-selected', v.dataset.method === method ? 'true' : 'false');
+  });
+
+  const slot = document.getElementById('veriSlot');
   const vm = VMETHOD_LABELS[method];
   const score = Math.max(60, vm?.score || 30);
   setTrust(score);
-  const f = document.getElementById('veriFields');
-  if (vm?.field) {
-    f.innerHTML = `<input class="vfield" id="vfInput"
-      placeholder="${vm.field.p}"
-      oninput="vData['${vm.field.key}']=this.value">`;
+
+  // Render method-specific content into the slot
+  if (method === 'self-declared') {
+    slot.innerHTML = `
+      <p style="font-size:13px;color:var(--text-muted-strong);line-height:1.65;">
+        Du gibst deine Rolle selbst an, ohne weitere Verifikation.
+        Trust Score: <strong style="color:var(--text)">60/100</strong>.
+        Du kannst deinen Score erhöhen, indem du oben einen anderen Tab wählst.
+      </p>`;
+  } else if (method === 'email-verified' || method === 'school-email' || method === 'medical-email' || method === 'lawyer-email' || method === 'official-email') {
+    slot.innerHTML = `
+      <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:12px;line-height:1.65;">
+        Gib deine E-Mail-Adresse ein, um deine Rolle per Domain-Klassifikation zu bestätigen.
+        Bildungs-Domains (<code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code>),
+        offizielle Behörden (<code style="color:var(--cyan)">bundestag.de</code>) und
+        Verbände werden automatisch erkannt.
+        <strong style="color:var(--text)">Die Adresse wird nicht gespeichert.</strong>
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+        <input class="vfield" id="emailInput" type="email"
+          placeholder="deine@email.de"
+          autocomplete="email"
+          style="margin:0;flex:1;min-width:240px;"
+          oninput="previewEmailDomain(this.value)">
+        <button class="btn btn-c" id="btnSendEmail" type="button" onclick="doSendEmail()" style="white-space:nowrap;">
+          ✉ Link senden
+        </button>
+      </div>
+      <div id="domainPreview" style="font-size:13px;color:var(--text-muted-strong);min-height:18px;"></div>
+      <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
+  } else if (method === 'github-verified') {
+    slot.innerHTML = `
+      <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
+        Verbinde dein GitHub-Konto, um deine Entwickler-Rolle zu bestätigen.
+        <strong style="color:var(--text)">Wir speichern keinen Benutzernamen und keine Konto-Daten</strong> —
+        nur einen einseitig gehashten Anker, aus dem nichts rückrechenbar ist.
+        Account-Alter, Repo-Anzahl und Follower fließen einmalig in einen
+        Trust-Score (60–85) ein und werden danach verworfen.
+      </p>
+      <button class="btn btn-c" id="btnGithubVerify" type="button" onclick="startGithubVerify()"
+        style="background:linear-gradient(135deg,#B5A8D9,#9A8BC2);border-color:#B5A8D9;">
+        🔐 Mit GitHub bestätigen
+      </button>
+      <div class="msg" id="githubMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
+  } else if (vm?.field) {
+    // Generic field-based verification (press-card, student-id, association-member, etc.)
+    slot.innerHTML = `
+      <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:12px;line-height:1.65;">
+        Trage deine Kennung ein. Die Eingabe wird nicht dauerhaft gespeichert,
+        sondern nur einmalig im Token-Claim referenziert.
+      </p>
+      <input class="vfield" id="vfInput"
+        placeholder="${vm.field.p}"
+        autocomplete="off"
+        oninput="vData['${vm.field.key}']=this.value">`;
   } else {
-    f.innerHTML = '';
+    slot.innerHTML = '';
   }
 }
 
@@ -1549,7 +1624,7 @@ async function doDeclarRole() {
       roleLevel:        d.role?.level,
       levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
       trustScore:       d.hhttps.trustScore,
-      method:           'webauthn-passkey',
+      method:           d.role?.level || 'webauthn-passkey',
       expiresAt:        d.hhttps.expiresAt,
       refreshExpiresAt: d.hhttps.refreshExpiresAt
     });
@@ -1722,6 +1797,7 @@ function getDomainHint(email) {
 
 function previewEmailDomain(email) {
   const el = document.getElementById('domainPreview');
+  if (!el) return;
   if (!email.includes('@')) { el.textContent=''; return; }
   const h = getDomainHint(email);
   el.innerHTML = `<span style="color:var(--amber)">${h.t}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
@@ -1730,7 +1806,9 @@ function previewEmailDomain(email) {
 
 async function doSendEmail() {
   if (!sessionId) { msg('Bitte erst WebAuthn durchführen.','e'); return; }
-  const email = document.getElementById('emailInput').value.trim();
+  const input = document.getElementById('emailInput');
+  if (!input) { msg('E-Mail-Eingabe nicht aktiv. Bitte den Tab "E-Mail verifiziert" wählen.','e'); return; }
+  const email = input.value.trim();
   if (!email || !email.includes('@')) { msgEmail('Bitte gültige E-Mail eingeben.','e'); return; }
 
   const btn = document.getElementById('btnSendEmail');
@@ -1753,13 +1831,13 @@ async function doSendEmail() {
     }
   } catch(e) {
     msgEmail('Fehler: '+e.message,'e');
-    btn.disabled = false; btn.innerHTML = '✉ Link senden';
+    if (btn) { btn.disabled = false; btn.innerHTML = '✉ Link senden'; }
   }
 }
 
 async function autoVerifyDev(rawToken) {
   // Simulate the verification call (dev mode only)
-  const r = await fetch(`/hhttps/email/verify?token=${rawToken}&session=${sessionId}`);
+  await fetch(`/hhttps/email/verify?token=${rawToken}&session=${sessionId}`);
   // The server redirects, so we check status via the status endpoint
   await checkEmailStatus();
 }
@@ -1772,20 +1850,203 @@ async function checkEmailStatus() {
   });
   const d = await r.json();
   if (d.emailVerified) {
-    document.getElementById('emailVerifiedBadge').style.display = 'block';
-    document.getElementById('emailVerifiedBadge').textContent =
-      `✓ ${d.emailDomain} verifiziert · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
+    const badge = document.getElementById('emailVerifiedBadge');
+    if (badge) {
+      badge.style.display = 'block';
+      badge.textContent =
+        `✓ ${d.emailDomain} verifiziert · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
+    }
     setTrust(Math.max(60, d.trustBonus || 65));
     msgEmail(`✓ E-Mail-Domain "${d.emailDomain}" verifiziert! Trust Score: ${d.trustBonus}/100`,'s');
-    document.getElementById('btnDeclare').innerHTML = 'Rolle + verifizierte E-Mail → Token ausstellen →';
+    const btn = document.getElementById('btnDeclare');
+    if (btn) btn.innerHTML = 'Rolle + verifizierte E-Mail → Token ausstellen →';
   }
 }
 
 function msgEmail(t, type='i') {
   const el = document.getElementById('emailMsg');
+  if (!el) return;  // element only exists when the email tab is active
   el.className = 'msg show ' + type;
   el.textContent = t;
 }
+
+// ─── Logout + Token-Expiry-Lifecycle ────────────────────────────────────────
+// E: Logout must actively clear local storage and reset UI state. F: Token
+// expiry is checked on page load AND every 60 seconds while the page is
+// open. When the access token is expired but the refresh is still valid,
+// the user gets a popup asking whether to refresh; declining triggers
+// full logout.
+
+const HHTTPS_STORAGE_KEYS = ['hhttps_identity', 'hhttps_token', 'hhttps_refresh'];
+// Note: hhttps_uid (the WebAuthn user ID) is intentionally NOT cleared on
+// logout — that's a long-lived device-pseudonym so the user can re-auth
+// without re-registering a new credential.
+
+function doLogout() {
+  if (!confirm('Wirklich abmelden? Das löscht den lokalen Token aus diesem Browser.')) return;
+  performLogout();
+}
+
+function performLogout() {
+  // Clear stored identity + tokens
+  try {
+    HHTTPS_STORAGE_KEYS.forEach(k => localStorage.removeItem(k));
+    sessionStorage.clear();
+  } catch (e) {}
+
+  // Best-effort: tell the server to revoke the access token, fire-and-forget
+  if (hhttpsToken) {
+    try {
+      fetch('/hhttps/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: hhttpsToken }),
+        keepalive: true
+      }).catch(() => {});
+    } catch (e) {}
+  }
+
+  // Reset in-memory state
+  hhttpsToken = null;
+  sessionId   = null;
+  selRole     = null;
+  selVMethod  = 'self-declared';
+  vData       = {};
+
+  // Notify extension (if installed) so its badge clears too
+  try {
+    window.postMessage({ source: 'hhttps-org', type: 'identity-cleared' }, window.location.origin);
+  } catch (e) {}
+
+  // Hard reload so all UI state is fresh
+  window.location.href = '/';
+}
+
+/**
+ * Returns the locally cached identity object, or null if absent.
+ */
+function getStoredIdentity() {
+  try {
+    const raw = localStorage.getItem('hhttps_identity');
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+/**
+ * Returns:
+ *   { state: 'valid',   ttlSec: <seconds until expiry> }
+ *   { state: 'expiring', ttlSec: <seconds, < 60> }
+ *   { state: 'expired', refreshValid: bool }
+ *   { state: 'none' }
+ */
+function getTokenLifecycleState() {
+  const id = getStoredIdentity();
+  if (!id || !id.expiresAt) return { state: 'none' };
+
+  const now    = Date.now();
+  const expAt  = new Date(id.expiresAt).getTime();
+  const rExpAt = id.refreshExpiresAt ? new Date(id.refreshExpiresAt).getTime() : 0;
+  const ttlSec = Math.floor((expAt - now) / 1000);
+
+  if (ttlSec > 60)  return { state: 'valid',    ttlSec };
+  if (ttlSec > 0)   return { state: 'expiring', ttlSec };
+  return { state: 'expired', refreshValid: rExpAt > now };
+}
+
+/**
+ * Update the small hint text next to the token display so the user knows
+ * how long the token is still valid. Called on load + every 30 s.
+ */
+function updateTokenExpiryHint() {
+  const el = document.getElementById('tokenExpiryHint');
+  if (!el) return;
+  const s = getTokenLifecycleState();
+  if (s.state === 'none') { el.textContent = ''; return; }
+  if (s.state === 'valid') {
+    const mins = Math.floor(s.ttlSec / 60);
+    el.textContent = `Token gültig — läuft ab in ${mins} Minute${mins===1?'':'n'}.`;
+    el.style.color = 'var(--text-muted-strong)';
+    return;
+  }
+  if (s.state === 'expiring') {
+    el.textContent = `⚠ Token läuft in unter 1 Minute ab.`;
+    el.style.color = 'var(--amber)';
+    return;
+  }
+  el.textContent = `✗ Token ist abgelaufen.`;
+  el.style.color = 'var(--red)';
+}
+
+let __hhttpsRefreshDialogOpen = false;
+
+/**
+ * Prompt the user when their access token has expired. If they say "yes"
+ * AND the refresh token is still valid, we silently exchange it for a new
+ * access token. If they say "no" or refresh is expired, we log out.
+ */
+async function promptForRefresh() {
+  if (__hhttpsRefreshDialogOpen) return;
+  const s = getTokenLifecycleState();
+  if (s.state !== 'expired') return;
+
+  __hhttpsRefreshDialogOpen = true;
+  try {
+    if (!s.refreshValid) {
+      alert('Deine Sitzung ist abgelaufen. Du wirst abgemeldet.');
+      performLogout();
+      return;
+    }
+
+    const keepLoggedIn = confirm('Dein HHTTPS-Token ist abgelaufen. Möchtest du eingeloggt bleiben?\n\n[OK] = Token erneuern\n[Abbrechen] = Abmelden');
+    if (!keepLoggedIn) {
+      performLogout();
+      return;
+    }
+
+    // Silent refresh via /hhttps/token/refresh
+    const id = getStoredIdentity();
+    const refreshTok = id && id.refreshToken;  // older identities may not store refresh; in that case logout
+    if (!refreshTok) {
+      alert('Kein Refresh-Token verfügbar — bitte neu anmelden.');
+      performLogout();
+      return;
+    }
+
+    const r = await fetch('/hhttps/token/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refreshTok })
+    });
+    if (!r.ok) {
+      alert('Token-Refresh fehlgeschlagen — bitte neu anmelden.');
+      performLogout();
+      return;
+    }
+    const d = await r.json();
+    // Persist the new access token alongside the existing identity
+    const updated = { ...id, token: d.token, expiresAt: d.expiresAt };
+    try { localStorage.setItem('hhttps_identity', JSON.stringify(updated)); } catch (e) {}
+    hhttpsToken = d.token;
+    updateTokenExpiryHint();
+    msg('✓ Token erneuert.', 's');
+  } finally {
+    __hhttpsRefreshDialogOpen = false;
+  }
+}
+
+// Run lifecycle checks on load + periodically
+window.addEventListener('load', () => {
+  updateTokenExpiryHint();
+  const s = getTokenLifecycleState();
+  if (s.state === 'expired') promptForRefresh();
+
+  setInterval(() => {
+    updateTokenExpiryHint();
+    const s2 = getTokenLifecycleState();
+    if (s2.state === 'expired') promptForRefresh();
+  }, 30000);
+});
+
+// ─── End logout + token-expiry section ──────────────────────────────────────
 
 // Check for email_verify result in URL (after redirect from email link)
 window.addEventListener('load', () => {
@@ -1894,7 +2155,7 @@ window.doDeclarRole = async function() {
       roleLevel:        d.role?.level,
       levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
       trustScore:       d.hhttps.trustScore,
-      method:           'webauthn-passkey',
+      method:           d.role?.level || 'webauthn-passkey',
       expiresAt:        d.hhttps.expiresAt,
       refreshExpiresAt: d.hhttps.refreshExpiresAt
     });
