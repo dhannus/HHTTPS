@@ -9,21 +9,24 @@
 <script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
 <style>
 :root {
-  --bg:     #03050a;
-  --s1:     #070d18;
-  --s2:     #0b1525;
-  --b1:     #132035;
-  --b2:     #1c3050;
-  --cyan:   #00e5ff;
-  --blue:   #2979ff;
-  --green:  #00e676;
-  --amber:  #ffab40;
-  --red:    #ff5252;
-  --violet: #e040fb;
-  --text:   #e0ecff;
-  --muted:  #6f88aa;
+  /* Dark teal/pastel-blue palette, derived from #06768d */
+  --bg:     #032128;
+  --s1:     #052e37;
+  --s2:     #073a46;
+  --b1:     #0c4d5d;
+  --b2:     #10677d;
+  --cyan:   #3fe0f0;
+  --blue:   #2bb6d4;
+  --green:  #2fd6a0;
+  --amber:  #ffc35a;
+  --red:    #ff6b6b;
+  --violet: #c98be0;
+  --text:   #eaf6fb;
+  --muted:  #7fa6b4;
   /* Stronger muted for body text on dark backgrounds — meets WCAG-AA */
-  --text-muted-strong: #9fb3cf;
+  --text-muted-strong: #b6d4de;
+  /* The reference brand teal, used for highlights */
+  --teal-ref: #06768d;
   /* Pastel accents (matching iamhmn.org brand palette) */
   --p-sage:    #A8B89E;
   --p-terra:   #C97D5B;
@@ -56,9 +59,9 @@ button, .btn, .vopt{
 body::before{
   content:'';position:fixed;inset:0;
   background:
-    radial-gradient(ellipse 70% 50% at 20% 0%,   rgba(41,121,255,0.07) 0%,transparent 60%),
-    radial-gradient(ellipse 50% 40% at 85% 100%,  rgba(0,229,255,0.06) 0%,transparent 60%),
-    radial-gradient(ellipse 40% 30% at 50% 50%,   rgba(224,64,251,0.03) 0%,transparent 60%);
+    radial-gradient(ellipse 70% 50% at 20% 0%,   rgba(6,118,141,0.22) 0%,transparent 60%),
+    radial-gradient(ellipse 50% 40% at 85% 100%,  rgba(63,224,240,0.10) 0%,transparent 60%),
+    radial-gradient(ellipse 40% 30% at 50% 50%,   rgba(47,214,160,0.05) 0%,transparent 60%);
   pointer-events:none;z-index:0;
 }
 .w{position:relative;z-index:1;max-width:920px;margin:0 auto;padding:36px 20px 80px;}
@@ -74,6 +77,9 @@ body::before{
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
   animation:hue-shift 6s ease-in-out infinite;
   line-height:1;
+  /* Dark contour shadow — drop-shadow works on the gradient pixels,
+     unlike text-shadow which can't render through transparent fill */
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.55)) drop-shadow(0 0 1px rgba(0,0,0,0.4));
 }
 @keyframes hue-shift {
   0%, 100% { background-position: 0% center; }
@@ -87,13 +93,14 @@ body::before{
 
 /* ─ hero ─ */
 .hero{margin-bottom:52px;}
-.hero h1{font-family:var(--syne);font-size:clamp(24px,4vw,38px);
+.hero h1{font-family:var(--syne);font-size:clamp(28px,5vw,44px);
   font-weight:700;line-height:1.15;margin-bottom:14px;letter-spacing:-0.01em;}
 .hero h1 span{
   background:linear-gradient(90deg, var(--cyan), var(--p-apricot));
   -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.5));
 }
-.hero p{color:var(--muted);max-width:560px;line-height:1.7;margin-bottom:20px;}
+.hero p{color:var(--text-muted-strong);max-width:560px;line-height:1.7;margin-bottom:20px;font-size:16px;}
 .hero p em{color:var(--p-apricot);font-style:normal;}
 .caps{display:inline-flex;gap:8px;flex-wrap:wrap;}
 .cap{background:var(--s1);border:1px solid var(--b2);border-radius:4px;
@@ -174,16 +181,16 @@ body::before{
 }
 .role-card{
   background:var(--s2);border:1px solid var(--b1);border-radius:10px;
-  padding:14px 12px;cursor:pointer;transition:all .2s;text-align:center;
+  padding:18px 14px;cursor:pointer;transition:all .2s;text-align:center;
 }
 .role-card:hover{border-color:var(--b2);background:var(--s1);}
 .role-card.sel{
-  border-color:var(--cyan);background:rgba(0,229,255,.06);
-  box-shadow:0 0 16px rgba(0,229,255,.1);
+  border-color:var(--cyan);background:rgba(63,224,240,.08);
+  box-shadow:0 0 16px rgba(63,224,240,.14);
 }
-.role-card .ri{font-size:26px;margin-bottom:6px;}
-.role-card .rl{font-size:11px;font-weight:600;color:var(--text);margin-bottom:3px;}
-.role-card .rd{font-size:10px;color:var(--muted);line-height:1.4;}
+.role-card .ri{font-size:30px;margin-bottom:8px;}
+.role-card .rl{font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px;}
+.role-card .rd{font-size:13px;color:var(--text-muted-strong);line-height:1.5;}
 .role-card.sel .rl{color:var(--cyan);}
 
 /* ─ verification selector ─ */
@@ -302,14 +309,14 @@ body::before{
 .platforms-cta-row a:hover{border-bottom-color:var(--cyan);}
 
 /* ─ buttons ─ */
-.btn{display:inline-flex;align-items:center;gap:7px;padding:11px 20px;
-  border-radius:7px;border:none;cursor:pointer;font-family:var(--mono);
-  font-size:12px;font-weight:600;transition:all .2s;}
-.btn-p{background:linear-gradient(135deg,#1a4dcc,#2979ff);color:#fff;
-  box-shadow:0 4px 18px rgba(41,121,255,.3);}
-.btn-p:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(41,121,255,.4);}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:15px 28px;
+  border-radius:8px;border:none;cursor:pointer;font-family:var(--mono);
+  font-size:15px;font-weight:600;transition:all .2s;}
+.btn-p{background:linear-gradient(135deg,#06768d,#0aa6c4);color:#fff;
+  box-shadow:0 4px 18px rgba(6,118,141,.4);}
+.btn-p:hover{transform:translateY(-1px);box-shadow:0 6px 24px rgba(6,118,141,.55);}
 .btn-p:disabled{opacity:.35;cursor:not-allowed;transform:none;}
-.btn-g{background:var(--s2);color:var(--green);border:1px solid rgba(0,230,118,.2);}
+.btn-g{background:var(--s2);color:var(--green);border:1px solid rgba(47,214,160,.3);}
 .btn-g:hover{border-color:var(--green);}
 .btn-g:disabled{opacity:.35;cursor:not-allowed;}
 .btn-c{background:var(--s2);color:var(--cyan);border:1px solid var(--b2);}
@@ -423,9 +430,8 @@ body::before{
 }
 .usp-body{padding:22px;position:relative;z-index:1;}
 .usp-grid{
-  display:grid;grid-template-columns:1fr 1fr;gap:18px;
+  display:grid;grid-template-columns:1fr;gap:18px;
 }
-@media (max-width:720px){.usp-grid{grid-template-columns:1fr;}}
 .usp-card{
   background:var(--s2);border:1px solid var(--b1);border-radius:8px;
   padding:18px 20px;display:flex;flex-direction:column;
@@ -456,6 +462,32 @@ body::before{
   border-bottom:1px solid transparent;transition:border-color 0.2s;
 }
 .usp-link:hover{border-color:var(--p-apricot);}
+
+/* Promo teaser cards (Privacy Pass, Workload Identity) */
+.teaser{
+  display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;
+  border:1px solid var(--b1);border-radius:12px;
+  padding:22px 24px;margin-bottom:24px;position:relative;overflow:hidden;
+}
+.teaser-pp{
+  background:linear-gradient(135deg, var(--s1) 0%, rgba(63,224,240,0.06) 100%);
+  border-left:3px solid var(--cyan);
+}
+.teaser-wl{
+  background:linear-gradient(135deg, var(--s1) 0%, rgba(6,118,141,0.10) 100%);
+  border-left:3px solid var(--teal-ref);
+}
+.teaser-ico{font-size:34px;line-height:1;flex-shrink:0;}
+.teaser-body{flex:1;min-width:260px;}
+.teaser-badge{
+  display:inline-block;font-size:11px;letter-spacing:0.5px;font-weight:600;
+  padding:3px 10px;border-radius:20px;margin-bottom:8px;
+}
+.teaser-pp .teaser-badge{background:rgba(63,224,240,0.12);color:var(--cyan);}
+.teaser-wl .teaser-badge{background:rgba(6,118,141,0.18);color:var(--cyan);}
+.teaser h3{font-family:var(--syne);font-size:19px;font-weight:700;margin-bottom:8px;color:var(--text);}
+.teaser p{font-size:14px;color:var(--text-muted-strong);line-height:1.65;margin-bottom:14px;max-width:560px;}
+.teaser .btn{margin-top:0;}
 @keyframes fade-up {
   from { opacity: 0; transform: translateY(10px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -654,86 +686,19 @@ footer a{color:var(--cyan);text-decoration:none;}
   </div>
 </div>
 
-<!-- Token Verify — Public Service -->
-<div class="verify-section">
-  <div class="verify-head">
-    <span class="verify-title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
-    <span class="verify-badge">🔍 Anyone can verify</span>
-  </div>
-  <div class="verify-body">
-    <p class="verify-lead">
-      Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat?
-      Füg ihn hier ein und sieh sofort, ob er <em>kryptografisch gültig</em> ist und von welcher Rolle er stammt.
-      Keine Anmeldung nötig.
+<!-- Privacy-Pass-Teaser: anonyme Verifikation -->
+<div class="teaser teaser-pp">
+  <div class="teaser-ico">🕶️</div>
+  <div class="teaser-body">
+    <span class="teaser-badge">NEU · ANONYM</span>
+    <h3>Anonym verifizieren — ganz ohne Profil</h3>
+    <p>
+      Du willst beweisen, dass du ein Mensch bist, aber <strong>keine Identität preisgeben</strong>?
+      Mit Privacy Pass holst du dir kryptografische Tokens, die deine Menschlichkeit bestätigen —
+      <em>vollständig unverknüpfbar</em>. Niemand, auch wir nicht, kann deine Tokens
+      zu dir zurückverfolgen. Basiert auf den IETF-Standards RFC&nbsp;9576–9578 (VOPRF).
     </p>
-
-    <div class="verify-input-row">
-      <input type="text"
-             id="verifyTokenInput"
-             class="verify-input"
-             placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
-             autocomplete="off"
-             spellcheck="false" />
-      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()">
-        Prüfen →
-      </button>
-    </div>
-
-    <div class="verify-result" id="verifyResult">
-      <!-- Filled by JS -->
-    </div>
-  </div>
-</div>
-
-<!-- "Login mit HHTTPS"-Button für Plattformen + Maschinen-Hinweis -->
-<div class="usp-section">
-  <div class="usp-head">
-    <span class="usp-title">FÜR ENTWICKLER & BOT-BETREIBER</span>
-    <span class="usp-badge">⚡ Integration</span>
-  </div>
-  <div class="usp-body">
-    <div class="usp-grid">
-      <!-- Für Plattformen: Login mit HHTTPS -->
-      <div class="usp-card">
-        <div class="usp-icon">🔐</div>
-        <h3>"Mit HHTTPS bestätigen"-Button</h3>
-        <p>
-          Baue auf deiner Plattform einen Button ein, mit dem sich verifizierte Menschen
-          mit Rolle und Vertrauensstufe anmelden — ohne Passwörter, ohne deine Daten zu
-          teilen. Pairwise-Subjects, PKCE, OpenID Connect.
-        </p>
-        <pre class="usp-code">&lt;a href="https://hhttps.org/hhttps/oauth/authorize
-   ?response_type=code
-   &amp;client_id=DEIN_CLIENT
-   &amp;redirect_uri=https://deine-site.de/cb
-   &amp;scope=openid+role+verification_method
-   &amp;code_challenge=...
-   &amp;code_challenge_method=S256"&gt;
-  Mit HHTTPS bestätigen
-&lt;/a&gt;</pre>
-        <a href="/spec#oauth" class="usp-link">Volle Integrations-Anleitung →</a>
-      </div>
-
-      <!-- Für Bots: Maschinen-Token -->
-      <div class="usp-card usp-card-bot">
-        <div class="usp-icon">🤖</div>
-        <h3>Auch Maschinen können hier teilnehmen</h3>
-        <p>
-          Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren,
-          eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet
-          (<code>actorType: bot</code>). So bleiben Plattformen ehrlich.
-        </p>
-        <pre class="usp-code">curl -X POST https://hhttps.org/hhttps/machine/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "operatorName": "MeinBot",
-    "purpose": "Q&amp;A Antworten auf ask.iamhmn.org",
-    "role": "developer",
-    "contactEmail": "ops@meinbot.de"
-  }'</pre>
-        <a href="/spec#machine" class="usp-link">Maschinen-Token-Doku →</a>
-      </div>
-    </div>
+    <a href="/privacy-pass/" class="btn btn-p">🕶️ Anonym verifizieren →</a>
   </div>
 </div>
 
@@ -939,6 +904,37 @@ footer a{color:var(--cyan);text-decoration:none;}
   </div>
 </div>
 
+<!-- Token Verify — Public Service -->
+<div class="verify-section">
+  <div class="verify-head">
+    <span class="verify-title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
+    <span class="verify-badge">🔍 Anyone can verify</span>
+  </div>
+  <div class="verify-body">
+    <p class="verify-lead">
+      Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat?
+      Füg ihn hier ein und sieh sofort, ob er <em>kryptografisch gültig</em> ist und von welcher Rolle er stammt.
+      Keine Anmeldung nötig.
+    </p>
+
+    <div class="verify-input-row">
+      <input type="text"
+             id="verifyTokenInput"
+             class="verify-input"
+             placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
+             autocomplete="off"
+             spellcheck="false" />
+      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()">
+        Prüfen →
+      </button>
+    </div>
+
+    <div class="verify-result" id="verifyResult">
+      <!-- Filled by JS -->
+    </div>
+  </div>
+</div>
+
 <!-- Role table -->
 <div style="margin-bottom:32px;">
   <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;margin-bottom:12px;">// VERFÜGBARE ROLLEN</div>
@@ -970,6 +966,74 @@ footer a{color:var(--cyan);text-decoration:none;}
     <span>Run a platform?</span>
     <a href="https://github.com/dhannus/HumanProof/blob/main/docs/oauth-integration.md">OAuth integration docs →</a>
     <a href="https://hhttps.org/.well-known/openid-configuration">OIDC discovery →</a>
+  </div>
+</div>
+
+<!-- "Login mit HHTTPS"-Button für Plattformen + Maschinen-Hinweis -->
+<div class="usp-section">
+  <div class="usp-head">
+    <span class="usp-title">FÜR ENTWICKLER & BOT-BETREIBER</span>
+    <span class="usp-badge">⚡ Integration</span>
+  </div>
+  <div class="usp-body">
+    <div class="usp-grid">
+      <!-- Für Plattformen: Login mit HHTTPS -->
+      <div class="usp-card">
+        <div class="usp-icon">🔐</div>
+        <h3>"Mit HHTTPS bestätigen"-Button</h3>
+        <p>
+          Baue auf deiner Plattform einen Button ein, mit dem sich verifizierte Menschen
+          mit Rolle und Vertrauensstufe anmelden — ohne Passwörter, ohne deine Daten zu
+          teilen. Pairwise-Subjects, PKCE, OpenID Connect.
+        </p>
+        <pre class="usp-code">&lt;a href="https://hhttps.org/hhttps/oauth/authorize
+   ?response_type=code
+   &amp;client_id=DEIN_CLIENT
+   &amp;redirect_uri=https://deine-site.de/cb
+   &amp;scope=openid+role+verification_method
+   &amp;code_challenge=...
+   &amp;code_challenge_method=S256"&gt;
+  Mit HHTTPS bestätigen
+&lt;/a&gt;</pre>
+        <a href="/spec#oauth" class="usp-link">Volle Integrations-Anleitung →</a>
+      </div>
+
+      <!-- Für Bots: Maschinen-Token -->
+      <div class="usp-card usp-card-bot">
+        <div class="usp-icon">🤖</div>
+        <h3>Auch Maschinen können hier teilnehmen</h3>
+        <p>
+          Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren,
+          eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet
+          (<code>actorType: bot</code>). So bleiben Plattformen ehrlich.
+        </p>
+        <pre class="usp-code">curl -X POST https://hhttps.org/hhttps/machine/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operatorName": "MeinBot",
+    "purpose": "Q&amp;A Antworten auf ask.iamhmn.org",
+    "role": "developer",
+    "contactEmail": "ops@meinbot.de"
+  }'</pre>
+        <a href="/spec#machine" class="usp-link">Maschinen-Token-Doku →</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Workload-Identity-Teaser (nur hhttps.org) -->
+<div class="teaser teaser-wl">
+  <div class="teaser-ico">⚙️</div>
+  <div class="teaser-body">
+    <span class="teaser-badge">NEU · CI/CD</span>
+    <h3>Workload Identity — CI-Pipelines ohne gespeicherte Secrets</h3>
+    <p>
+      GitHub Actions, GitLab CI oder Buildkite tauschen ihr kurzlebiges OIDC-Token
+      gegen ein HHTTPS-Maschinen-Token — <strong>ganz ohne API-Key in der CI</strong>.
+      Das ausgestellte Token trägt nachvollziehbar, aus welchem Repository, Workflow
+      und Commit es stammt. Repos binden und verwalten kannst du im Workload-Bereich.
+    </p>
+    <a href="/workload.html" class="btn btn-p">⚙️ Workload Identity verwalten →</a>
   </div>
 </div>
 
@@ -1065,6 +1129,7 @@ let userId     = localStorage.getItem('hhttps_uid') || null;
 let sessionId  = null;
 let hhttpsToken = null;
 let selRole    = null;
+let __githubAlreadyVerified = null;  // trust score if user re-logged in with existing GitHub anchor
 let selVMethod = 'self-declared';
 let vData      = {};
 
@@ -1484,19 +1549,31 @@ function selectVMethod(roleId, method, evt) {
       <div id="domainPreview" style="font-size:13px;color:var(--text-muted-strong);min-height:18px;"></div>
       <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
   } else if (method === 'github-verified') {
-    slot.innerHTML = `
-      <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
-        Verbinde dein GitHub-Konto, um deine Entwickler-Rolle zu bestätigen.
-        <strong style="color:var(--text)">Wir speichern keinen Benutzernamen und keine Konto-Daten</strong> —
-        nur einen einseitig gehashten Anker, aus dem nichts rückrechenbar ist.
-        Account-Alter, Repo-Anzahl und Follower fließen einmalig in einen
-        Trust-Score (60–85) ein und werden danach verworfen.
-      </p>
-      <button class="btn btn-c" id="btnGithubVerify" type="button" onclick="startGithubVerify()"
-        style="background:linear-gradient(135deg,#B5A8D9,#9A8BC2);border-color:#B5A8D9;">
-        🔐 Mit GitHub bestätigen
-      </button>
-      <div class="msg" id="githubMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
+    if (__githubAlreadyVerified) {
+      // Re-login: already verified, show confirmation instead of the button
+      slot.innerHTML = `
+        <div class="verify-badge-row verify-badge-github" style="display:block;">
+          ✓ GitHub bereits verifiziert — Trust Score ${__githubAlreadyVerified}/100.
+          <span style="display:block;margin-top:6px;color:var(--text-muted-strong);font-size:12px;">
+            Auf diesem Gerät erkannt. Keine erneute GitHub-Anmeldung nötig.
+          </span>
+        </div>`;
+      setTrust(Math.max(60, __githubAlreadyVerified));
+    } else {
+      slot.innerHTML = `
+        <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
+          Verbinde dein GitHub-Konto, um deine Entwickler-Rolle zu bestätigen.
+          <strong style="color:var(--text)">Wir speichern keinen Benutzernamen und keine Konto-Daten</strong> —
+          nur einen einseitig gehashten Anker, aus dem nichts rückrechenbar ist.
+          Account-Alter, Repo-Anzahl und Follower fließen einmalig in einen
+          Trust-Score (60–85) ein und werden danach verworfen.
+        </p>
+        <button class="btn btn-c" id="btnGithubVerify" type="button" onclick="startGithubVerify()"
+          style="background:linear-gradient(135deg,#B5A8D9,#9A8BC2);border-color:#B5A8D9;">
+          🔐 Mit GitHub bestätigen
+        </button>
+        <div class="msg" id="githubMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
+    }
   } else if (vm?.field) {
     // Generic field-based verification (press-card, student-id, association-member, etc.)
     slot.innerHTML = `
@@ -1572,8 +1649,16 @@ async function doAuth() {
     if (!r2.ok) throw new Error(d2.error);
 
     sessionId = d2.sessionId;
+    // Re-login persistence: server tells us if this user already has a
+    // GitHub verification on file. Remember it so selectRole('developer')
+    // can show the badge + apply the score without a fresh OAuth roundtrip.
+    if (d2.githubVerified && d2.githubTrustScore) {
+      __githubAlreadyVerified = d2.githubTrustScore;
+    }
     setFp(2,'success'); live('on','verifiziert ✓');
-    msg('✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.','s');
+    let loginMsg = '✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.';
+    if (d2.githubVerified) loginMsg = '✓ Angemeldet — deine GitHub-Verifikation (Trust ' + d2.githubTrustScore + ') wurde erkannt.';
+    msg(loginMsg,'s');
     buildRoleGrid();
     setTimeout(() => setStep(3), 600);
   } catch(e) {
@@ -2071,27 +2156,12 @@ window.addEventListener('load', () => {
     history.replaceState({}, '', '/');
   }
 
-  // GitHub-verify callback handling
+  // GitHub-verify is now handled via a popup tab + polling (see startGithubVerify).
+  // The old ?github_verify= URL handler is no longer needed because we never
+  // redirect the main tab — but we keep a graceful fallback in case someone
+  // lands here with the old-style param (e.g. a bookmarked callback).
   if (p.get('github_verify') === 'success') {
-    const score = parseInt(p.get('score') || '60');
-    const sess  = p.get('session');
-    if (sess) sessionId = sess;
-    const badge = document.getElementById('githubVerifiedBadge');
-    if (badge) {
-      const v = document.getElementById('githubTrustValue');
-      if (v) v.textContent = score + '/100';
-      badge.style.display = 'block';
-    }
-    const btn = document.getElementById('btnGithubVerify');
-    if (btn) { btn.disabled = true; btn.textContent = '✓ GitHub verifiziert'; }
-    // Auto-select developer role since that's the only role this matters for
-    if (typeof buildRoleGrid === 'function') {
-      buildRoleGrid();
-      setStep(3);
-      setTimeout(() => { try { selectRole('developer'); } catch(e){} }, 50);
-    }
-    setTrust(Math.max(60, score));
-    msg('✓ GitHub bestätigt! Trust Score: ' + score + '/100.', 's');
+    msg('✓ GitHub-Verifikation abgeschlossen. Falls dein Login nicht mehr sichtbar ist, melde dich bitte erneut an.', 's');
     history.replaceState({}, '', '/');
   }
   if (p.get('github_verify') === 'error') {
@@ -2100,14 +2170,66 @@ window.addEventListener('load', () => {
   }
 });
 
-// Start GitHub OAuth flow — redirects to github.com
+// ─── GitHub verification via popup + polling ────────────────────────────────
+// Opens the OAuth flow in a NEW tab so the main tab never reloads (which
+// would wipe the in-memory token + WebAuthn session). The main tab polls
+// the status endpoint and updates itself live when verification completes.
+let __ghPollTimer = null;
+
 function startGithubVerify() {
   if (!sessionId) {
     msg('Bitte erst per Passkey anmelden, bevor du GitHub verifizierst.', 'e');
     return;
   }
-  // Just redirect — server handles state generation + GitHub redirect
-  window.location.href = '/hhttps/verify/github/start?session=' + encodeURIComponent(sessionId);
+
+  // Open in a new tab. The callback renders a static "go back" page.
+  const url = '/hhttps/verify/github/start?session=' + encodeURIComponent(sessionId);
+  const popup = window.open(url, '_blank');
+
+  const btn = document.getElementById('btnGithubVerify');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Warte auf GitHub …'; }
+  const ghMsg = document.getElementById('githubMsg');
+  if (ghMsg) { ghMsg.className = 'msg show i'; ghMsg.textContent = 'Ein neuer Tab wurde geöffnet. Bestätige dort mit GitHub und kehre dann hierher zurück.'; }
+
+  // Begin polling the status endpoint
+  if (__ghPollTimer) clearInterval(__ghPollTimer);
+  let elapsed = 0;
+  __ghPollTimer = setInterval(async () => {
+    elapsed += 3;
+    try {
+      const r = await fetch('/hhttps/verify/github/status', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId })
+      });
+      const d = await r.json();
+      if (d.verified) {
+        clearInterval(__ghPollTimer); __ghPollTimer = null;
+        onGithubVerified(d.trustScore || 60);
+      }
+    } catch (e) { /* keep polling */ }
+
+    // Stop polling after 5 minutes to avoid a runaway timer
+    if (elapsed > 300) {
+      clearInterval(__ghPollTimer); __ghPollTimer = null;
+      if (btn) { btn.disabled = false; btn.textContent = '🔐 Mit GitHub bestätigen'; }
+      if (ghMsg) { ghMsg.className = 'msg show e'; ghMsg.textContent = 'Zeitüberschreitung. Bitte erneut versuchen.'; }
+    }
+  }, 3000);
+}
+
+function onGithubVerified(score) {
+  const badge = document.getElementById('githubVerifiedBadge');
+  if (badge) {
+    const v = document.getElementById('githubTrustValue');
+    if (v) v.textContent = score + '/100';
+    badge.style.display = 'block';
+  }
+  const btn = document.getElementById('btnGithubVerify');
+  if (btn) { btn.disabled = true; btn.textContent = '✓ GitHub verifiziert'; }
+  const ghMsg = document.getElementById('githubMsg');
+  if (ghMsg) { ghMsg.className = 'msg show s'; ghMsg.textContent = '✓ GitHub bestätigt! Trust Score: ' + score + '/100.'; }
+  setTrust(Math.max(60, score));
+  msg('✓ GitHub bestätigt! Trust Score: ' + score + '/100.', 's');
 }
 
 // Poll for email verification every 5 seconds when on step 3

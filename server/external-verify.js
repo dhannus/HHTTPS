@@ -253,6 +253,28 @@ export async function getGithubStatus(sessionId) {
   };
 }
 
+/**
+ * Re-login persistence: if this user has previously verified a GitHub
+ * account (anchor exists), return the stored trust score so a fresh
+ * session can be marked github-verified automatically — no second OAuth
+ * roundtrip needed on the same or a new device.
+ *
+ * Returns { verified: bool, trustScore: number|null }.
+ */
+export async function getUserGithubAnchor(userId) {
+  if (!userId) return { verified: false, trustScore: null };
+  const { rows } = await db.q(
+    `SELECT trust_score_assigned
+       FROM external_verification_anchors
+      WHERE provider = 'github' AND user_id = $1
+      ORDER BY last_reverified_at DESC
+      LIMIT 1`,
+    [userId]
+  );
+  if (!rows[0]) return { verified: false, trustScore: null };
+  return { verified: true, trustScore: rows[0].trust_score_assigned };
+}
+
 // Best-effort hourly cleanup of expired pending OAuth states.
 export function startGithubVerifyCleanup() {
   setInterval(async () => {

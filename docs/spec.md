@@ -153,7 +153,8 @@ An HHTTPS access token is a JWT signed with ES256.
 ```json
 {
   "jti":        "550e8400-e29b-41d4-a716-446655440000",
-  "iss":        "hhttps://hhttps.org",
+  "iss":        "https://hhttps.org",
+  "hhttps_iss": "hhttps://hhttps.org",
   "sub":        "human-verified",
   "human":      true,
   "actorType":  "human",
@@ -162,7 +163,7 @@ An HHTTPS access token is a JWT signed with ES256.
   "trustScore": 93,
   "method":     "webauthn-passkey",
   "deviceType": "singleDevice",
-  "ia":         1715242800,
+  "iat":        1715242800,
   "exp":        1715246400
 }
 ```
@@ -172,7 +173,7 @@ An HHTTPS access token is a JWT signed with ES256.
 | Claim | Type | Description |
 |---|---|---|
 | `jti` | string | Unique token identifier (UUIDv4 recommended) |
-| `iss` | string | Issuer URL prefixed with `hhttps://` |
+| `iss` | string | Issuer URL as an `https://` origin (RFC 7519 / OIDC compatible) |
 | `sub` | string | One of: `"human-verified"`, `"machine"`, `"refresh"` |
 | `human` | boolean | True for human, false for machine tokens |
 | `actorType` | string | `"human"` or `"bot"` |
@@ -180,7 +181,7 @@ An HHTTPS access token is a JWT signed with ES256.
 | `roleLevel` | string | The verification method that established the role |
 | `trustScore` | integer | 0–100, see § Trust Scoring |
 | `method` | string | Primary auth method (e.g. `"webauthn-passkey"`) |
-| `ia` | integer | Issued-at, Unix epoch seconds |
+| `iat` | integer | Issued-at, Unix epoch seconds (RFC 7519; set automatically) |
 | `exp` | integer | Expiry, Unix epoch seconds (recommended TTL: 3600) |
 
 ### Optional claims
@@ -190,6 +191,7 @@ An HHTTPS access token is a JWT signed with ES256.
 | `deviceType` | string | `"singleDevice"` or `"multiDevice"` (from WebAuthn) |
 | `userId` | string | Stable opaque UUID for the subject (for app-level linking) |
 | `kid` | string | Key ID, redundant with header — included for convenience |
+| `hhttps_iss` | string | Branding-only issuer label in `hhttps://<host>` form. Informational; verifiers MUST validate against `iss`, not this field. |
 
 ## HTTP Headers
 
@@ -205,7 +207,7 @@ HHTTPS-Role-Label:       <human-readable role name>
 HHTTPS-Role-Level:       <verification method>
 HHTTPS-Trust-Score:      <0..100>
 HHTTPS-Method:           <auth method>
-HHTTPS-Issuer:           hhttps://<issuer-host>
+HHTTPS-Issuer:           hhttps://<issuer-host>   (protocol display value; JWT `iss` is https://)
 HHTTPS-Token:            <JWT, optional>
 ```
 
@@ -279,7 +281,8 @@ Issuers publish their configuration at `/.well-known/hhttps-configuration`:
 
 ```json
 {
-  "issuer":                   "hhttps://hhttps.org",
+  "issuer":                   "https://hhttps.org",
+  "hhttps_issuer":            "hhttps://hhttps.org",
   "protocol_version":         "0.4.1",
   "jwks_uri":                 "https://hhttps.org/.well-known/jwks.json",
   "check_endpoint":           "https://hhttps.org/hhttps/check",
@@ -303,13 +306,18 @@ JWKS at `/.well-known/jwks.json`:
       "crv": "P-256",
       "x":   "<base64url>",
       "y":   "<base64url>",
-      "kid": "hhttps-2026-q2",
+      "kid": "hhttps-2026-q2-a3f9",
       "use": "sig",
       "alg": "ES256"
     }
   ]
 }
 ```
+
+The `keys` array contains the active signing key first. During a key rotation
+the previously active public key is retained in the array (served from the
+issuer's `keys/retired/` store) so that tokens signed before the rotation remain
+verifiable until they expire. Key ids are dated (`hhttps-YYYY-qN-<suffix>`).
 
 ## Refresh Tokens
 
@@ -389,11 +397,13 @@ Highlights:
 - Replay protection via fresh server-generated challenges (2-min TTL).
 - Rate-limiting at all sensitive endpoints.
 - Token revocation persists permanently.
-- Issuer signing keys rotate every 90 days; JWKS publishes both old + new during grace period.
+- Issuer signing keys can be rotated via `rotateKeys()`; the JWKS publishes the
+  new active key plus the retired public key during a grace period so existing
+  tokens stay verifiable until expiry. Rotation cadence is operator-defined.
 
 ## Governance
 
-The HHTTPS specification is maintained by the **HumanProof Initiative**, an unfunded civic-tech project. Decisions are made via:
+The HHTTPS specification is maintained by the **iamhmn Initiative**, an unfunded civic-tech project. Decisions are made via:
 
 - **Minor changes** (clarifications, examples, typos): pull request, single maintainer review
 - **Specification changes** (new claims, endpoint changes): public discussion period ≥ 30 days, then maintainer consensus
@@ -406,6 +416,6 @@ Anyone may fork the protocol; running a different issuer is explicitly encourage
 ---
 
 **Maintainer**: Daniel Hannuschka (daniel.hannuschka@tweakz.de)
-**Repository**: https://github.com/dhannus/HumanProof
+**Repository**: https://github.com/dhannus/HHTTPS
 **License**: EUPL-1.2
 **Last updated**: 2026-05-10

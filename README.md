@@ -261,13 +261,15 @@ See [`docs/oauth-integration.md`](docs/oauth-integration.md) and the working exa
 ```json
 {
   "iss": "https://hhttps.org",
+  "hhttps_iss": "hhttps://hhttps.org",
   "sub": "human-verified",
-  "uid": "<opaque-internal-id>",
   "human": true,
+  "actorType": "human",
   "role": "developer",
   "trustScore": 72,
-  "roleLevel": "github-org",
-  "ia": 1715000000,
+  "roleLevel": "github-verified",
+  "method": "webauthn-passkey",
+  "iat": 1715000000,
   "exp": 1715003600,
   "jti": "<uuid>"
 }

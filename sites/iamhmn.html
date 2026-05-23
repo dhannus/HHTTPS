@@ -708,6 +708,76 @@
     }
 
     /* ─── How it works ──────────────────────────────────────────────────── */
+    /* Privacy Pass teaser section */
+    .anon {
+      background: var(--paper);
+      position: relative;
+      overflow: hidden;
+    }
+    .anon::before {
+      content: '';
+      position: absolute;
+      width: 560px; height: 560px;
+      background: var(--sage);
+      border-radius: 50%;
+      filter: blur(130px);
+      opacity: 0.28;
+      bottom: -220px;
+      left: -120px;
+      pointer-events: none;
+    }
+    .anon-card {
+      position: relative;
+      max-width: 880px;
+      margin: 0 auto;
+      background: linear-gradient(135deg, var(--cream) 0%, var(--sand) 100%);
+      border: 1px solid rgba(45, 40, 35, 0.08);
+      border-radius: 28px;
+      padding: 56px 48px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(45, 40, 35, 0.08);
+    }
+    .anon-badge {
+      display: inline-block;
+      font-size: 13px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--terra);
+      font-weight: 600;
+      margin-bottom: 18px;
+    }
+    .anon-card h2 {
+      font-family: 'Fraunces', serif;
+      font-variation-settings: "SOFT" 50, "WONK" 1;
+      font-weight: 350;
+      font-size: clamp(30px, 4vw, 46px);
+      line-height: 1.12;
+      letter-spacing: -0.02em;
+      color: var(--ink);
+      margin-bottom: 20px;
+    }
+    .anon-card p {
+      font-size: 18px;
+      color: var(--ink-soft);
+      line-height: 1.6;
+      max-width: 620px;
+      margin: 0 auto 18px;
+    }
+    .anon-meta {
+      font-size: 14px;
+      color: var(--ink-soft);
+      opacity: 0.7;
+      margin-bottom: 32px;
+    }
+    .anon-icon {
+      font-size: 48px;
+      margin-bottom: 20px;
+      display: block;
+    }
+    @media (max-width: 768px) {
+      .anon-card { padding: 40px 24px; border-radius: 22px; }
+    }
+
     .how {
       background: var(--sand);
       position: relative;
@@ -2345,6 +2415,30 @@
           </p>
           <span class="step-tech">ES256 · JWT · JWKS</span>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════ Anonym verifizieren (Privacy Pass) ═══════════════════════ -->
+  <section class="anon" id="anonym">
+    <div class="container">
+      <div class="anon-card reveal">
+        <span class="anon-icon">🕶️</span>
+        <span class="anon-badge">Neu · Anonym</span>
+        <h2>Beweise, dass du Mensch bist — ohne zu verraten, wer du bist</h2>
+        <p>
+          Nicht jede Situation braucht eine Rolle oder einen Namen. Manchmal reicht der
+          Nachweis: <em>„Hier handelt ein echter Mensch."</em> Mit Privacy&nbsp;Pass
+          erhältst du kryptografische Tokens, die genau das bestätigen —
+          vollständig unverknüpfbar. Niemand, auch wir nicht, kann sie auf dich zurückführen.
+        </p>
+        <p class="anon-meta">
+          Basiert auf den offenen IETF-Standards RFC&nbsp;9576–9578 (VOPRF). Anmeldung per Passkey,
+          ganz ohne Konto oder E-Mail.
+        </p>
+        <a href="https://hhttps.org/privacy-pass/" class="btn btn-primary">
+          🕶️ Anonym verifizieren
+        </a>
       </div>
     </div>
   </section>

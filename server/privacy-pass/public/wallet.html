@@ -263,6 +263,38 @@ input:focus { outline: none; border-color: var(--cyan); }
   .method-or { padding: 4px 0; }
 }
 
+/* Integration code example */
+.code-example {
+  margin-top: 18px;
+  border: 1px solid var(--b1);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.code-example-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(0,0,0,0.25);
+  border-bottom: 1px solid var(--b1);
+  font-size: 12px; letter-spacing: 0.5px;
+  color: var(--p-apricot); font-family: var(--syne); font-weight: 700;
+}
+.code-example-tag {
+  font-size: 10px; color: var(--muted); font-family: var(--mono); font-weight: 400;
+  letter-spacing: 0;
+}
+.code-example pre {
+  margin: 0; padding: 16px;
+  background: var(--bg);
+  font-family: var(--mono); font-size: 12px; line-height: 1.65;
+  color: var(--text);
+  overflow-x: auto;
+  white-space: pre;
+}
+.code-example pre .c  { color: var(--muted); }   /* comment */
+.code-example pre .k  { color: var(--p-lavender); } /* keyword */
+.code-example pre .s  { color: var(--p-apricot); }  /* string */
+.code-example pre .fn { color: var(--cyan); }       /* function/endpoint */
+
 /* quota line */
 .quota {
   display: flex; gap: 18px; font-size: 11px; margin-top: 12px; color: var(--muted);
@@ -508,6 +540,51 @@ footer .b { color: var(--text); }
       </div>
     </div>
     <div class="log" id="log-redeem"><span class="dim">Wähle eine Methode.</span></div>
+  </div>
+
+  <div class="code-example">
+    <div class="code-example-head">
+      So baust du den „Anonym bestätigen"-Button selbst ein
+      <span class="code-example-tag">Frontend</span>
+    </div>
+    <pre><span class="c">&lt;!-- Button auf deiner Seite --&gt;</span>
+&lt;button <span class="k">id</span>=<span class="s">"confirm-human"</span>&gt;✓ Anonym bestätigen&lt;/button&gt;
+
+&lt;script&gt;
+<span class="fn">document</span>.getElementById(<span class="s">'confirm-human'</span>).onclick = <span class="k">async</span> () =&gt; {
+  <span class="c">// 1. Token aus dem Privacy-Pass-Wallet des Nutzers holen</span>
+  <span class="k">const</span> token = <span class="k">await</span> window.hhttpsWallet.take();
+
+  <span class="c">// 2. An DEIN Backend schicken — niemals dem Client-Ergebnis trauen</span>
+  <span class="k">const</span> ok = <span class="k">await</span> fetch(<span class="s">'/api/confirm-human'</span>, {
+    method: <span class="s">'POST'</span>,
+    headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> },
+    body: JSON.stringify({ token })
+  }).then(r =&gt; r.ok);
+
+  <span class="k">if</span> (ok) showSuccess(<span class="s">'✓ Als Mensch bestätigt — anonym'</span>);
+};
+&lt;/script&gt;</pre>
+  </div>
+
+  <div class="code-example">
+    <div class="code-example-head">
+      Einlösung — immer serverseitig
+      <span class="code-example-tag">Backend · Node/Express</span>
+    </div>
+    <pre>app.<span class="fn">post</span>(<span class="s">'/api/confirm-human'</span>, <span class="k">async</span> (req, res) =&gt; {
+  <span class="k">const</span> r = <span class="k">await</span> fetch(<span class="s">'<span class="fn">https://hhttps.org/privacy-pass/redeem</span>'</span>, {
+    method: <span class="s">'POST'</span>,
+    headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> },
+    body: JSON.stringify({ token: req.body.token })
+  });
+  <span class="k">const</span> d = <span class="k">await</span> r.json();
+
+  <span class="c">// d.valid &amp;&amp; d.redeemed          → echter Mensch, Token einmalig verbraucht</span>
+  <span class="c">// d.reason === 'already_redeemed' → Token schon benutzt (Double-Spend)</span>
+  <span class="c">// d.role                          → attestierte Rolle (optional)</span>
+  res.sendStatus(d.valid &amp;&amp; d.redeemed ? <span class="s">200</span> : <span class="s">403</span>);
+});</pre>
   </div>
 
   <p class="sub" style="margin-top:18px;font-size:13px;">

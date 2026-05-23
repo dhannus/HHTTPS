@@ -1,8 +1,8 @@
 import 'dotenv/config';
 /**
  * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
- * HumanProof Initiative · daniel.hannuschka@tweakz.de
- * https://github.com/dhannus/HumanProof
+ * iamhmn Initiative · daniel.hannuschka@tweakz.de
+ * https://github.com/dhannus/HHTTPS
  *
  * v4.1 changes from v4:
  *   ✓ PostgreSQL persistence (sessions, tokens, credentials, etc.)
@@ -56,10 +56,10 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT     = process.env.PORT    || 3000;
-const RP_ID    = process.env.RP_ID   || 'funnysearch.eu';
+const RP_ID    = process.env.RP_ID   || 'hhttps.org';
 const ORIGIN   = process.env.ORIGIN  || `https://${RP_ID}`;
 const BASE_URL = process.env.BASE_URL || ORIGIN;
-const RP_NAME  = 'HumanProof HHTTPS';
+const RP_NAME  = 'iamhmn HHTTPS';
 
 // Token TTLs
 const ACCESS_TTL  = 3600;          // 1 hour
@@ -315,8 +315,8 @@ function sendJson(req, res, data, opts = {}) {
   <pre id="json">${highlighted}</pre>
 
   <footer>
-    <span>HumanProof Initiative</span>
-    <a href="https://github.com/dhannus/HumanProof">GitHub</a>
+    <span>iamhmn Initiative</span>
+    <a href="https://github.com/dhannus/HHTTPS">GitHub</a>
     <a href="/.well-known/jwks.json">JWKS</a>
     <a href="/.well-known/hhttps-configuration">Discovery</a>
     <a href="/hhttps/info">Info</a>
@@ -450,7 +450,7 @@ function normalizeApexDomain(hostname) {
   return parts.slice(-2).join('.');
 }
 
-// Slug generator: 12-char Crockford Base32 with prefix "hp-" for "HumanProof"
+// Slug generator: 12-char Crockford Base32 with prefix "hp-" (HHTTPS signature).
 // Avoids 0/O/1/I confusion. Example: "hp-7K2-XQ9NMR-3F"
 const SLUG_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 function generateSlug() {
@@ -475,8 +475,9 @@ function hashTextLoose(text) {
 async function issueAccessToken(payload) {
   const jti = uuid();
   const tok = signToken({
-    jti, iss: `hhttps://${RP_ID}`, sub: 'human-verified',
-    human: true, actorType: 'human', ia: Math.floor(Date.now() / 1000),
+    jti, iss: `https://${RP_ID}`, hhttps_iss: `hhttps://${RP_ID}`,
+    sub: 'human-verified', human: true, actorType: 'human',
+    // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
     ...payload
   }, { expiresIn: ACCESS_TTL });
 
@@ -497,8 +498,9 @@ async function issueAccessToken(payload) {
 async function issueRefreshToken(userId, credId, role) {
   const jti = uuid();
   const tok = signToken({
-    jti, sub: 'refresh', userId, credId, role,
-    ia: Math.floor(Date.now() / 1000)
+    jti, iss: `https://${RP_ID}`, hhttps_iss: `hhttps://${RP_ID}`,
+    sub: 'refresh', userId, credId, role
+    // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
   }, { expiresIn: REFRESH_TTL });
   await db.refreshTokens.create({
     jti, userId, credentialId: credId, role, ttlMs: REFRESH_TTL * 1000
@@ -534,7 +536,8 @@ setInterval(async () => {
 
 app.get('/.well-known/hhttps-configuration', (req, res) => {
   sendJson(req, res, {
-    issuer:                  `hhttps://${RP_ID}`,
+    issuer:                  `https://${RP_ID}`,
+    hhttps_issuer:           `hhttps://${RP_ID}`,
     protocol_version:        '0.4.1',
     base_url:                BASE_URL,
     jwks_uri:                `${BASE_URL}/.well-known/jwks.json`,
@@ -578,8 +581,8 @@ app.get('/hhttps/info', async (req, res) => {
 
   sendJson(req, res, {
     protocol: 'HHTTPS — Human-verified HTTPS', version: '0.4.1',
-    initiative: 'HumanProof', contact: 'daniel.hannuschka@tweakz.de',
-    github: 'github.com/dhannus/HumanProof', demo: 'https://hhttps.org',
+    initiative: 'iamhmn', contact: 'daniel.hannuschka@tweakz.de',
+    github: 'github.com/dhannus/HHTTPS', demo: 'https://hhttps.org',
     features: ['webauthn', 'roles-15', 'email-verification', 'refresh-tokens',
                'token-revocation', 'machine-tokens', 'webhooks', 'jwks',
                'discovery', 'postgres-persistence'],
@@ -645,7 +648,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
         hhttps: { version: '0.4.1', human: false, actorType: 'bot',
                   status: 'verified', trustScore: 0, method: 'machine-token' },
         machine: { operatorId: d.operatorId, operatorName: d.operatorName,
-                   purpose: d.purpose, issuedAt: new Date(d.ia * 1000).toISOString() }
+                   purpose: d.purpose, issuedAt: new Date(d.iat * 1000).toISOString() }
       });
     }
 
@@ -659,7 +662,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     return res.json({
       hhttps: { version: '0.4.1', status: 'verified', human: true, actorType: 'human',
                 method: d.method, trustScore: d.trustScore,
-                issuedAt: new Date(d.ia * 1000).toISOString(),
+                issuedAt: new Date(d.iat * 1000).toISOString(),
                 expiresAt: new Date(d.exp * 1000).toISOString(), issuer: d.iss },
       role: { id: d.role, label: roleDef.label, labelEn: roleDef.labelEn, icon: roleDef.icon,
               description: roleDef.description, level: d.roleLevel,
@@ -712,9 +715,10 @@ app.post('/hhttps/sign-text', limit.check, async (req, res) => {
       role:       d.role,
       roleLevel:  d.roleLevel,
       trustScore: d.trustScore,
-      ia:         Math.floor(Date.now() / 1000),
+      // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
       exp:        d.exp,    // matches the underlying token's expiry
-      iss:        d.iss
+      iss:        d.iss,
+      hhttps_iss: d.hhttps_iss
     });
 
     return res.json({
@@ -787,7 +791,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
         level: d.roleLevel,
         trustScore: d.trustScore
       },
-      signedAt:   new Date(d.ia  * 1000).toISOString(),
+      signedAt:   new Date(d.iat  * 1000).toISOString(),
       validUntil: new Date(d.exp * 1000).toISOString()
     });
   } catch (e) {
@@ -1347,6 +1351,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
 
   const accessToken = signToken({
     iss:        `https://${RP_ID}`,
+    hhttps_iss: `hhttps://${RP_ID}`,
     sub:        pairwiseId,
     aud:        client_id,
     client_id,
@@ -1679,7 +1684,7 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
 
     const options = await generateRegistrationOptions({
       rpName: RP_NAME, rpID: RP_ID, userID: userIdBuf,
-      userName: `human-${userId.slice(0, 8)}`, userDisplayName: 'HumanProof Nutzer',
+      userName: `human-${userId.slice(0, 8)}`, userDisplayName: 'iamhmn Nutzer',
       attestationType: 'none',
       excludeCredentials,
       // CRITICAL: NO authenticatorAttachment — allows YubiKey, smartphone, platform auth
@@ -2107,7 +2112,7 @@ app.post('/hhttps/validate', async (req, res) => {
       hhttps: { status: 'valid', human: true, actorType: 'human', version: '0.4.1' },
       claims: { role: d.role, roleLabel: roleDef.label, roleIcon: roleDef.icon,
                 roleLevel: d.roleLevel, trustScore: d.trustScore,
-                issuedAt: new Date(d.ia * 1000).toISOString(),
+                issuedAt: new Date(d.iat * 1000).toISOString(),
                 expiresAt: new Date(d.exp * 1000).toISOString(),
                 method: d.method, issuer: d.iss, kid: d.kid }
     });
@@ -2199,10 +2204,10 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 
   const jti   = uuid();
   const tokenPayload = {
-    jti, sub: 'machine', iss: `hhttps://${RP_ID}`,
+    jti, sub: 'machine', iss: `https://${RP_ID}`, hhttps_iss: `hhttps://${RP_ID}`,
     human: false, actorType: 'bot',
-    operatorId, operatorName: op.operator_name, purpose: op.purpose,
-    ia: Math.floor(Date.now() / 1000)
+    operatorId, operatorName: op.operator_name, purpose: op.purpose
+    // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
   };
   // If the operator self-declared a role at /machine/register, propagate it
   // into the token claims. Origins (like ask.iamhmn.org) can use this for

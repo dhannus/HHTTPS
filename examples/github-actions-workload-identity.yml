@@ -1,0 +1,52 @@
+# Beispiel: GitHub Actions Workflow, der ein HHTTPS-Maschinen-Token
+# per Workload Identity Federation erhält — OHNE gespeicherten API-Key.
+#
+# Voraussetzung (einmalig): Repo an einen HHTTPS-Operator binden mit
+#   curl -X POST https://hhttps.org/hhttps/machine/workload/bind \
+#     -H 'Content-Type: application/json' \
+#     -d '{
+#       "operatorId": "op-...",
+#       "apiKey": "mk-...",
+#       "provider": "github-actions",
+#       "repository": "dhannus/HHTTPS",
+#       "expectedAudience": "https://hhttps.org"
+#     }'
+#
+# Danach braucht die CI den apiKey NIE wieder.
+
+name: HHTTPS Workload Identity Demo
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write   # ERFORDERLICH: erlaubt das Anfordern eines OIDC-Tokens
+  contents: read
+
+jobs:
+  get-hhttps-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: OIDC-Token anfordern und gegen HHTTPS-Token tauschen
+        run: |
+          # 1. GitHub Actions OIDC-Token mit audience=https://hhttps.org holen
+          OIDC_TOKEN=$(curl -s \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https://hhttps.org" \
+            | jq -r '.value')
+
+          # 2. Gegen ein HHTTPS-Maschinen-Token tauschen (kein API-Key nötig!)
+          RESPONSE=$(curl -s -X POST https://hhttps.org/hhttps/machine/exchange \
+            -H 'Content-Type: application/json' \
+            -d "{\"provider\":\"github-actions\",\"oidcToken\":\"$OIDC_TOKEN\"}")
+
+          echo "$RESPONSE" | jq '{ operator: .operator.name, workload: .workload }'
+
+          HHTTPS_TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+
+          # 3. Das HHTTPS-Token nutzen — z. B. auf ask.iamhmn.org posten,
+          #    oder gegen einen HHTTPS-geschützten Endpoint authentisieren.
+          echo "HHTTPS_TOKEN=$HHTTPS_TOKEN" >> "$GITHUB_ENV"
+          echo "✓ HHTTPS-Maschinen-Token erhalten — die CI ist jetzt als"
+          echo "  verifizierte Maschine aus dhannus/HHTTPS@main erkennbar."

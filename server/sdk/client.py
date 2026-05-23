@@ -1,14 +1,16 @@
 """
 HHTTPS Client SDK — Python 3.8+
-HumanProof Initiative · github.com/dhannus/HumanProof
+iamhmn Initiative · github.com/dhannus/HHTTPS
 
 Installation:
-    pip install requests  # only dependency
+    # No dependencies for the remote check() path (stdlib urllib only).
+    # For local JWKS verification (verify_local), also install:
+    #   pip install "PyJWT[crypto]"
 
 Usage:
     from sdk.client import HHTPPSClient
 
-    hhttps = HHTPPSClient("https://hhttps.funnysearch.eu")
+    hhttps = HHTPPSClient("https://hhttps.org")
 
     # Check a token
     result = hhttps.check(token)
@@ -67,6 +69,9 @@ class HHTPPSClient:
         self.timeout    = timeout
         self._cache     = cache
         self._discovery: Optional[Dict] = None
+        self._jwks: Optional[Dict] = None
+        self._jwks_at: float = 0.0
+        self.jwks_max_age: int = 3600  # seconds
 
     # ── Discovery ────────────────────────────────────────────────────────────
 
@@ -116,6 +121,91 @@ class HHTPPSClient:
         except Exception:
             return {"human": False, "status": "error", "actor_type": "unknown",
                     "role": None, "trust_score": 0, "method": None}
+
+    # ── Local verification (no per-request issuer call) ───────────────────────
+
+    def get_jwks(self) -> Dict:
+        """
+        Fetch and cache the issuer JWKS (RFC 7517). Re-fetched after
+        ``jwks_max_age`` seconds. Honours ``jwks_uri`` from discovery when
+        available, else the conventional /.well-known/jwks.json path.
+        """
+        import time
+        fresh = self._jwks and (time.time() - self._jwks_at) < self.jwks_max_age
+        if self._cache and fresh:
+            return self._jwks
+
+        path = "/.well-known/jwks.json"
+        try:
+            disc = self.discover()
+            if disc.get("jwks_uri"):
+                path = disc["jwks_uri"]
+        except Exception:
+            pass
+
+        if path.startswith("http"):
+            req = urllib.request.Request(path, method="GET")
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                jwks = json.loads(resp.read().decode())
+        else:
+            jwks = self._get(path)
+
+        self._jwks = jwks
+        self._jwks_at = time.time()
+        return jwks
+
+    def verify_local(self, token: str) -> HHTPPSResult:
+        """
+        Verify a token's ES256 signature locally against the issuer JWKS.
+
+        Does NOT contact the issuer per call (JWKS is cached). Checks the
+        signature, ``exp`` and ``nbf``. Selects the verifying key by the token
+        header ``kid`` so verification keeps working across a key rotation.
+
+        Requires PyJWT with the cryptography backend::
+
+            pip install "PyJWT[crypto]"
+
+        For high-trust use cases that must also honour revocation, additionally
+        call :meth:`is_revoked` with ``result`` JTI — local signature
+        verification alone cannot see a revocation that happened after issuance.
+        """
+        if not token:
+            return HHTPPSResult()
+
+        try:
+            import jwt  # PyJWT
+            from jwt import PyJWKClient, algorithms  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                'verify_local requires PyJWT with crypto: pip install "PyJWT[crypto]"'
+            ) from e
+
+        try:
+            header = jwt.get_unverified_header(token)
+        except Exception:
+            return HHTPPSResult(status="invalid")
+
+        if header.get("alg") != "ES256":
+            return HHTPPSResult(status="invalid")
+
+        kid = header.get("kid")
+        jwks = self.get_jwks()
+        keys = jwks.get("keys", [])
+        jwk = next((k for k in keys if k.get("kid") == kid), None) or (keys[0] if keys else None)
+        if not jwk:
+            return HHTPPSResult(status="invalid")
+
+        try:
+            from jwt.algorithms import ECAlgorithm
+            public_key = ECAlgorithm.from_jwk(json.dumps(jwk))
+            claims = jwt.decode(token, key=public_key, algorithms=["ES256"])
+        except jwt.ExpiredSignatureError:
+            return HHTPPSResult(status="expired")
+        except Exception:
+            return HHTPPSResult(status="invalid")
+
+        return self._parse_claims(claims)
 
     # ── Token lifecycle ───────────────────────────────────────────────────────
 
@@ -263,6 +353,36 @@ class HHTPPSClient:
             privileges  = role.get("privileges", []),
             user_story  = role.get("userStory"),
             machine     = machine
+        )
+
+    def _parse_claims(self, p: Dict) -> HHTPPSResult:
+        """Normalize raw JWT claims (from verify_local) into an HHTPPSResult."""
+        is_machine = p.get("sub") == "machine" or p.get("human") is False
+        iat = p.get("iat")
+        exp = p.get("exp")
+        import datetime as _dt
+        def _iso(ts):
+            if not ts:
+                return None
+            return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).isoformat()
+        machine = None
+        if is_machine:
+            machine = {"operatorId": p.get("operatorId"),
+                       "operatorName": p.get("operatorName"),
+                       "purpose": p.get("purpose")}
+        return HHTPPSResult(
+            human       = p.get("human", False) is True,
+            actor_type  = p.get("actorType", "bot" if is_machine else "human"),
+            status      = "verified",
+            trust_score = p.get("trustScore", 0) or 0,
+            method      = p.get("method"),
+            issued_at   = _iso(iat),
+            expires_at  = _iso(exp),
+            role        = p.get("role"),
+            role_label  = p.get("role_label"),
+            role_icon   = p.get("role_icon"),
+            role_level  = p.get("roleLevel"),
+            machine     = machine,
         )
 
     def _request(self, method: str, path: str, body: Dict = None, headers: Dict = None) -> Dict:

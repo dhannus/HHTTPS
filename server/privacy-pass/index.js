@@ -47,6 +47,9 @@ export const privacyPassRouter = express.Router();
 
 // Wallet UI — the main page users see when they visit hhttps.org/privacy-pass
 privacyPassRouter.get('/', (req, res) => {
+  // No-cache: the wallet UI changes often; always revalidate so deploys show
+  // up immediately instead of being served from the browser's ETag cache.
+  res.set('Cache-Control', 'no-cache, must-revalidate');
   res.sendFile(join(PUBLIC_DIR, 'wallet.html'));
 });
 

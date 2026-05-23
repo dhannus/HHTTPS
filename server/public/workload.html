@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workload Identity · HHTTPS</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#032128; --s1:#052e37; --s2:#073a46; --b1:#0c4d5d; --b2:#10677d;
+  --cyan:#3fe0f0; --green:#2fd6a0; --amber:#ffc35a; --red:#ff6b6b;
+  --text:#eaf6fb; --muted:#7fa6b4; --text-strong:#b6d4de; --teal-ref:#06768d;
+  --syne:'Syne',sans-serif; --mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);font-size:16px;
+  line-height:1.6;min-height:100vh;padding:24px;}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(ellipse 70% 50% at 20% 0%,rgba(6,118,141,0.22) 0%,transparent 60%),
+             radial-gradient(ellipse 50% 40% at 85% 100%,rgba(63,224,240,0.10) 0%,transparent 60%);}
+.wrap{position:relative;z-index:1;max-width:760px;margin:0 auto;}
+header{margin-bottom:28px;padding-bottom:18px;border-bottom:1px solid var(--b1);}
+.logo{font-family:var(--syne);font-size:30px;font-weight:800;
+  background:linear-gradient(90deg,var(--cyan),var(--teal-ref));
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  filter:drop-shadow(0 2px 3px rgba(0,0,0,0.5));}
+header p{color:var(--text-strong);font-size:14px;margin-top:6px;}
+header a{color:var(--cyan);text-decoration:none;}
+
+.card{background:var(--s1);border:1px solid var(--b1);border-radius:12px;
+  padding:24px;margin-bottom:20px;}
+.card h2{font-family:var(--syne);font-size:17px;color:var(--cyan);margin-bottom:6px;}
+.card .hint{font-size:13px;color:var(--text-strong);margin-bottom:16px;line-height:1.6;}
+
+label{display:block;font-size:13px;color:var(--text-strong);margin:12px 0 5px;}
+input,select{width:100%;background:var(--bg);border:1px solid var(--b2);border-radius:7px;
+  padding:13px 14px;color:var(--text);font-family:var(--mono);font-size:15px;min-height:46px;outline:none;}
+input:focus,select:focus{border-color:var(--cyan);}
+input::placeholder{color:var(--muted);}
+.row{display:flex;gap:12px;flex-wrap:wrap;}
+.row > div{flex:1;min-width:200px;}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:14px 26px;border-radius:8px;border:none;cursor:pointer;font-family:var(--mono);
+  font-size:15px;font-weight:600;min-height:46px;transition:all .2s;margin-top:16px;}
+.btn-p{background:linear-gradient(135deg,#06768d,#0aa6c4);color:#fff;
+  box-shadow:0 4px 18px rgba(6,118,141,.4);}
+.btn-p:hover{transform:translateY(-1px);}
+.btn-p:disabled{opacity:.4;cursor:not-allowed;transform:none;}
+.btn-sm{padding:8px 14px;font-size:13px;min-height:36px;margin:0;
+  background:transparent;border:1px solid var(--b2);color:var(--text-strong);border-radius:6px;cursor:pointer;}
+.btn-sm:hover{border-color:var(--red);color:var(--red);}
+
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{
+  outline:3px solid var(--cyan);outline-offset:2px;}
+
+.msg{margin-top:14px;padding:12px 14px;border-radius:7px;font-size:14px;display:none;}
+.msg.show{display:block;}
+.msg.s{background:rgba(47,214,160,.12);border:1px solid rgba(47,214,160,.3);color:var(--green);}
+.msg.e{background:rgba(255,107,107,.1);border:1px solid rgba(255,107,107,.3);color:var(--red);}
+.msg.i{background:rgba(63,224,240,.08);border:1px solid rgba(63,224,240,.25);color:var(--cyan);}
+
+table{width:100%;border-collapse:collapse;margin-top:8px;font-size:14px;}
+th{text-align:left;color:var(--muted);font-size:12px;letter-spacing:.5px;
+  padding:8px 10px;border-bottom:1px solid var(--b1);font-weight:600;}
+td{padding:11px 10px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:top;}
+td .repo{color:var(--text);font-weight:600;}
+td .prov{display:inline-block;font-size:12px;padding:2px 8px;border-radius:4px;
+  background:var(--s2);color:var(--text-strong);margin-bottom:4px;}
+td .sub{font-size:12px;color:var(--muted);word-break:break-all;}
+.empty{color:var(--muted);font-size:14px;padding:18px 0;text-align:center;}
+code{background:var(--s2);padding:1px 6px;border-radius:4px;color:var(--cyan);font-size:13px;}
+.foot{text-align:center;font-size:12px;color:var(--muted);margin-top:28px;}
+.foot a{color:var(--cyan);text-decoration:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">HHTTPS · Workload Identity</div>
+    <p>Verbinde CI/CD-Pipelines (GitHub Actions, GitLab CI, Buildkite) mit deinem
+       Maschinen-Operator — ohne gespeicherte Secrets in der CI.
+       <a href="/">← zur Hauptseite</a></p>
+  </header>
+
+  <!-- Auth -->
+  <div class="card">
+    <h2>// OPERATOR-ZUGANG</h2>
+    <p class="hint">Gib die Zugangsdaten deines Maschinen-Operators ein
+       (aus <code>/hhttps/machine/register</code>). Sie verlassen diesen Browser
+       nur für die API-Aufrufe an HHTTPS und werden nicht dauerhaft gespeichert.</p>
+    <div class="row">
+      <div>
+        <label for="opId">Operator-ID</label>
+        <input id="opId" placeholder="op-..." autocomplete="off">
+      </div>
+      <div>
+        <label for="apiKey">API-Key</label>
+        <input id="apiKey" type="password" placeholder="mk-..." autocomplete="off">
+      </div>
+    </div>
+    <button class="btn btn-p" id="btnLoad" onclick="loadBindings()">Bindungen laden →</button>
+    <div class="msg" id="authMsg"></div>
+  </div>
+
+  <!-- Bindings list -->
+  <div class="card" id="listCard" style="display:none;">
+    <h2>// GEBUNDENE REPOSITORIES</h2>
+    <p class="hint" id="listHint"></p>
+    <div id="listSlot"></div>
+  </div>
+
+  <!-- Bind new -->
+  <div class="card" id="bindCard" style="display:none;">
+    <h2>// NEUE BINDUNG ANLEGEN</h2>
+    <p class="hint">Bindet ein CI/CD-Repository an deinen Operator. Danach kann die
+       Pipeline per OIDC-Token-Tausch (<code>/hhttps/machine/exchange</code>) ein
+       Maschinen-Token holen — ohne den API-Key in der CI zu hinterlegen.</p>
+    <div class="row">
+      <div>
+        <label for="provider">Provider</label>
+        <select id="provider">
+          <option value="github-actions">GitHub Actions</option>
+          <option value="gitlab-ci">GitLab CI</option>
+          <option value="buildkite">Buildkite</option>
+        </select>
+      </div>
+      <div>
+        <label for="repo" id="repoLabel">Repository (owner/repo)</label>
+        <input id="repo" placeholder="dhannus/HHTTPS" autocomplete="off">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="aud">Erwartete Audience (optional)</label>
+        <input id="aud" placeholder="https://hhttps.org" autocomplete="off">
+      </div>
+      <div>
+        <label for="subPattern">Subject-Muster (optional, exakt)</label>
+        <input id="subPattern" placeholder="z.B. repo:dhannus/HHTTPS:ref:refs/heads/main" autocomplete="off">
+      </div>
+    </div>
+    <button class="btn btn-p" id="btnBind" onclick="createBinding()">Binden →</button>
+    <div class="msg" id="bindMsg"></div>
+  </div>
+
+  <div class="foot">
+    HHTTPS · <a href="https://github.com/dhannus/HHTTPS">GitHub</a> ·
+    <a href="https://hhttps.org/.well-known/hhttps-configuration">Discovery</a>
+  </div>
+</div>
+
+<script>
+let _opId = null, _apiKey = null;
+
+function show(id, type, text){
+  const el = document.getElementById(id);
+  el.className = 'msg show ' + type;
+  el.textContent = text;
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+const REPO_HINTS = {
+  'github-actions': 'Repository (owner/repo)',
+  'gitlab-ci':      'Project-Path (group/project)',
+  'buildkite':      'organization/pipeline'
+};
+document.getElementById('provider').addEventListener('change', e => {
+  document.getElementById('repoLabel').textContent = REPO_HINTS[e.target.value] || 'Repository';
+});
+
+async function loadBindings(){
+  _opId   = document.getElementById('opId').value.trim();
+  _apiKey = document.getElementById('apiKey').value.trim();
+  if(!_opId || !_apiKey){ show('authMsg','e','Bitte Operator-ID und API-Key eingeben.'); return; }
+
+  const btn = document.getElementById('btnLoad');
+  btn.disabled = true; btn.textContent = 'Lade …';
+  try{
+    const r = await fetch('/hhttps/machine/workload/list', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ operatorId:_opId, apiKey:_apiKey })
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'Fehler');
+    show('authMsg','s','✓ Angemeldet als Operator "' + esc(d.operator?.name||_opId) + '".');
+    document.getElementById('listCard').style.display = 'block';
+    document.getElementById('bindCard').style.display = 'block';
+    renderBindings(d.bindings || []);
+  }catch(e){
+    show('authMsg','e','Fehler: ' + e.message);
+  }finally{
+    btn.disabled = false; btn.textContent = 'Bindungen laden →';
+  }
+}
+
+function renderBindings(bindings){
+  const slot = document.getElementById('listSlot');
+  const hint = document.getElementById('listHint');
+  if(!bindings.length){
+    hint.textContent = 'Noch keine Bindungen. Lege unten die erste an.';
+    slot.innerHTML = '<div class="empty">— keine gebundenen Repositories —</div>';
+    return;
+  }
+  hint.textContent = bindings.length + ' Bindung' + (bindings.length===1?'':'en') + '.';
+  let rows = bindings.map(b => `
+    <tr>
+      <td>
+        <span class="prov">${esc(b.provider)}</span><br>
+        <span class="repo">${esc(b.repository)}</span>
+        ${b.subject_pattern ? '<br><span class="sub">sub: '+esc(b.subject_pattern)+'</span>' : ''}
+      </td>
+      <td>${b.exchanges||0}×<br><span class="sub">${b.last_used_at ? new Date(b.last_used_at).toLocaleDateString('de-DE') : 'nie'}</span></td>
+      <td style="text-align:right;">
+        <button class="btn-sm" onclick="unbind(${b.id}, this)">lösen</button>
+      </td>
+    </tr>`).join('');
+  slot.innerHTML = `<table>
+    <thead><tr><th>Provider / Repository</th><th>Exchanges</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
+async function createBinding(){
+  const provider = document.getElementById('provider').value;
+  const repository = document.getElementById('repo').value.trim();
+  const expectedAudience = document.getElementById('aud').value.trim() || undefined;
+  const subjectPattern = document.getElementById('subPattern').value.trim() || undefined;
+  if(!repository){ show('bindMsg','e','Bitte Repository angeben.'); return; }
+
+  const btn = document.getElementById('btnBind');
+  btn.disabled = true; btn.textContent = 'Binde …';
+  try{
+    const r = await fetch('/hhttps/machine/workload/bind', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ operatorId:_opId, apiKey:_apiKey, provider, repository, expectedAudience, subjectPattern })
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || d.detail || 'Fehler');
+    show('bindMsg','s','✓ "' + esc(repository) + '" gebunden. Die CI braucht ab jetzt keinen API-Key mehr.');
+    document.getElementById('repo').value = '';
+    document.getElementById('subPattern').value = '';
+    loadBindings();
+  }catch(e){
+    show('bindMsg','e','Fehler: ' + e.message);
+  }finally{
+    btn.disabled = false; btn.textContent = 'Binden →';
+  }
+}
+
+async function unbind(bindingId, el){
+  if(!confirm('Diese Bindung wirklich lösen? Die CI kann dann kein Token mehr tauschen.')) return;
+  el.disabled = true; el.textContent = '…';
+  try{
+    const r = await fetch('/hhttps/machine/workload/unbind', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ operatorId:_opId, apiKey:_apiKey, bindingId })
+    });
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || 'Fehler');
+    loadBindings();
+  }catch(e){
+    show('authMsg','e','Lösen fehlgeschlagen: ' + e.message);
+    el.disabled = false; el.textContent = 'lösen';
+  }
+}
+</script>
+</body>
+</html>
