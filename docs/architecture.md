@@ -28,6 +28,17 @@ HHTTPS has four moving parts:
 
 The protocol is **client-driven**: the user's browser holds the identity and presents it to platforms. The issuer is consulted only at moments of authentication and verification.
 
+> **Additive channel (does not change the protocol):** on hhttps.org itself, the
+> issuer optionally mirrors the freshly issued token into an HttpOnly cookie
+> scoped to `hhttps.org`. This is a **developer-experience feature of the
+> website**, not part of the wire protocol — it lets the issuer's own pages and
+> `curl --cookie` surface the logged-in identity as `HHTTPS-*` response headers
+> on the document request, so developers can read their live role and trust
+> score straight from the Network tab. Third-party platforms never see or rely
+> on this cookie; it is scoped to hhttps.org only (`HttpOnly`, `Secure`,
+> `SameSite=Lax`). The authoritative identity remains the client-held token.
+> See "Identity surfacing on hhttps.org" below.
+
 ---
 
 ## Component: Issuer Server
@@ -54,6 +65,29 @@ The reference implementation is in `server/`. Key responsibilities:
 - Batch verification (POST `/hhttps/signatures/batch`)
 - Revocation (POST `/hhttps/signatures/:slug/revoke`)
 - Slug-based references with domain binding
+
+### Identity surfacing on hhttps.org (additive)
+
+The issuer advertises HHTTPS on its own pages via response headers, following
+the same "next layer after HTTPS" convention used by consuming platforms:
+
+- **Anonymous / cold visit** → `HHTTPS-Protocol-Version`, `HHTTPS-Status: issuer`,
+  `HHTTPS-Issuer: hhttps://hhttps.org`. No identity is claimed.
+- **After login on hhttps.org** → the issued token is also mirrored into an
+  HttpOnly, Secure, SameSite=Lax cookie (`hhttps_identity`) scoped to
+  hhttps.org. On subsequent document requests the issuer reads that cookie,
+  verifies the token, and surfaces the real identity as headers
+  (`HHTTPS-Status: verified`, `HHTTPS-Role`, `HHTTPS-Trust-Score`,
+  `HHTTPS-Method`, …). Logout (`/hhttps/revoke`) clears the cookie.
+
+Rationale: maximum compatibility. The wire protocol is unchanged and remains
+client-driven; this cookie is a convenience layer of the website so a developer
+can pull their own verified identity ("Benutzerdaten direkt vom Issuer") from
+the Network tab or `curl --cookie` and work with it locally. If the cookie is
+absent or its token is expired/invalid, the issuer falls back to the
+issuer-level headers and never fabricates identity. Platforms must continue to
+verify the client-presented token (locally via JWKS or via `/hhttps/check`) —
+they neither see nor trust this cookie.
 
 ### Storage
 

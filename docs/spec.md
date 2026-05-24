@@ -199,7 +199,7 @@ HHTTPS-aware servers SHOULD set these response headers:
 
 ```
 HHTTPS-Protocol-Version: 0.4.1
-HHTTPS-Status:           verified | unverified | invalid | revoked | none
+HHTTPS-Status:           verified | unverified | invalid | revoked | required | info | issuer | none
 HHTTPS-Human:            true | false
 HHTTPS-Actor-Type:       human | bot | unknown
 HHTTPS-Role:             <role-id>
@@ -211,6 +211,13 @@ HHTTPS-Issuer:           hhttps://<issuer-host>   (protocol display value; JWT `
 HHTTPS-Token:            <JWT, optional>
 ```
 
+`HHTTPS-Status` values: `verified` (a valid identity is present), `unverified`
+(no/empty token), `invalid` (token failed verification), `revoked` (token was
+revoked), `required` (endpoint needs a token), `info` (issuer info endpoint),
+`issuer` (the responding origin is itself an HHTTPS issuer — set on the issuer's
+own pages, where the visitor's identity lives client-side and is therefore not
+known to the server at render time), `none` (no identity context).
+
 For requests, clients send:
 
 ```
@@ -218,6 +225,29 @@ HHTTPS-Token: <JWT>
 ```
 
 Or use `Authorization: Bearer <JWT>`.
+
+### Optional: issuer identity cookie (additive, non-normative)
+
+An HHTTPS issuer MAY offer a convenience feature on its **own** web pages: after
+a user authenticates, the issuer mirrors the issued token into an `HttpOnly`,
+`Secure`, `SameSite=Lax` cookie scoped to the issuer origin. On subsequent
+document requests the issuer reads that cookie and surfaces the user's verified
+identity as the `HHTTPS-*` response headers above — so developers can read their
+live role and trust score directly from the browser Network tab or
+`curl --cookie`, and work with their own issuer-provided identity data locally.
+
+This is explicitly **not** part of the wire protocol and places no requirement
+on verifiers:
+
+- It is scoped to the issuer origin only; third-party platforms never receive or
+  rely on this cookie.
+- The authoritative identity remains the client-held token, presented to
+  platforms and verified locally (JWKS) or via `/hhttps/check`.
+- If the cookie is absent or its token is expired/invalid, the issuer emits the
+  `issuer` status headers and MUST NOT fabricate identity.
+
+Conforming verifiers and issuers that do not implement this feature remain fully
+interoperable.
 
 ## Roles
 

@@ -155,7 +155,7 @@ For convenience, HHTTPS defines a set of response headers that platforms can inc
 
 | Header | Value |
 |---|---|
-| `HHTTPS-Status` | `verified` / `unverified` / `invalid` / `revoked` / `required` / `info` |
+| `HHTTPS-Status` | `verified` / `unverified` / `invalid` / `revoked` / `required` / `info` / `issuer` / `none` |
 | `HHTTPS-Human` | `true` / `false` |
 | `HHTTPS-Actor-Type` | `human` / `bot` / `unknown` |
 | `HHTTPS-Role` | The role from the token |

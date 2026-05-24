@@ -152,11 +152,33 @@
     <text x="0" y="4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10" text-anchor="middle" fill="#A86246">user interacts</text>
   </g>
 
+  <!-- ──────── Additive website feature: identity cookie ──────── -->
+  <!-- Clearly marked as a website convenience feature, NOT the wire protocol. -->
+  <g transform="translate(940, 180)">
+    <rect x="-110" y="-58" width="250" height="116" rx="14"
+          fill="#EEF3EA" stroke="#5BAF6B" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="15" y="-36" font-family="Inter, system-ui, sans-serif" font-size="13"
+          font-weight="600" text-anchor="middle" fill="#3C6B43">Identity cookie</text>
+    <text x="15" y="-20" font-family="Inter, system-ui, sans-serif" font-size="10"
+          text-anchor="middle" fill="#5BAF6B" font-style="italic">website feature · additive</text>
+    <text x="-98" y="0"  font-family="Inter, system-ui, sans-serif" font-size="10" fill="#3C6B43">• HttpOnly cookie, hhttps.org only</text>
+    <text x="-98" y="16" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#3C6B43">• surfaces your identity as headers</text>
+    <text x="-98" y="32" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#3C6B43">• read it via DevTools / curl --cookie</text>
+    <text x="-98" y="48" font-family="Inter, system-ui, sans-serif" font-size="10" fill="#7A6F62">  protocol stays client-driven</text>
+  </g>
+  <!-- connector: issuer → cookie callout -->
+  <g fill="none" stroke="#5BAF6B" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4">
+    <path d="M 780 180 L 828 180"/>
+    <path d="M 822 175 L 831 180 L 822 185" stroke-linejoin="round"/>
+  </g>
+
   <!-- Legend -->
   <g transform="translate(60, 760)">
     <line x1="0" y1="0" x2="24" y2="0" stroke="#C97D5B" stroke-width="1.5" stroke-linecap="round"/>
     <text x="32" y="4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10" fill="#7A6F62">protocol traffic</text>
     <line x1="170" y1="0" x2="194" y2="0" stroke="#A8B89E" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4"/>
     <text x="202" y="4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10" fill="#7A6F62">user-visible interaction</text>
+    <line x1="420" y1="0" x2="444" y2="0" stroke="#5BAF6B" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4"/>
+    <text x="452" y="4" font-family="JetBrains Mono, ui-monospace, monospace" font-size="10" fill="#7A6F62">website feature (additive, not protocol)</text>
   </g>
 </svg>
