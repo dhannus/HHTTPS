@@ -392,6 +392,83 @@ app.use((req, res, next) => {
   limit.global(req, res, next);
 });
 
+// ─── HHTTPS identity cookie (additive convenience feature) ────────────────────
+//
+// The protocol is and remains client-driven: the authoritative identity is the
+// token the browser holds (localStorage) and presents to platforms. This cookie
+// changes nothing about that.
+//
+// What it adds: after the user authenticates on hhttps.org, we ALSO mirror the
+// freshly issued token into an HttpOnly cookie scoped to hhttps.org. That lets
+// the issuer's own pages surface the logged-in identity as HHTTPS-* response
+// headers on the document request itself — so a developer can read their live
+// role/trust straight from the Network tab (or `curl --cookie`) without wiring
+// up a token-echo call. It is a developer-experience feature of the website,
+// not a change to the wire protocol: platforms never rely on this cookie, and
+// it is scoped to hhttps.org only (SameSite=Lax, HttpOnly, Secure).
+const ID_COOKIE = 'hhttps_identity';
+
+function setIdentityCookie(res, token) {
+  res.cookie(ID_COOKIE, token, {
+    httpOnly: true,
+    secure:   true,
+    sameSite: 'lax',
+    maxAge:   ACCESS_TTL * 1000,
+    path:     '/'
+  });
+}
+function clearIdentityCookie(res) {
+  res.clearCookie(ID_COOKIE, { path: '/' });
+}
+// Minimal single-cookie reader (avoids adding the cookie-parser dependency).
+function readIdentityCookie(req) {
+  const raw = req.headers.cookie;
+  if (!raw) return null;
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i === -1) continue;
+    if (part.slice(0, i).trim() === ID_COOKIE) {
+      return decodeURIComponent(part.slice(i + 1).trim());
+    }
+  }
+  return null;
+}
+
+// Advertise HHTTPS on every static/landing response. If the visitor carries a
+// valid identity cookie (i.e. they logged in on hhttps.org), surface their real
+// identity in the headers; otherwise emit the issuer-level headers. We never
+// invent identity — headers reflect a verified token or nothing.
+app.use((req, res, next) => {
+  res.setHeader('HHTTPS-Protocol-Version', '0.4.1');
+
+  const cookieToken = readIdentityCookie(req);
+  if (cookieToken) {
+    try {
+      const d = verifyToken(cookieToken);
+      if (d.sub !== 'refresh' && !(d.actorType === 'bot')) {
+        setHHTPPS(res, {
+          status:     'verified',
+          human:      true,
+          actorType:  'human',
+          role:       d.role,
+          roleLevel:  d.roleLevel,
+          trustScore: d.trustScore ?? 0,
+          method:     d.method || 'webauthn-passkey'
+        });
+        return next();
+      }
+    } catch {
+      // Expired/invalid cookie token → fall through to issuer headers and clear it.
+      clearIdentityCookie(res);
+    }
+  }
+
+  // No (valid) identity cookie: state that this origin is an HHTTPS issuer.
+  res.setHeader('HHTTPS-Status', 'issuer');
+  res.setHeader('HHTTPS-Issuer', `hhttps://${RP_ID}`);
+  next();
+});
+
 app.use(express.static(join(__dirname, 'public')));
 
 // Privacy Pass routes (additive, see privacy-pass/index.js)
@@ -1832,6 +1909,7 @@ app.post('/hhttps/token/refresh', async (req, res) => {
                      role, roleLevel: savedRole?.role_level,
                      trustScore: savedRole?.trust_score || 60,
                      token: newAccess, method: 'webauthn-passkey' });
+    setIdentityCookie(res, newAccess);  // refresh the hhttps.org-scoped cookie too
 
     res.json({
       hhttps:    { version: '0.4.1', status: 'refreshed', human: true, actorType: 'human' },
@@ -2037,6 +2115,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
                    role, roleLevel: vMethod, trustScore,
                    token, method: vMethod });
   res.setHeader('HHTTPS-Refresh-Token', refresh);
+  setIdentityCookie(res, token);  // mirror into hhttps.org-scoped cookie (dev convenience)
 
   res.json({
     hhttps: {
@@ -2074,6 +2153,7 @@ app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
     fireEvent('token.revoked', { role: decoded.role });
 
     setHHTPPS(res, { status: 'revoked', human: false, actorType: 'unknown' });
+    clearIdentityCookie(res);  // drop the hhttps.org-scoped convenience cookie
     res.json({ hhttps: { status: 'revoked' }, revoked: true, jti: decoded.jti });
   } catch (e) {
     // Allow revoking expired tokens by extracting jti from payload
