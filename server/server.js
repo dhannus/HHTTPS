@@ -34,7 +34,7 @@ import {
 } from '@simplewebauthn/server';
 
 import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
-         VERIFICATION_CHECKS, resolveVerification } from './roles.js';
+         VERIFICATION_CHECKS, resolveVerification, ageGroupFromEudiClaims } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
@@ -2241,6 +2241,121 @@ app.post('/hhttps/role/declare', async (req, res) => {
     } : null,
     message: `✓ "${roleDef.label}" · Trust ${trustScore}/100 · Access (1h) + Refresh (7d)`
   });
+});
+
+// ─── EUDI age upgrade (Phase 3) ───────────────────────────────────────────────
+//
+// INTERNAL endpoint. Called only by the eudi-verifier service (port 3002) after a
+// successful OpenID4VP age presentation. Lifts a self-declared age_group to a
+// cryptographically verified one (age_verified:true, method:eudi-wallet, trust 99)
+// by reissuing the holder's token with the verified age claims.
+//
+// SECURITY — defence in depth (single-server setup, no mTLS needed):
+//   1. nginx MUST NOT expose this path externally (allow 127.0.0.1; deny all).
+//   2. The request MUST carry a valid HMAC-SHA256 assertion signed with the
+//      shared EUDI_VERIFIER_SECRET. Without the secret, a caller cannot forge an
+//      upgrade — so even if the path were reachable, age_over_18:true can't be
+//      injected. The assertion binds {sessionId, ageOver, nonce, iat} so it
+//      can't be replayed onto another session.
+//
+// Body: {
+//   sessionId,                       // the holder's active hhttps session
+//   ageOver: { age_over_14?, age_over_16?, age_over_18? },  // disclosed booleans
+//   assertion                        // HMAC-SHA256 hex over the canonical payload
+// }
+app.post('/hhttps/age/upgrade', async (req, res) => {
+  try {
+    const { sessionId, ageOver, assertion, nonce, iat } = req.body || {};
+
+    if (!sessionId || typeof ageOver !== 'object' || ageOver === null || !assertion) {
+      return res.status(400).json({ error: 'sessionId, ageOver and assertion are required.' });
+    }
+
+    const secret = process.env.EUDI_VERIFIER_SECRET;
+    if (!secret) {
+      console.error('[AGE-UPGRADE] EUDI_VERIFIER_SECRET not configured — refusing.');
+      return res.status(503).json({ error: 'Age verification not configured.' });
+    }
+
+    // Recompute the HMAC over a canonical, sorted representation and compare in
+    // constant time. The verifier must sign exactly this structure.
+    const canonical = JSON.stringify({
+      sessionId,
+      ageOver: {
+        age_over_14: ageOver.age_over_14 === true,
+        age_over_16: ageOver.age_over_16 === true,
+        age_over_18: ageOver.age_over_18 === true
+      },
+      nonce: nonce || null,
+      iat:   iat   || null
+    });
+    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+
+    const a = Buffer.from(String(assertion), 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn(`[AGE-UPGRADE] invalid assertion for session ${String(sessionId).slice(0,8)}…`);
+      return res.status(401).json({ error: 'Invalid verifier assertion.' });
+    }
+
+    // Reject stale assertions (replay window: 5 min) when iat is provided.
+    if (iat) {
+      const ageMs = Date.now() - Number(iat);
+      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
+        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
+      }
+    }
+
+    // Session must exist and be a verified human session.
+    const session = await db.sessions.get(sessionId);
+    if (!session?.verified) {
+      return res.status(404).json({ error: 'Unknown or expired session.' });
+    }
+
+    // Map the disclosed EUDI booleans to the narrowest age band (Phase 3 bridge).
+    const ageGroupId = ageGroupFromEudiClaims(ageOver);
+    const ag = AGE_GROUPS[ageGroupId];
+    const eudiMethod = AGE_VERIFICATION_METHODS['eudi-wallet'];
+
+    // Reissue the holder's token with VERIFIED age claims. age_group lives in the
+    // token (client-driven design); no session schema change is needed.
+    const { token } = await issueAccessToken({
+      userId:     session.userId,
+      role:       session.role || 'citizen',
+      roleLabel:  ROLES[session.role || 'citizen']?.label,
+      roleLevel:  session.roleLevel || 'self-declared',
+      trustScore: session.trustScore ?? 30,
+      method:     session.roleLevel || 'self-declared',
+      deviceType: session.deviceType,
+      // verified age claims:
+      age_group:               ag.id,
+      age_verified:            true,               // cryptographically verified now
+      age_verification_method: eudiMethod.id,      // 'eudi-wallet'
+      age_trust:               eudiMethod.trustScore  // 99 (age-specific, orthogonal to role trust)
+    });
+
+    // Mirror the verified age into the hhttps.org identity cookie (additive).
+    setIdentityCookie(res, token);
+
+    console.log(`[AGE-UPGRADE] session ${String(sessionId).slice(0,8)}… → ${ag.id} (eudi-wallet, verified)`);
+    await db.stats.increment('age_verifications');
+    fireEvent('age.verified', { ageGroup: ag.id, method: 'eudi-wallet' });
+
+    res.json({
+      hhttps: { version: '0.4.1', token },
+      ageGroup: {
+        id:       ag.id,
+        label:    ag.label,
+        verified: true,
+        method:   eudiMethod.id,
+        trust:    eudiMethod.trustScore
+      },
+      message: `✓ Alter verifiziert: ${ag.label} (EUDI-Wallet)`
+    });
+  } catch (e) {
+    console.error('[AGE-UPGRADE] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Token Revocation ─────────────────────────────────────────────────────────
