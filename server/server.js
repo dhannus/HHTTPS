@@ -46,6 +46,7 @@ import * as db from './db.js';
 // Privacy Pass module (additive, RFC 9576-9578)
 import { initPrivacyPass, privacyPassRouter, privacyPassWellKnownRouter }
   from './privacy-pass/index.js';
+import { createEudiVerifierRouter } from './eudi-verifier/index.js';
 
 // External provider verification (GitHub for now; extends to ORCID, LinkedIn)
 import {
@@ -479,6 +480,9 @@ app.use(express.static(join(__dirname, 'public')));
 // Privacy Pass routes (additive, see privacy-pass/index.js)
 app.use(privacyPassWellKnownRouter);
 app.use('/privacy-pass', privacyPassRouter);
+
+// EUDI age-verification orchestrator (Phase 3, additive, see eudi-verifier/index.js)
+app.use('/eudi', createEudiVerifierRouter());
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
