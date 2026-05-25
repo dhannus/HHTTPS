@@ -289,6 +289,81 @@ export const VERIFICATION_LEVELS = {
   'institution-verified':  { level: 5, label: 'Institution verifiziert',  trustScore: 93 },
 };
 
+// ─── Verification check registry (honesty gate) ───────────────────────────────
+//
+// A method only grants its trustScore if it is BACKED BY A REAL, AUTOMATED CHECK.
+// Methods that today are merely a typed-in number with NO verification against an
+// authority MUST NOT raise trust — entering "any" approbation number cannot be
+// worth more than a plain self-declaration. Until the real check exists, such a
+// method is downgraded to self-declared (trust stays 30); the number is still
+// recorded so we can verify it later, and the token marks it as 'claimed'.
+//
+// `implemented: true`  → a real automated check runs (OAuth, email link, format
+//                        gate, domain classification). Grants the method's trust.
+// `implemented: false` → no real check yet → BREAK: trust stays self-declared,
+//                        method recorded as 'claimed', `targetTrust` documents
+//                        the score it WILL grant once the check is built.
+//
+// `status` mirrors this in the token: 'verified' | 'claimed' | 'planned'.
+export const VERIFICATION_CHECKS = {
+  // ── Really verified today (automated) ──
+  'github-verified': { implemented: true,  status: 'verified', note: 'GitHub OAuth (api.github.com).' },
+  'email-verified':  { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
+  'school-email':    { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
+  'medical-email':   { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
+  'lawyer-email':    { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
+  'official-email':  { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
+  'domain-verified': { implemented: true,  status: 'verified', note: 'Domain-Klassifizierung.' },
+  // ORCID: a real syntactic format gate runs (checksum-shaped regex). We treat
+  // the format gate as a (weak) implemented check, but cap its trust low and
+  // mark it 'claimed' because the ID is not confirmed against orcid.org.
+  'orcid':           { implemented: true,  status: 'claimed',  cap: 55, note: 'Nur Format geprüft, nicht gegen orcid.org.' },
+
+  // ── NOT verified today — typed-in only → BREAK (trust stays self-declared) ──
+  // targetTrust = the score each will grant ONCE its real check is built.
+  'press-card':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'DJV/dju/VDZ-Prüfung noch nicht angebunden.' },
+  'student-id':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'Hochschul-Prüfung noch nicht angebunden.' },
+  'teacher-id':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'Schulbehörden-Prüfung noch nicht angebunden.' },
+  'association-member': { implemented: false, status: 'claimed', targetTrust: 60, note: 'Verbands-Prüfung noch nicht angebunden.' },
+  'craft-chamber-id':   { implemented: false, status: 'claimed', targetTrust: 62, note: 'Handwerkskammer-Prüfung noch nicht angebunden.' },
+  'master-certificate': { implemented: false, status: 'claimed', targetTrust: 62, note: 'Meisterbrief-Prüfung noch nicht angebunden.' },
+  'care-chamber-id':    { implemented: false, status: 'claimed', targetTrust: 63, note: 'Pflegekammer-Prüfung noch nicht angebunden.' },
+  'bar-association-id': { implemented: false, status: 'claimed', targetTrust: 65, note: 'RAK-Prüfung noch nicht angebunden.' },
+  'notary-chamber-id':  { implemented: false, status: 'claimed', targetTrust: 65, note: 'Notarkammer-Prüfung noch nicht angebunden.' },
+  'approbation-id':     { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bundesärztekammer-Prüfung noch nicht angebunden.' },
+  'service-id':         { implemented: false, status: 'claimed', targetTrust: 63, note: 'Dienstausweis-Prüfung noch nicht angebunden.' },
+  'handelsregister':    { implemented: false, status: 'claimed', targetTrust: 65, note: 'Handelsregister-Prüfung noch nicht angebunden.' },
+  'institution-verified':{ implemented: false, status: 'claimed', targetTrust: 63, note: 'Institutions-Prüfung noch nicht angebunden.' },
+  'bundestag-verified': { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bundestags-Prüfung noch nicht angebunden.' },
+};
+
+// Helper: resolve the effective verification given a requested method.
+// Returns { method, status, trustScore, note, downgraded }.
+//   - real verified check  → keep method, grant its trust (or cap)
+//   - unimplemented check   → BREAK: downgrade to self-declared, trust 30,
+//                             status 'claimed', original method kept as claimedAs
+export function resolveVerification(requestedMethod, baseTrust = 30) {
+  const SELF = { method: 'self-declared', status: 'self-declared',
+                 trustScore: VERIFICATION_LEVELS['self-declared'].trustScore };
+  if (!requestedMethod || requestedMethod === 'self-declared') return { ...SELF, downgraded: false };
+
+  const level = VERIFICATION_LEVELS[requestedMethod];
+  const check = VERIFICATION_CHECKS[requestedMethod];
+  if (!level || !check) return { ...SELF, downgraded: false };
+
+  if (check.implemented) {
+    const trust = check.cap ? Math.min(level.trustScore, check.cap) : level.trustScore;
+    return { method: requestedMethod, status: check.status || 'verified',
+             trustScore: trust, note: check.note, downgraded: false };
+  }
+
+  // BREAK — no real check yet. Trust stays self-declared; record what was claimed.
+  return { method: 'self-declared', status: 'claimed',
+           trustScore: VERIFICATION_LEVELS['self-declared'].trustScore,
+           claimedAs: requestedMethod, targetTrust: check.targetTrust,
+           note: check.note, downgraded: true };
+}
+
 // ─── Age groups (orthogonal claim, EUDI-aligned) ──────────────────────────────
 //
 // age_group is INDEPENDENT of the role: a person can be both a

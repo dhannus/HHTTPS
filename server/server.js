@@ -33,7 +33,8 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse
 } from '@simplewebauthn/server';
 
-import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS } from './roles.js';
+import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
+         VERIFICATION_CHECKS, resolveVerification } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
@@ -487,22 +488,33 @@ function setHHTPPS(res, opts = {}) {
           method = 'none', machineOperator = null, machinePurpose = null,
           ageGroup = null, ageVerified = null, ageVerificationMethod = null } = opts;
 
+  // HTTP header values must be ASCII (Latin-1). German role labels contain
+  // umlauts (Bürger, Schüler, Pädagoge), which make res.setHeader throw
+  // ERR_INVALID_CHAR. Transliterate umlauts and strip any remaining non-ASCII
+  // and control chars so no header value can ever crash the response.
+  const hdrSafe = (v) => String(v)
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue')
+    .replace(/Ä/g, 'Ae').replace(/Ö/g, 'Oe').replace(/Ü/g, 'Ue')
+    .replace(/ß/g, 'ss')
+    .replace(/[^\x20-\x7E]/g, '')   // drop any remaining non-ASCII / control chars
+    .trim();
+
   res.setHeader('HHTTPS-Protocol-Version', '0.4.1');
-  res.setHeader('HHTTPS-Status',           status);
+  res.setHeader('HHTTPS-Status',           hdrSafe(status));
   res.setHeader('HHTTPS-Human',            String(human));
-  res.setHeader('HHTTPS-Actor-Type',       actorType);
-  res.setHeader('HHTTPS-Method',           method);
+  res.setHeader('HHTTPS-Actor-Type',       hdrSafe(actorType));
+  res.setHeader('HHTTPS-Method',           hdrSafe(method));
   res.setHeader('HHTTPS-Trust-Score',      String(trustScore));
   res.setHeader('HHTTPS-Issuer',           `hhttps://${RP_ID}`);
-  if (role)            { res.setHeader('HHTTPS-Role', role); res.setHeader('HHTTPS-Role-Label', ROLES[role]?.label || role); }
-  if (roleLevel)         res.setHeader('HHTTPS-Role-Level', roleLevel);
+  if (role)            { res.setHeader('HHTTPS-Role', hdrSafe(role)); res.setHeader('HHTTPS-Role-Label', hdrSafe(ROLES[role]?.label || role)); }
+  if (roleLevel)         res.setHeader('HHTTPS-Role-Level', hdrSafe(roleLevel));
   if (token)             res.setHeader('HHTTPS-Token',      token);
-  if (machineOperator)   res.setHeader('HHTTPS-Machine-Operator', machineOperator);
-  if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  machinePurpose);
+  if (machineOperator)   res.setHeader('HHTTPS-Machine-Operator', hdrSafe(machineOperator));
+  if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  hdrSafe(machinePurpose));
   // Age group is an orthogonal, optional claim — surface it only when present.
-  if (ageGroup)              res.setHeader('HHTTPS-Age-Group', ageGroup);
+  if (ageGroup)              res.setHeader('HHTTPS-Age-Group', hdrSafe(ageGroup));
   if (ageVerified !== null)  res.setHeader('HHTTPS-Age-Verified', String(ageVerified));
-  if (ageVerificationMethod) res.setHeader('HHTTPS-Age-Method', ageVerificationMethod);
+  if (ageVerificationMethod) res.setHeader('HHTTPS-Age-Method', hdrSafe(ageVerificationMethod));
 }
 
 // ─── Signature helpers (Phase 2.5: Domain-bound slugs) ───────────────────────
@@ -2101,6 +2113,9 @@ app.post('/hhttps/role/declare', async (req, res) => {
   let vMethod    = verificationMethod || 'self-declared';
   let trustScore = 60;
   let note       = null;
+  let vClaimStatus = 'self-declared';  // 'verified' | 'claimed' | 'self-declared'
+  let vClaimedAs   = null;             // the method the user asserted but we couldn't verify
+  let vTargetTrust = null;             // trust that method will grant once a real check exists
 
   // GitHub takes precedence for developer if both are set, since it's a
   // stronger pseudonymous signal than mere email-domain classification.
@@ -2108,29 +2123,49 @@ app.post('/hhttps/role/declare', async (req, res) => {
     vMethod    = 'github-verified';
     trustScore = Math.max(trustScore, session.githubTrustBonus);
     note       = `GitHub-Konto verifiziert (Trust ${session.githubTrustBonus}).`;
+    vClaimStatus = 'verified';
   } else if (session.emailVerified && session.emailTrustBonus) {
     vMethod    = session.emailLevel || 'email-verified';
     trustScore = Math.max(trustScore, session.emailTrustBonus);
     note = `E-Mail-Domain "${session.emailDomain}" automatisch verifiziert.`;
+    vClaimStatus = 'verified';
   } else {
-    const vlevel = VERIFICATION_LEVELS[vMethod] || VERIFICATION_LEVELS['self-declared'];
-    trustScore   = Math.max(trustScore, vlevel.trustScore);
+    // Honesty gate (Phase 2): a method only grants its trust if a REAL automated
+    // check backs it. Unimplemented checks (typed-in numbers like approbation-id,
+    // bar-association-id, press-card, ...) BREAK here: trust stays self-declared
+    // (30), the method is recorded as 'claimed' (what the user asserts), and the
+    // submitted number is kept in the note for later real verification.
+    const resolved = resolveVerification(vMethod);
+    vClaimStatus   = resolved.status;          // 'verified' | 'claimed' | 'self-declared'
+    vClaimedAs     = resolved.claimedAs || null;
+    vTargetTrust   = resolved.targetTrust || null;
 
-    // Optional: validate ID format for various verification methods
-    if (vMethod === 'press-card'         && verificationData?.pressCardId)
-      note = `Presseausweis-Nr. ${verificationData.pressCardId} eingereicht.`;
-    if (vMethod === 'student-id'         && verificationData?.studentId)
-      note = `Matrikelnummer "${verificationData.studentId}" eingereicht.`;
-    if (vMethod === 'association-member' && verificationData?.memberId)
-      note = `Verbandsmitglied-Nr. "${verificationData.memberId}" eingereicht.`;
-    if (vMethod === 'bar-association-id' && verificationData?.barId)
-      note = `RAK-Eintrag "${verificationData.barId}" eingereicht.`;
-    if (vMethod === 'craft-chamber-id'   && verificationData?.craftId)
-      note = `Handwerksrolle-Eintrag "${verificationData.craftId}" eingereicht.`;
-    if (vMethod === 'orcid'              && verificationData?.orcid) {
-      const ok = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(verificationData.orcid);
-      if (!ok) { vMethod = 'self-declared'; trustScore = 30; note = 'ORCID-Format ungültig.'; }
-      else note = `ORCID ${verificationData.orcid} eingereicht.`;
+    if (resolved.downgraded) {
+      // Record the submitted id so it can be verified once the real check exists.
+      const submitted =
+        verificationData?.pressCardId || verificationData?.studentId ||
+        verificationData?.memberId    || verificationData?.barId     ||
+        verificationData?.craftId     || verificationData?.approbationId ||
+        verificationData?.notaryId    || verificationData?.hrbId      ||
+        verificationData?.serviceId   || null;
+      vMethod    = 'self-declared';
+      trustScore = resolved.trustScore;        // stays 30
+      note = submitted
+        ? `Eigenangabe "${submitted}" für ${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} erfasst — noch nicht automatisch geprüft, kein Trust-Bonus.`
+        : `${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} als Eigenangabe erfasst — noch nicht automatisch geprüft, kein Trust-Bonus.`;
+    } else {
+      // Real check (or ORCID format gate). ORCID still needs its format validated.
+      vMethod    = resolved.method;
+      trustScore = Math.max(trustScore, resolved.trustScore);
+      if (resolved.method === 'orcid' && verificationData?.orcid) {
+        const ok = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(verificationData.orcid);
+        if (!ok) {
+          vMethod = 'self-declared'; trustScore = 30; vClaimStatus = 'self-declared';
+          note = 'ORCID-Format ungültig — keine Verifikation.';
+        } else {
+          note = `ORCID ${verificationData.orcid} (Format geprüft, nicht gegen orcid.org bestätigt).`;
+        }
+      }
     }
   }
 
@@ -2149,6 +2184,8 @@ app.post('/hhttps/role/declare', async (req, res) => {
     trustScore,
     method:     vMethod,
     deviceType: session.deviceType,
+    verification_status: vClaimStatus,                          // verified | claimed | self-declared
+    ...(vClaimedAs ? { claimed_as: vClaimedAs } : {}),          // asserted-but-unverified method
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, role);
@@ -2181,6 +2218,10 @@ app.post('/hhttps/role/declare', async (req, res) => {
       id: role, label: roleDef.label, icon: roleDef.icon, level: vMethod,
       levelLabel: VERIFICATION_LEVELS[vMethod]?.label, trustScore,
       verificationNote: note, privileges: roleDef.privileges,
+      verificationStatus: vClaimStatus,            // verified | claimed | self-declared
+      claimedAs:          vClaimedAs || null,       // method asserted but not yet verifiable
+      claimedAsLabel:     vClaimedAs ? (VERIFICATION_LEVELS[vClaimedAs]?.label || vClaimedAs) : null,
+      targetTrust:        vTargetTrust || null,     // trust once the real check exists
       emailVerified: session.emailVerified || false,
       emailDomain:   session.emailDomain   || null
     },
