@@ -348,7 +348,8 @@ app.use(cors({
     'HHTTPS-Actor-Type','HHTTPS-Role','HHTTPS-Role-Label',
     'HHTTPS-Role-Level','HHTTPS-Trust-Score','HHTTPS-Token',
     'HHTTPS-Issuer','HHTTPS-Method','HHTTPS-Refresh-Token',
-    'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose'
+    'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
+    'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method'
   ]
 }));
 
@@ -453,7 +454,10 @@ app.use((req, res, next) => {
           role:       d.role,
           roleLevel:  d.roleLevel,
           trustScore: d.trustScore ?? 0,
-          method:     d.method || 'webauthn-passkey'
+          method:     d.method || 'webauthn-passkey',
+          ageGroup:              d.age_group || null,
+          ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
+          ageVerificationMethod: d.age_verification_method || null
         });
         return next();
       }
@@ -480,7 +484,8 @@ app.use('/privacy-pass', privacyPassRouter);
 function setHHTPPS(res, opts = {}) {
   const { status = 'unverified', human = false, actorType = 'unknown',
           role = null, roleLevel = null, trustScore = 0, token = null,
-          method = 'none', machineOperator = null, machinePurpose = null } = opts;
+          method = 'none', machineOperator = null, machinePurpose = null,
+          ageGroup = null, ageVerified = null, ageVerificationMethod = null } = opts;
 
   res.setHeader('HHTTPS-Protocol-Version', '0.4.1');
   res.setHeader('HHTTPS-Status',           status);
@@ -494,6 +499,10 @@ function setHHTPPS(res, opts = {}) {
   if (token)             res.setHeader('HHTTPS-Token',      token);
   if (machineOperator)   res.setHeader('HHTTPS-Machine-Operator', machineOperator);
   if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  machinePurpose);
+  // Age group is an orthogonal, optional claim — surface it only when present.
+  if (ageGroup)              res.setHeader('HHTTPS-Age-Group', ageGroup);
+  if (ageVerified !== null)  res.setHeader('HHTTPS-Age-Verified', String(ageVerified));
+  if (ageVerificationMethod) res.setHeader('HHTTPS-Age-Method', ageVerificationMethod);
 }
 
 // ─── Signature helpers (Phase 2.5: Domain-bound slugs) ───────────────────────
@@ -2153,7 +2162,10 @@ app.post('/hhttps/role/declare', async (req, res) => {
 
   setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
                    role, roleLevel: vMethod, trustScore,
-                   token, method: vMethod });
+                   token, method: vMethod,
+                   ageGroup:              ageClaims?.age_group || null,
+                   ageVerified:           ageClaims ? ageClaims.age_verified : null,
+                   ageVerificationMethod: ageClaims?.age_verification_method || null });
   res.setHeader('HHTTPS-Refresh-Token', refresh);
   setIdentityCookie(res, token);  // mirror into hhttps.org-scoped cookie (dev convenience)
 
