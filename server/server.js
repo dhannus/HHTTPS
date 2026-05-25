@@ -347,8 +347,8 @@ app.use(cors({
   exposedHeaders: [
     'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
     'HHTTPS-Actor-Type','HHTTPS-Role','HHTTPS-Role-Label',
-    'HHTTPS-Role-Level','HHTTPS-Trust-Score','HHTTPS-Token',
-    'HHTTPS-Issuer','HHTTPS-Method','HHTTPS-Refresh-Token',
+    'HHTTPS-Role-Level','HHTTPS-Trust-Score',
+    'HHTTPS-Issuer','HHTTPS-Method',
     'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
     'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method'
   ]
@@ -508,7 +508,13 @@ function setHHTPPS(res, opts = {}) {
   res.setHeader('HHTTPS-Issuer',           `hhttps://${RP_ID}`);
   if (role)            { res.setHeader('HHTTPS-Role', hdrSafe(role)); res.setHeader('HHTTPS-Role-Label', hdrSafe(ROLES[role]?.label || role)); }
   if (roleLevel)         res.setHeader('HHTTPS-Role-Level', hdrSafe(roleLevel));
-  if (token)             res.setHeader('HHTTPS-Token',      token);
+  // NOTE: the access token is intentionally NOT exposed as an HHTTPS-Token
+  // response header. A full ES256 JWT (now carrying role + age_group +
+  // verification_status + claimed_as) is several KB and overflows nginx's
+  // default proxy header buffer ("upstream sent too big header" → 502).
+  // The token travels in the JSON body (hhttps.token) and the identity cookie,
+  // which is the correct transport. Keeping it out of headers keeps responses
+  // small and within proxy limits.
   if (machineOperator)   res.setHeader('HHTTPS-Machine-Operator', hdrSafe(machineOperator));
   if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  hdrSafe(machinePurpose));
   // Age group is an orthogonal, optional claim — surface it only when present.
@@ -2203,7 +2209,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
                    ageGroup:              ageClaims?.age_group || null,
                    ageVerified:           ageClaims ? ageClaims.age_verified : null,
                    ageVerificationMethod: ageClaims?.age_verification_method || null });
-  res.setHeader('HHTTPS-Refresh-Token', refresh);
+  // Refresh token also stays out of headers (size); it is in the JSON body.
   setIdentityCookie(res, token);  // mirror into hhttps.org-scoped cookie (dev convenience)
 
   res.json({

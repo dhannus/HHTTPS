@@ -420,3 +420,27 @@ export const AGE_VERIFICATION_METHODS = {
     note: 'Altersnachweis per EUDI-Wallet (age_over_NN, Selective Disclosure). Geplant.'
   },
 };
+
+// ─── Phase 3 bridge: EUDI age_over_NN booleans → age_group (reverse mapping) ──
+//
+// Phase 1 stored, per band, the EUDI age_over_NN booleans in AGE_GROUPS[x].eudiClaims.
+// Phase 3 reads them BACKWARDS: given what an EUDI Wallet disclosed via OpenID4VP
+// (a subset of age_over_14 / age_over_16 / age_over_18), pick the narrowest band
+// that matches. This is the ONLY new logic age verification needs in roles.js —
+// no token-format change, exactly the upgrade path Phase 1 documented.
+//
+// Selective disclosure: a verifier may request only the minimal boolean it needs
+// (e.g. just age_over_16 for a 16+ gate). Undisclosed booleans are treated as
+// "not proven" (false). A child therefore proves "under 16" without revealing an
+// exact age or date of birth — the youth-protection win.
+//
+// Input:  { age_over_14?, age_over_16?, age_over_18? }  (any subset; missing = false)
+// Output: 'adult_18_plus' | 'minor_16_to_17' | 'minor_14_to_15' | 'minor_under_14'
+export function ageGroupFromEudiClaims(claims = {}) {
+  const c = (claims && typeof claims === 'object') ? claims : {};
+  const over = (k) => c[k] === true;        // missing / non-true ⇒ not proven
+  if (over('age_over_18')) return 'adult_18_plus';
+  if (over('age_over_16')) return 'minor_16_to_17';
+  if (over('age_over_14')) return 'minor_14_to_15';
+  return 'minor_under_14';
+}
