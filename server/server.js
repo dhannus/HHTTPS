@@ -33,7 +33,7 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse
 } from '@simplewebauthn/server';
 
-import { ROLES, VERIFICATION_LEVELS } from './roles.js';
+import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
@@ -1180,7 +1180,7 @@ app.get('/s/:slug', (req, res) => {
 
 const OAUTH_CODE_TTL  = 60;         // seconds
 const OAUTH_TOKEN_TTL = 5 * 60;     // 5 min for third-party access tokens
-const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method']);
+const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method', 'age_group']);
 
 // Discovery (RFC 8414 / OpenID Connect Discovery 1.0)
 app.get('/.well-known/openid-configuration', (req, res) => {
@@ -1191,7 +1191,7 @@ app.get('/.well-known/openid-configuration', (req, res) => {
     userinfo_endpoint:               `${BASE_URL}/hhttps/oauth/userinfo`,
     revocation_endpoint:              `${BASE_URL}/hhttps/oauth/revoke`,
     jwks_uri:                         `${BASE_URL}/.well-known/jwks.json`,
-    scopes_supported:                 ['openid', 'role', 'verification_method'],
+    scopes_supported:                 ['openid', 'role', 'verification_method', 'age_group'],
     response_types_supported:         ['code'],
     grant_types_supported:            ['authorization_code'],
     subject_types_supported:          ['pairwise', 'public'],
@@ -1201,7 +1201,8 @@ app.get('/.well-known/openid-configuration', (req, res) => {
     claims_supported: [
       'sub', 'iss', 'aud', 'exp', 'iat', 'auth_time',
       'role', 'role_label', 'role_icon', 'trust_score',
-      'verification_method', 'verification_method_label'
+      'verification_method', 'verification_method_label',
+      'age_group', 'age_verified', 'age_verification_method'
     ]
   }, {
     title: 'OpenID Connect Discovery',
@@ -1337,6 +1338,9 @@ app.post('/hhttps/oauth/approve', async (req, res) => {
       role:               d.role,
       trustScore:         d.trustScore,
       verificationMethod: d.roleLevel,
+      ageGroup:               d.age_group || null,
+      ageVerified:            d.age_verified ?? null,
+      ageVerificationMethod:  d.age_verification_method || null,
       ttlSec:             OAUTH_CODE_TTL
     });
 
@@ -1434,7 +1438,14 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     client_id,
     scope:      claimed.scopes.join(' '),
     role:       claimed.role,
-    trustScore: claimed.trust_score
+    trustScore: claimed.trust_score,
+    // age_group travels with the access token only when the scope was granted,
+    // so /userinfo can echo it. Orthogonal to role; self-declared in Phase 1.
+    ...(claimed.scopes.includes('age_group') && claimed.age_group ? {
+      age_group:               claimed.age_group,
+      age_verified:            claimed.age_verified ?? false,
+      age_verification_method: claimed.age_verification_method || 'self-declared'
+    } : {})
   }, { expiresIn: OAUTH_TOKEN_TTL });
 
   // ID token (OIDC) — claims based on requested scopes
@@ -1454,6 +1465,11 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   if (claimed.scopes.includes('verification_method')) {
     idTokenClaims.verification_method       = claimed.verification_method;
     idTokenClaims.verification_method_label = vMethod.label || null;
+  }
+  if (claimed.scopes.includes('age_group') && claimed.age_group) {
+    idTokenClaims.age_group               = claimed.age_group;
+    idTokenClaims.age_verified            = claimed.age_verified ?? false;
+    idTokenClaims.age_verification_method = claimed.age_verification_method || 'self-declared';
   }
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
 
@@ -1503,6 +1519,11 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
       out.role_label  = roleDef.label;
       out.role_icon   = roleDef.icon;
       out.trust_score = d.trustScore;
+    }
+    if (scopes.includes('age_group') && d.age_group) {
+      out.age_group               = d.age_group;
+      out.age_verified            = d.age_verified ?? false;
+      out.age_verification_method = d.age_verification_method || 'self-declared';
     }
     return res.json(out);
   } catch (e) {
@@ -1567,7 +1588,8 @@ function renderConsentPage({ client, scopes, params }) {
     const label = {
       'openid':              { icon: '🆔', title: 'Anonyme Identität',  desc: 'Eine pseudonyme Kennung, die nur diese Plattform sieht.' },
       'role':                { icon: '🎭', title: 'Rolle + Trust-Score', desc: 'Deine gesellschaftliche Rolle (z. B. Entwickler) und dein Vertrauenswert.' },
-      'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' }
+      'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' },
+      'age_group':           { icon: '🔞', title: 'Altersgruppe', desc: 'Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.' }
     }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
     return `<div class="scope-row">
       <span class="scope-icon">${label.icon}</span>
@@ -2041,7 +2063,7 @@ app.post('/hhttps/verify/github/status', async (req, res) => {
 // ─── Role Declaration ─────────────────────────────────────────────────────────
 
 app.post('/hhttps/role/declare', async (req, res) => {
-  const { sessionId, role, verificationMethod, verificationData } = req.body;
+  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body;
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Ungültige oder abgelaufene Session.' });
 
@@ -2049,6 +2071,23 @@ app.post('/hhttps/role/declare', async (req, res) => {
   if (!roleDef) return res.status(400).json({
     error: `Unbekannte Rolle: ${role}`, available: Object.keys(ROLES)
   });
+
+  // Optional age_group (orthogonal to role). Phase 1: self-declared only —
+  // honestly labelled, low trust, age_verified:false. Phase 3 will set this
+  // from an EUDI Wallet PID presentation (age_over_NN) with method 'eudi-wallet'.
+  let ageClaims = null;
+  if (ageGroup) {
+    const ag = AGE_GROUPS[ageGroup];
+    if (!ag) return res.status(400).json({
+      error: `Unbekannte Altersgruppe: ${ageGroup}`, available: Object.keys(AGE_GROUPS)
+    });
+    const ageMethod = AGE_VERIFICATION_METHODS['self-declared'];
+    ageClaims = {
+      age_group:                ag.id,
+      age_verified:             ageMethod.verified,        // false in Phase 1
+      age_verification_method:  ageMethod.id               // 'self-declared'
+    };
+  }
 
   let vMethod    = verificationMethod || 'self-declared';
   let trustScore = 60;
@@ -2100,7 +2139,8 @@ app.post('/hhttps/role/declare', async (req, res) => {
     roleLevel:  vMethod,
     trustScore,
     method:     vMethod,
-    deviceType: session.deviceType
+    deviceType: session.deviceType,
+    ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, role);
 
@@ -2132,6 +2172,14 @@ app.post('/hhttps/role/declare', async (req, res) => {
       emailVerified: session.emailVerified || false,
       emailDomain:   session.emailDomain   || null
     },
+    ageGroup: ageClaims ? {
+      id:        ageClaims.age_group,
+      label:     AGE_GROUPS[ageClaims.age_group].label,
+      verified:  ageClaims.age_verified,
+      method:    ageClaims.age_verification_method,
+      methodLabel: AGE_VERIFICATION_METHODS[ageClaims.age_verification_method]?.label,
+      note:      'Eigenangabe — später per EUDI-Wallet verifizierbar.'
+    } : null,
     message: `✓ "${roleDef.label}" · Trust ${trustScore}/100 · Access (1h) + Refresh (7d)`
   });
 });

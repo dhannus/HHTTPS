@@ -199,6 +199,12 @@ body::before{
 .veri-box.show{display:block;animation:fi .3s;}
 .veri-box h4{font-size:13px;color:var(--cyan);letter-spacing:1px;margin-bottom:12px;font-weight:600;}
 .veri-opts{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;}
+.veri-opt{background:rgba(0,0,0,.25);border:1px solid var(--b2);color:var(--text-muted-strong);
+  padding:8px 14px;border-radius:8px;cursor:pointer;font-size:13px;min-height:40px;
+  transition:all .15s;font-family:inherit;}
+.veri-opt:hover{border-color:var(--cyan);color:var(--text);}
+.veri-opt.sel{background:rgba(34,211,238,.12);border-color:var(--cyan);color:var(--cyan);font-weight:600;}
+.veri-opt:focus-visible{outline:2px solid var(--cyan);outline-offset:2px;}
 .vopt{padding:10px 16px;border-radius:6px;border:1px solid var(--b2);
   background:var(--s2);cursor:pointer;font-size:13px;color:var(--text-muted-strong);transition:all .2s;
   min-height:44px;display:inline-flex;align-items:center;}
@@ -775,6 +781,22 @@ footer a{color:var(--cyan);text-decoration:none;}
         </div>
       </div>
 
+      <!-- Optional age group (orthogonal to role). Phase 1: self-declared. -->
+      <div class="veri-box show" id="ageBox" style="margin-top:14px;">
+        <h4>// ALTERSGRUPPE (OPTIONAL)</h4>
+        <p class="veri-intro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:6px;line-height:1.65;">
+          Grobe Altersgruppe statt Geburtsdatum — z. B. für Jugendschutz oder „18+"-Bereiche.
+          Aktuell <strong>Eigenangabe</strong> (Trust niedrig). Später per EUDI-Wallet kryptografisch verifizierbar.
+        </p>
+        <div class="veri-opts" id="ageOpts" role="radiogroup" aria-label="Altersgruppe wählen">
+          <button type="button" class="veri-opt" data-age="" onclick="selectAge('')" aria-pressed="true">Keine Angabe</button>
+          <button type="button" class="veri-opt" data-age="minor_under_14" onclick="selectAge('minor_under_14')" aria-pressed="false">Unter 14</button>
+          <button type="button" class="veri-opt" data-age="minor_14_to_15" onclick="selectAge('minor_14_to_15')" aria-pressed="false">14–15</button>
+          <button type="button" class="veri-opt" data-age="minor_16_to_17" onclick="selectAge('minor_16_to_17')" aria-pressed="false">16–17</button>
+          <button type="button" class="veri-opt" data-age="adult_18_plus" onclick="selectAge('adult_18_plus')" aria-pressed="false">18+</button>
+        </div>
+      </div>
+
       <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled>
         Rolle bestätigen + Token ausstellen →
       </button>
@@ -799,6 +821,7 @@ footer a{color:var(--cyan);text-decoration:none;}
           <div class="tc"><div class="k">ROLE</div><div class="v" id="tcR">—</div></div>
           <div class="tc"><div class="k">TRUST</div><div class="v" id="tcT">—</div></div>
           <div class="tc"><div class="k">LEVEL</div><div class="v" id="tcL">—</div></div>
+          <div class="tc" id="tcAgeWrap" style="display:none;"><div class="k">AGE GROUP</div><div class="v" id="tcAge">—</div></div>
         </div>
         <div id="tokenExpiryHint" style="margin-top:10px;font-size:12px;color:var(--text-muted-strong);min-height:18px;"></div>
       </div>
@@ -1132,6 +1155,17 @@ let selRole    = null;
 let __githubAlreadyVerified = null;  // trust score if user re-logged in with existing GitHub anchor
 let selVMethod = 'self-declared';
 let vData      = {};
+let selAgeGroup = '';  // orthogonal age_group (optional, self-declared in Phase 1)
+
+// Age group selector (radio-style)
+function selectAge(group) {
+  selAgeGroup = group || '';
+  document.querySelectorAll('#ageOpts .veri-opt').forEach(b => {
+    const on = (b.dataset.age || '') === selAgeGroup;
+    b.classList.toggle('sel', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+}
 
 const ROLES_LOCAL = {
   citizen:              { icon:'🧑',   label:'Bürger',                 methods:['self-declared'] },
@@ -1690,7 +1724,8 @@ async function doDeclarRole() {
       body: JSON.stringify({
         sessionId, role: selRole,
         verificationMethod: selVMethod,
-        verificationData: vData
+        verificationData: vData,
+        ageGroup: selAgeGroup || undefined
       })
     });
     const d = await r.json();
@@ -1725,6 +1760,15 @@ async function doDeclarRole() {
     document.getElementById('tcR').textContent = rl.icon+' '+selRole;
     document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
     document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+
+    // Optional age group (orthogonal claim, self-declared in Phase 1)
+    if (d.ageGroup && d.ageGroup.id) {
+      const verifiedMark = d.ageGroup.verified ? ' ✓' : ' (Eigenangabe)';
+      document.getElementById('tcAge').textContent = d.ageGroup.label + verifiedMark;
+      document.getElementById('tcAgeWrap').style.display = '';
+    } else {
+      document.getElementById('tcAgeWrap').style.display = 'none';
+    }
 
     updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;

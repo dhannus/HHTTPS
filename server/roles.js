@@ -288,3 +288,60 @@ export const VERIFICATION_LEVELS = {
   'bundestag-verified':    { level: 6, label: 'Bundestag verifiziert',    trustScore: 98 },
   'institution-verified':  { level: 5, label: 'Institution verifiziert',  trustScore: 93 },
 };
+
+// ─── Age groups (orthogonal claim, EUDI-aligned) ──────────────────────────────
+//
+// age_group is INDEPENDENT of the role: a person can be both a
+// medical_professional AND adult_18_plus. It mirrors the EUDI Wallet's
+// age_over_NN selective-disclosure model, so Phase 3 (real EUDI verification)
+// only needs to flip the verification method + trust — no schema change.
+//
+// The four groups map to German legal thresholds:
+//   minor_under_14  — JuSchG "Kind"
+//   minor_14_to_15  — strafmündig (§19 StGB), JuSchG "Jugendlicher"
+//   minor_16_to_17  — DSGVO-einwilligungsfähig (Art. 8), eingeschränkt geschäftsfähig
+//   adult_18_plus   — volljährig (§2 BGB)
+export const AGE_GROUPS = {
+  minor_under_14: {
+    id: 'minor_under_14', label: 'Kind (unter 14)', labelEn: 'Child (under 14)',
+    icon: '🧒', minAge: 0, maxAge: 13,
+    // EUDI age_over_NN booleans that characterise this group (all false here)
+    eudiClaims: { age_over_14: false, age_over_16: false, age_over_18: false },
+    note: 'JuSchG: Kind. Besonderer Schutz.'
+  },
+  minor_14_to_15: {
+    id: 'minor_14_to_15', label: 'Jugendlich (14–15)', labelEn: 'Youth (14–15)',
+    icon: '🧑', minAge: 14, maxAge: 15,
+    eudiClaims: { age_over_14: true, age_over_16: false, age_over_18: false },
+    note: 'Strafmündig (§19 StGB), JuSchG: Jugendlicher.'
+  },
+  minor_16_to_17: {
+    id: 'minor_16_to_17', label: 'Jugendlich (16–17)', labelEn: 'Youth (16–17)',
+    icon: '🧑', minAge: 16, maxAge: 17,
+    eudiClaims: { age_over_14: true, age_over_16: true, age_over_18: false },
+    note: 'DSGVO Art. 8 einwilligungsfähig, eingeschränkt geschäftsfähig.'
+  },
+  adult_18_plus: {
+    id: 'adult_18_plus', label: 'Volljährig (18+)', labelEn: 'Adult (18+)',
+    icon: '🧑', minAge: 18, maxAge: null,
+    eudiClaims: { age_over_14: true, age_over_16: true, age_over_18: true },
+    note: 'Volljährig (§2 BGB).'
+  },
+};
+
+// How an age_group was established. Phase 1 ships only self-declared (honest,
+// low trust). Phase 3 adds eudi-wallet once the OpenID4VP verifier is wired up.
+//   self-declared → age_verified:false, trust 30 (Eigenangabe)
+//   eudi-wallet   → age_verified:true,  trust 99 (PID selective disclosure)  [planned]
+export const AGE_VERIFICATION_METHODS = {
+  'self-declared': {
+    id: 'self-declared', label: 'Eigenangabe', labelEn: 'Self-declared',
+    verified: false, trustScore: 30, available: true,
+    note: 'Selbst angegeben, noch nicht kryptografisch verifiziert.'
+  },
+  'eudi-wallet': {
+    id: 'eudi-wallet', label: 'EUDI Wallet (PID)', labelEn: 'EUDI Wallet (PID)',
+    verified: true, trustScore: 99, available: false,  // Phase 3
+    note: 'Altersnachweis per EUDI-Wallet (age_over_NN, Selective Disclosure). Geplant.'
+  },
+};

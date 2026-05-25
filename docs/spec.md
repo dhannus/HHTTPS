@@ -192,6 +192,30 @@ An HHTTPS access token is a JWT signed with ES256.
 | `userId` | string | Stable opaque UUID for the subject (for app-level linking) |
 | `kid` | string | Key ID, redundant with header — included for convenience |
 | `hhttps_iss` | string | Branding-only issuer label in `hhttps://<host>` form. Informational; verifiers MUST validate against `iss`, not this field. |
+| `age_group` | string | Orthogonal age band (see below). One of `minor_under_14`, `minor_14_to_15`, `minor_16_to_17`, `adult_18_plus`. |
+| `age_verified` | boolean | Whether the age band was cryptographically verified. `false` for self-declared (Phase 1); `true` once verified via EUDI Wallet (Phase 3). |
+| `age_verification_method` | string | How the band was established: `self-declared` (Phase 1) or `eudi-wallet` (Phase 3, planned). |
+
+### Age group (orthogonal claim)
+
+`age_group` is **independent of `role`**: a token can carry both
+`role: medical_professional` and `age_group: adult_18_plus`. It mirrors the
+EUDI Wallet's `age_over_NN` selective-disclosure model rather than exposing a
+date of birth. The four bands map to German legal thresholds:
+
+| `age_group` | Ages | EUDI `age_over_NN` | Note |
+|---|---|---|---|
+| `minor_under_14` | 0–13 | all false | JuSchG "Kind" |
+| `minor_14_to_15` | 14–15 | `age_over_14` | strafmündig; JuSchG "Jugendlicher" |
+| `minor_16_to_17` | 16–17 | `age_over_14`, `age_over_16` | DSGVO Art. 8 einwilligungsfähig |
+| `adult_18_plus` | 18+ | `age_over_14/16/18` | volljährig (§2 BGB) |
+
+The claim is **optional** and gated behind the `age_group` OAuth scope: a
+platform receives it only if it requested that scope and the user consented.
+In Phase 1 the only verification method is `self-declared` (`age_verified:
+false`, trust 30) — honestly labelled, never presented as cryptographically
+proven. Phase 3 will set `age_verified: true` / method `eudi-wallet` from a PID
+presentation; no token-format change is needed then, only the values.
 
 ## HTTP Headers
 

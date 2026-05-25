@@ -949,20 +949,24 @@ export const adminActions = {
 export const authCodes = {
   async create({ code, clientId, userId, redirectUri, scopes,
                  pkceChallenge, pkceMethod, state, nonce,
-                 role, trustScore, verificationMethod, ttlSec = 60 }) {
+                 role, trustScore, verificationMethod,
+                 ageGroup, ageVerified, ageVerificationMethod, ttlSec = 60 }) {
     await q(
       `INSERT INTO authorization_codes
        (code, client_id, user_id, redirect_uri, scopes,
         pkce_challenge, pkce_method, state, nonce,
         role, trust_score, verification_method,
+        age_group, age_verified, age_verification_method,
         expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-               NOW() + ($13 || ' seconds')::interval)`,
+               $13, $14, $15,
+               NOW() + ($16 || ' seconds')::interval)`,
       [code, clientId, userId, redirectUri,
        JSON.stringify(scopes || []),
        pkceChallenge || null, pkceMethod || null,
        state || null, nonce || null,
-       role, trustScore, verificationMethod || null, ttlSec]
+       role, trustScore, verificationMethod || null,
+       ageGroup || null, ageVerified ?? null, ageVerificationMethod || null, ttlSec]
     );
   },
 

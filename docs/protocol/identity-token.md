@@ -77,6 +77,9 @@ A HHTTPS identity token is a JWT with three parts:
 | `jti` | string | yes | Unique token ID. Used for revocation. |
 | `method` | string | no | Primary authentication method (e.g. `webauthn-passkey`). |
 | `userId` | string | no | Opaque, stable per-user id within this issuer for app-level linking. Not personally identifiable. Omitted in OAuth flows, which use a pairwise `sub` instead. |
+| `age_group` | string | no | Orthogonal age band, independent of `role`: `minor_under_14`, `minor_14_to_15`, `minor_16_to_17`, or `adult_18_plus`. Mirrors EUDI `age_over_NN` rather than exposing a birth date. Gated behind the `age_group` OAuth scope. |
+| `age_verified` | boolean | no | `false` for self-declared (Phase 1), `true` once verified via EUDI Wallet (Phase 3). |
+| `age_verification_method` | string | no | `self-declared` (Phase 1) or `eudi-wallet` (Phase 3, planned). |
 
 ### Signature
 
