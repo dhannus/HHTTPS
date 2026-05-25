@@ -2304,7 +2304,8 @@ window.doDeclarRole = async function() {
     const r = await fetch('/hhttps/role/declare', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ sessionId, role: selRole,
-        verificationMethod: selVMethod, verificationData: vData })
+        verificationMethod: selVMethod, verificationData: vData,
+        ageGroup: selAgeGroup || undefined })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
@@ -2337,6 +2338,16 @@ window.doDeclarRole = async function() {
     document.getElementById('tcR').textContent = rl.icon+' '+selRole;
     document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
     document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+
+    // Optional age group (orthogonal claim, self-declared in Phase 1)
+    if (d.ageGroup && d.ageGroup.id) {
+      const verifiedMark = d.ageGroup.verified ? ' ✓' : ' (Eigenangabe)';
+      document.getElementById('tcAge').textContent = d.ageGroup.label + verifiedMark;
+      document.getElementById('tcAgeWrap').style.display = '';
+    } else {
+      document.getElementById('tcAgeWrap').style.display = 'none';
+    }
+
     updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;
     live('on','token aktiv ✓');
