@@ -1,6 +1,6 @@
 // server/eudi-verifier/backend-client.js
 //
-// Thin client for the official EU Verifier Endpoint backend (Docker, :8080).
+// Thin client for the official EU Verifier Endpoint backend (Docker,Port :8080).
 // Wraps exactly two real endpoints (verified against the repo README):
 //
 //   POST /ui/presentations               → initialise a transaction
