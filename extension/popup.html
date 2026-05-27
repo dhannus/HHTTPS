@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -449,12 +449,12 @@ body {
 <!-- Identity Hero -->
 <div class="identity empty" id="identityHero">
   <div class="identity-icon" id="identityIcon">🔒</div>
-  <div class="identity-status" id="identityStatus">Nicht eingeloggt</div>
-  <div class="identity-role" id="identityRole">Keine Identität</div>
+  <div class="identity-status" id="identityStatus" data-i18n="identityStatusLoggedOut">Not logged in</div>
+  <div class="identity-role" id="identityRole" data-i18n="identityNoIdentity">No identity</div>
   <div class="identity-level" id="identityLevel">—</div>
   <div class="trust-wrap" id="trustWrap">
     <div class="trust-row">
-      <span>Trust Score</span>
+      <span data-i18n="trustScoreLabel">Trust Score</span>
       <b id="trustValue">0 / 100</b>
     </div>
     <div class="trust-bar">
@@ -467,71 +467,71 @@ body {
 <!-- Empty state -->
 <div class="empty-state" id="emptyState">
   <a href="https://hhttps.org" target="_blank" class="empty-cta">
-    Bei hhttps.org einloggen →
+    <span data-i18n="loginCta">Log in at hhttps.org →</span>
   </a>
-  <div class="empty-hint">Passkey-Verifikation in 30 Sekunden</div>
+  <div class="empty-hint" data-i18n="loginHint">Passkey verification in 30 seconds</div>
 </div>
 
 <!-- Identity actions -->
 <div class="id-actions" id="idActions">
-  <button class="id-btn" id="refreshBtn" title="Token neu vom Server holen">
-    <span>↻</span> <span>Refresh</span>
+  <button class="id-btn" id="refreshBtn" data-i18n-title="refreshTitle" title="Fetch a fresh token from the server">
+    <span>↻</span> <span data-i18n="refreshLabel">Refresh</span>
   </button>
-  <button class="id-btn" id="copyTokenBtn" title="Token in Zwischenablage">
-    <span>⎘</span> <span>Token</span>
+  <button class="id-btn" id="copyTokenBtn" data-i18n-title="copyTokenTitle" title="Copy token to clipboard">
+    <span>⎘</span> <span data-i18n="tokenLabel">Token</span>
   </button>
-  <button class="id-btn" id="logoutBtn" title="Identität entfernen + Token widerrufen">
-    <span>↪</span> <span>Logout</span>
+  <button class="id-btn" id="logoutBtn" data-i18n-title="logoutTitle" title="Remove identity + revoke token">
+    <span>↪</span> <span data-i18n="logoutLabel">Logout</span>
   </button>
 </div>
 
 <!-- Role switcher (when >1 identities) -->
 <div class="role-switch" id="roleSwitch">
-  <div class="role-switch-head">Identität wechseln</div>
+  <div class="role-switch-head" data-i18n="switchIdentity">Switch identity</div>
   <!-- chips injected by JS -->
 </div>
 
 <!-- Signature snippet (the new "killer feature" precursor) -->
 <div class="snippet" id="snippet">
   <div class="snippet-head">
-    <span>Identität als Signatur</span>
-    <span style="text-transform:none;letter-spacing:0">Rechtsklick im Textfeld</span>
+    <span data-i18n="identityAsSignature">Identity as signature</span>
+    <span style="text-transform:none;letter-spacing:0" data-i18n="rightClickInField">Right-click in a text field</span>
   </div>
 
   <div class="mode-switch">
-    <div class="mode-label">Signatur-Modus:</div>
+    <div class="mode-label" data-i18n="signatureMode">Signature mode:</div>
     <div class="mode-options">
       <label class="mode-opt">
         <input type="radio" name="signmode" value="alpha" checked>
         <div class="mode-card">
-          <div class="mode-card-head">🛡️ Identität</div>
-          <div class="mode-card-desc">Stempel mit deiner Rolle. Text darf editiert werden.</div>
+          <div class="mode-card-head" data-i18n="modeIdentityHead">🛡️ Identity</div>
+          <div class="mode-card-desc" data-i18n="modeIdentityDesc">Stamp with your role. Text may be edited.</div>
         </div>
       </label>
       <label class="mode-opt">
         <input type="radio" name="signmode" value="beta">
         <div class="mode-card">
-          <div class="mode-card-head">🔒 Text-gebunden</div>
-          <div class="mode-card-desc">Bindet die Signatur an den genauen Text. Edit bricht Signatur.</div>
+          <div class="mode-card-head" data-i18n="modeTextBoundHead">🔒 Text-bound</div>
+          <div class="mode-card-desc" data-i18n="modeTextBoundDesc">Binds the signature to the exact text. Editing breaks it.</div>
         </div>
       </label>
     </div>
   </div>
 
   <div class="snippet-head" style="margin-top:14px">
-    <span>Schneller Alpha-Stempel</span>
-    <span style="text-transform:none;letter-spacing:0">zum Kopieren</span>
+    <span data-i18n="quickAlphaStamp">Quick alpha stamp</span>
+    <span style="text-transform:none;letter-spacing:0" data-i18n="toCopy">to copy</span>
   </div>
   <div class="snippet-box" id="snippetBox">—</div>
-  <button class="snippet-btn" id="copySnippetBtn">📋 Kopieren</button>
+  <button class="snippet-btn" id="copySnippetBtn" data-i18n="copyBtn">📋 Copy</button>
 </div>
 
 <!-- Current page state -->
 <div class="page-section" id="pageSection">
-  <div class="page-head">Aktuelle Seite</div>
+  <div class="page-head" data-i18n="currentPage">Current page</div>
   <div class="page-row" id="pageRow">
     <span class="page-icon">⏳</span>
-    <span id="pageLabel">Wird geprüft …</span>
+    <span id="pageLabel" data-i18n="checking">Checking …</span>
   </div>
   <div class="page-url" id="pageUrl"></div>
 </div>
@@ -540,7 +540,7 @@ body {
 <div class="footer">
   <a href="https://hhttps.org" target="_blank">hhttps.org</a>
   <a href="https://iamhmn.org" target="_blank">iamhmn.org</a>
-  <a href="https://github.com/dhannus/HumanProof" target="_blank">GitHub →</a>
+  <a href="https://github.com/dhannus/HHTTPS" target="_blank">GitHub →</a>
 </div>
 
 <script src="popup.js"></script>

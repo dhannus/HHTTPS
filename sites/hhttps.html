@@ -490,6 +490,10 @@ footer a{color:var(--cyan);text-decoration:none;}
   .tk-claims{grid-template-columns:repeat(2,1fr);}
   .api-tabs{overflow-x:auto;}
 }
+.lang-toggle{display:inline-flex;gap:2px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:100px;padding:2px;margin-left:6px;vertical-align:middle;}
+.lang-toggle button{border:none;background:transparent;color:var(--muted,#7a8aa0);font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.5px;padding:5px 9px;border-radius:100px;cursor:pointer;transition:all .15s;}
+.lang-toggle button:hover{color:var(--text,#e0ecff);}
+.lang-toggle button.active{background:rgba(0,229,255,.15);color:var(--cyan,#00e5ff);}
 </style>
 </head>
 <body>
@@ -503,17 +507,21 @@ footer a{color:var(--cyan);text-decoration:none;}
   </div>
   <div class="links">
     <a href="/hhttps/info" target="_blank">API Info</a>
-    <a href="/hhttps/roles" target="_blank">Alle Rollen</a>
+    <a href="/hhttps/roles" target="_blank" data-i18n="nav.roles">Alle Rollen</a>
     <a href="/spec" target="_blank">Spec</a>
     <a href="https://iamhmn.org" target="_blank">iamhmn.org</a>
-    <a href="https://github.com/dhannus/HumanProof" target="_blank">GitHub</a>
+    <a href="https://github.com/dhannus/HHTTPS" target="_blank">GitHub</a>
+    <span class="lang-toggle" role="group" aria-label="Language">
+      <button type="button" data-lang="de" class="active">DE</button>
+      <button type="button" data-lang="en">EN</button>
+    </span>
   </div>
 </div>
 
 <!-- Hero -->
 <div class="hero">
-  <h1>Mensch oder Maschine?<br><span>Und welche Rolle?</span></h1>
-  <p>HHTTPS v4.1 beantwortet nicht nur <em>„Ist das ein Mensch?"</em>, sondern auch <em>„Welche gesellschaftliche Rolle hat dieser Mensch?"</em> — kryptografisch verifiziert, Zero-Knowledge, offen.</p>
+  <h1><span data-i18n="hero.h1a">Mensch oder Maschine?</span><br><span data-i18n="hero.h1b">Und welche Rolle?</span></h1>
+  <p><span data-i18n="hero.p1">HHTTPS v4.1 beantwortet nicht nur</span> <em data-i18n="hero.q1">„Ist das ein Mensch?"</em><span data-i18n="hero.p2">, sondern auch</span> <em data-i18n="hero.q2">„Welche gesellschaftliche Rolle hat dieser Mensch?"</em> <span data-i18n="hero.p3">— kryptografisch verifiziert, Zero-Knowledge, offen.</span></p>
   <div class="caps">
     <div class="cap hi">human: true/false</div>
     <div class="cap hi">role: journalist | student | creative | ...</div>
@@ -556,26 +564,22 @@ footer a{color:var(--cyan);text-decoration:none;}
 <!-- Token Verify — Public Service -->
 <div class="verify-section">
   <div class="verify-head">
-    <span class="verify-title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
+    <span class="verify-title" data-i18n="verify.title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
     <span class="verify-badge">🔍 Anyone can verify</span>
   </div>
   <div class="verify-body">
     <p class="verify-lead">
-      Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat?
-      Füg ihn hier ein und sieh sofort, ob er <em>kryptografisch gültig</em> ist und von welcher Rolle er stammt.
-      Keine Anmeldung nötig.
+      <span data-i18n="verify.lead1">Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er</span> <em data-i18n="verify.leadEm">kryptografisch gültig</em> <span data-i18n="verify.lead2">ist und von welcher Rolle er stammt. Keine Anmeldung nötig.</span>
     </p>
 
     <div class="verify-input-row">
       <input type="text"
              id="verifyTokenInput"
              class="verify-input"
-             placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
+             data-i18n-ph="verify.inputPh" placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
              autocomplete="off"
              spellcheck="false" />
-      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()">
-        Prüfen →
-      </button>
+      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()" data-i18n="verify.btn">Prüfen →</button>
     </div>
 
     <div class="verify-result" id="verifyResult">
@@ -587,16 +591,16 @@ footer a{color:var(--cyan);text-decoration:none;}
 <!-- Main flow -->
 <div class="flow">
   <div class="flow-head">
-    <span class="flow-title">IDENTITÄTS-FLOW — INTERAKTIV</span>
-    <div class="live"><div class="ldot" id="ldot"></div><span id="llabel">bereit</span></div>
+    <span class="flow-title" data-i18n="flow.title">IDENTITÄTS-FLOW — INTERAKTIV</span>
+    <div class="live"><div class="ldot" id="ldot"></div><span id="llabel" data-i18n="flow.ready">bereit</span></div>
   </div>
   <div class="flow-body">
 
     <div class="stepper">
       <div class="st active" id="st1"><div class="n">1</div><span class="l">Passkey</span></div>
-      <div class="st"        id="st2"><div class="n">2</div><span class="l">Verifizieren</span></div>
-      <div class="st"        id="st3"><div class="n">3</div><span class="l">Rolle wählen</span></div>
-      <div class="st"        id="st3e"><div class="n">✉</div><span class="l">E-Mail</span></div>
+      <div class="st"        id="st2"><div class="n">2</div><span class="l" data-i18n="step.verify">Verifizieren</span></div>
+      <div class="st"        id="st3"><div class="n">3</div><span class="l" data-i18n="step.role">Rolle wählen</span></div>
+      <div class="st"        id="st3e"><div class="n">✉</div><span class="l" data-i18n="step.email">E-Mail</span></div>
       <div class="st"        id="st4"><div class="n">4</div><span class="l">Token</span></div>
     </div>
 
@@ -605,41 +609,41 @@ footer a{color:var(--cyan);text-decoration:none;}
     <!-- Phase 1: Register -->
     <div class="phase show" id="p1">
       <div class="desc">
-        <strong>Schritt 1 — Passkey anlegen (WebAuthn)</strong><br>
-        Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.
+        <strong data-i18n="p1.strong">Schritt 1 — Passkey anlegen (WebAuthn)</strong><br>
+        <span data-i18n="p1.body">Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.</span>
       </div>
       <div class="fp"><div class="fpr" id="fp1">🫆</div></div>
-      <button class="btn btn-p" id="btnReg" onclick="doRegister()">Passkey anlegen →</button>
+      <button class="btn btn-p" id="btnReg" onclick="doRegister()" data-i18n="btn.reg">Passkey anlegen →</button>
       &nbsp;
-      <button class="btn btn-c" id="btnSkip" onclick="skipToAuth()" title="Wenn du schon einen Passkey hast">Bereits registriert →</button>
+      <button class="btn btn-c" id="btnSkip" onclick="skipToAuth()" data-i18n-title="btn.skipTitle" title="Wenn du schon einen Passkey hast" data-i18n="btn.skip">Bereits registriert →</button>
     </div>
 
     <!-- Phase 2: Auth -->
     <div class="phase" id="p2">
       <div class="desc">
-        <strong>Schritt 2 — Menschsein beweisen</strong><br>
-        Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur — <strong>kein biometrisches Datum verlässt das Gerät.</strong>
+        <strong data-i18n="p2.strong">Schritt 2 — Menschsein beweisen</strong><br>
+        <span data-i18n="p2.body1">Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —</span> <strong data-i18n="p2.bodyStrong">kein biometrisches Datum verlässt das Gerät.</strong>
       </div>
       <div class="fp"><div class="fpr" id="fp2">🔐</div></div>
-      <button class="btn btn-p" id="btnAuth" onclick="doAuth()">Fingerabdruck / PIN bestätigen →</button>
+      <button class="btn btn-p" id="btnAuth" onclick="doAuth()" data-i18n="btn.auth">Fingerabdruck / PIN bestätigen →</button>
     </div>
 
     <!-- Phase 3: Role -->
     <div class="phase" id="p3">
       <div class="desc">
-        <strong>Schritt 3 — Rolle deklarieren</strong><br>
-        Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.
+        <strong data-i18n="p3.strong">Schritt 3 — Rolle deklarieren</strong><br>
+        <span data-i18n="p3.body">Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.</span>
       </div>
 
       <div class="role-grid" id="roleGrid"></div>
 
       <div class="trust-meter">
-        <div class="trust-label"><span>Trust Score</span><span id="trustVal">60 / 100</span></div>
+        <div class="trust-label"><span data-i18n="trust.label">Trust Score</span><span id="trustVal">60 / 100</span></div>
         <div class="trust-bar"><div class="trust-fill" id="trustFill" style="width:60%"></div></div>
       </div>
 
       <div class="veri-box" id="veriBox">
-        <h4>// OPTIONALE VERIFIKATION</h4>
+        <h4 data-i18n="veri.optional">// OPTIONALE VERIFIKATION</h4>
         <div class="veri-opts" id="veriOpts"></div>
         <div id="veriFields"></div>
       </div>
@@ -647,40 +651,31 @@ footer a{color:var(--cyan);text-decoration:none;}
 
       <!-- Email verification box -->
       <div class="veri-box show" id="emailBox" style="margin-top:12px;border-color:rgba(0,229,255,0.2);">
-        <h4 style="color:var(--cyan)">// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN</h4>
+        <h4 style="color:var(--cyan)" data-i18n="email.h4">// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN</h4>
         <p style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.6;">
-          Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen.
-          Bildungs-Domains (<code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code>),
-          offizielle Behörden (<code style="color:var(--cyan)">bundestag.de</code>) und
-          Verbände werden automatisch erkannt. <strong style="color:var(--text)">Die Adresse wird nicht gespeichert.</strong>
+          <span data-i18n="email.p1">Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen. Bildungs-Domains (</span><code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code><span data-i18n="email.p2">), offizielle Behörden (</span><code style="color:var(--cyan)">bundestag.de</code><span data-i18n="email.p3">) und Verbände werden automatisch erkannt. </span><strong style="color:var(--text)" data-i18n="email.strong">Die Adresse wird nicht gespeichert.</strong>
         </p>
         <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <input class="vfield" id="emailInput" type="email" placeholder="deine@email.de"
+          <input class="vfield" id="emailInput" type="email" data-i18n-ph="email.inputPh" placeholder="deine@email.de"
             style="margin:0;flex:1" oninput="previewEmailDomain(this.value)">
-          <button class="btn btn-c" id="btnSendEmail" onclick="doSendEmail()" style="white-space:nowrap;">
-            ✉ Link senden
-          </button>
+          <button class="btn btn-c" id="btnSendEmail" onclick="doSendEmail()" style="white-space:nowrap;" data-i18n="btn.sendEmail">✉ Link senden</button>
         </div>
         <div id="domainPreview" style="font-size:11px;color:var(--muted);min-height:16px;"></div>
         <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>
         <!-- Email verified badge -->
         <div id="emailVerifiedBadge" style="display:none;margin-top:10px;
           background:rgba(0,230,118,0.08);border:1px solid rgba(0,230,118,0.2);
-          border-radius:6px;padding:10px 12px;font-size:12px;color:var(--green);">
-          ✓ E-Mail verifiziert — Trust Score erhöht!
-        </div>
+          border-radius:6px;padding:10px 12px;font-size:12px;color:var(--green);" data-i18n="email.verifiedBadge">✓ E-Mail verifiziert — Trust Score erhöht!</div>
       </div>
 
-      <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled>
-        Rolle bestätigen + Token ausstellen →
-      </button>
+      <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled data-i18n="btn.declare">Rolle bestätigen + Token ausstellen →</button>
     </div>
 
     <!-- Phase 4: Token -->
     <div class="phase" id="p4">
       <div class="token-display show" id="tokenDisplay">
         <div class="tk-badge">
-          <div class="tk-b" id="tkBadge">✓ HHTTPS-Token ausgestellt</div>
+          <div class="tk-b" id="tkBadge" data-i18n="tk.badge">✓ HHTTPS-Token ausgestellt</div>
         </div>
         <div class="tk-raw" id="tkRaw"></div>
         <div class="tk-claims">
@@ -690,9 +685,7 @@ footer a{color:var(--cyan);text-decoration:none;}
           <div class="tc"><div class="k">LEVEL</div><div class="v" id="tcL">—</div></div>
         </div>
       </div>
-      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled>
-        /hhttps/check aufrufen — Live-Test →
-      </button>
+      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled data-i18n="btn.check">/hhttps/check aufrufen — Live-Test →</button>
     </div>
 
   </div>
@@ -707,19 +700,19 @@ footer a{color:var(--cyan);text-decoration:none;}
     <div class="atab" onclick="showTab('response')">Response</div>
   </div>
   <div class="api-pane show" id="tab-curl">
-    <pre class="codeblock"><span class="cc"># HHTTPS-Token im Header senden → Antwort: Mensch + Rolle</span>
-<span class="cm">curl</span> -X POST https://hhttps.funnysearch.eu/hhttps/check \
-  -H <span class="cv">"HHTTPS-Token: &lt;dein-token&gt;"</span> \
+    <pre class="codeblock"><span class="cc"># Send the HHTTPS token in the header → response: human + role</span>
+<span class="cm">curl</span> -X POST https://hhttps.org/hhttps/check \
+  -H <span class="cv">"HHTTPS-Token: &lt;your-token&gt;"</span> \
   -H <span class="cv">"Content-Type: application/json"</span>
 
-<span class="cc"># Ohne Token → actorType: "unknown"</span>
-<span class="cm">curl</span> -X POST https://hhttps.funnysearch.eu/hhttps/check
+<span class="cc"># Without a token → actorType: "unknown"</span>
+<span class="cm">curl</span> -X POST https://hhttps.org/hhttps/check
 
-<span class="cc"># Alle verfügbaren Rollen</span>
-<span class="cm">curl</span> https://hhttps.funnysearch.eu/hhttps/roles | jq</pre>
+<span class="cc"># All available roles</span>
+<span class="cm">curl</span> https://hhttps.org/hhttps/roles | jq</pre>
   </div>
   <div class="api-pane" id="tab-js">
-    <pre class="codeblock"><span class="cc">// Integration in deine App</span>
+    <pre class="codeblock"><span class="cc">// Integrate into your app</span>
 <span class="ck">async function</span> <span class="co">checkHuman</span>(hhttpsToken) {
   <span class="ck">const</span> res = <span class="ck">await</span> fetch(<span class="cv">'/hhttps/check'</span>, {
     method: <span class="cv">'POST'</span>,
@@ -729,30 +722,30 @@ footer a{color:var(--cyan);text-decoration:none;}
   <span class="ck">const</span> data = <span class="ck">await</span> res.json();
 
   <span class="ck">if</span> (data.hhttps.human) {
-    console.log(<span class="cv">`Mensch ✓ · Rolle: ${data.role.label}`</span>);
+    console.log(<span class="cv">`Human ✓ · role: ${data.role.label}`</span>);
     console.log(<span class="cv">`Trust Score: ${data.role.trustScore}/100`</span>);
-    console.log(<span class="cv">`Privilegien:`, data.role.privileges</span>);
+    console.log(<span class="cv">`Privileges:`, data.role.privileges</span>);
   } <span class="ck">else</span> {
-    console.log(<span class="cv">'Bot oder unbekannter Akteur'</span>);
+    console.log(<span class="cv">'Bot or unknown actor'</span>);
   }
 }
 
-<span class="cc">// Response-Header direkt prüfen</span>
+<span class="cc">// Check response headers directly</span>
 <span class="ck">const</span> isHuman = res.headers.get(<span class="cv">'HHTTPS-Human'</span>) === <span class="cv">'true'</span>;
-<span class="ck">const</span> role    = res.headers.get(<span class="cv">'HHTTPS-Role'</span>);    <span class="cc">// z.B. "journalist"</span>
-<span class="ck">const</span> score   = res.headers.get(<span class="cv">'HHTTPS-Trust-Score'</span>); <span class="cc">// z.B. "85"</span></pre>
+<span class="ck">const</span> role    = res.headers.get(<span class="cv">'HHTTPS-Role'</span>);    <span class="cc">// e.g. "journalist"</span>
+<span class="ck">const</span> score   = res.headers.get(<span class="cv">'HHTTPS-Trust-Score'</span>); <span class="cc">// e.g. "85"</span></pre>
   </div>
   <div class="api-pane" id="tab-python">
     <pre class="codeblock"><span class="ck">import</span> requests
 
 <span class="ck">def</span> <span class="co">check_human</span>(hhttps_token: str) -> dict:
     res = requests.post(
-        <span class="cv">"https://hhttps.funnysearch.eu/hhttps/check"</span>,
+        <span class="cv">"https://hhttps.org/hhttps/check"</span>,
         headers={<span class="cv">"HHTTPS-Token"</span>: hhttps_token}
     )
     data = res.json()
 
-    <span class="cc"># Header-basierte Prüfung (schnell)</span>
+    <span class="cc"># Header-based check (fast)</span>
     is_human    = res.headers.get(<span class="cv">"HHTTPS-Human"</span>) == <span class="cv">"true"</span>
     role        = res.headers.get(<span class="cv">"HHTTPS-Role"</span>)
     trust_score = <span class="ck">int</span>(res.headers.get(<span class="cv">"HHTTPS-Trust-Score"</span>, <span class="cv">0</span>))
@@ -779,14 +772,14 @@ footer a{color:var(--cyan);text-decoration:none;}
     <span class="ck">"label"</span>:       <span class="cv">"Journalist"</span>,
     <span class="ck">"icon"</span>:        <span class="cv">"📰"</span>,
     <span class="ck">"level"</span>:       <span class="cv">"press-card"</span>,
-    <span class="ck">"levelLabel"</span>:  <span class="cv">"Presseausweis"</span>,
+    <span class="ck">"levelLabel"</span>:  <span class="cv">"Press card"</span>,
     <span class="ck">"trustScore"</span>:  <span class="cv">85</span>,
     <span class="ck">"privileges"</span>: [
-      <span class="cv">"Zugang zu HHTTPS-geschützten Pressebereichen"</span>,
-      <span class="cv">"Verifizierte Quellenangabe in digitalen Publikationen"</span>,
-      <span class="cv">"Schutz vor Identitätsmissbrauch als Journalist durch KI"</span>
+      <span class="cv">"Access to HHTTPS-protected press areas"</span>,
+      <span class="cv">"Verified attribution of sources in digital publications"</span>,
+      <span class="cv">"Protection against AI impersonation as a journalist"</span>
     ],
-    <span class="ck">"userStory"</span>: <span class="cv">"US-012: Als Journalist..."</span>
+    <span class="ck">"userStory"</span>: <span class="cv">"US-012: As a journalist..."</span>
   }
 }</pre>
   </div>
@@ -794,7 +787,7 @@ footer a{color:var(--cyan);text-decoration:none;}
 
 <!-- Role table -->
 <div style="margin-bottom:32px;">
-  <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;margin-bottom:12px;">// VERFÜGBARE ROLLEN</div>
+  <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;margin-bottom:12px;">// AVAILABLE ROLES</div>
   <table class="role-table" id="roleTableFull"></table>
 </div>
 
@@ -821,7 +814,7 @@ footer a{color:var(--cyan);text-decoration:none;}
 
   <div class="platforms-cta-row">
     <span>Run a platform?</span>
-    <a href="https://github.com/dhannus/HumanProof/blob/main/docs/oauth-integration.md">OAuth integration docs →</a>
+    <a href="https://github.com/dhannus/HHTTPS/blob/main/docs/oauth-integration.md">OAuth integration docs →</a>
     <a href="https://hhttps.org/.well-known/openid-configuration">OIDC discovery →</a>
   </div>
 </div>
@@ -902,7 +895,7 @@ GET https://hhttps.org/hhttps/oauth/authorize?
   <div>
     <strong>Daniel Hannuschka</strong> · Initiative HumanProof ·
     <a href="mailto:daniel.hannuschka@tweakz.de">daniel.hannuschka@tweakz.de</a> ·
-    <a href="https://github.com/dhannus/HumanProof">GitHub</a> ·
+    <a href="https://github.com/dhannus/HHTTPS">GitHub</a> ·
     <a href="https://iamhmn.org">iamhmn.org</a>
   </div>
   <div>🔐 HHTTPS v0.4.1 · EUPL-1.2 · Made in Europe</div>
@@ -922,47 +915,143 @@ let selVMethod = 'self-declared';
 let vData      = {};
 
 const ROLES_LOCAL = {
-  citizen:              { icon:'🧑',   label:'Bürger',                 methods:['self-declared'] },
-  journalist:           { icon:'📰',   label:'Journalist',             methods:['self-declared','press-card','email-verified'] },
-  student:              { icon:'🎓',   label:'Schüler / Student',      methods:['self-declared','email-verified','student-id'] },
-  teacher:              { icon:'👨‍🏫', label:'Lehrer / Pädagoge',     methods:['self-declared','school-email','teacher-id'] },
-  researcher:           { icon:'🔬',   label:'Wissenschaftler',        methods:['self-declared','email-verified','orcid'] },
-  creative:             { icon:'🎭',   label:'Kreativschaffender',     methods:['self-declared','association-member','email-verified'] },
-  developer:            { icon:'💻',   label:'Entwickler',             methods:['self-declared','email-verified','github-verified'] },
-  medical_professional: { icon:'🩺',   label:'Arzt / Medizinerin',     methods:['self-declared','approbation-id','medical-email'] },
-  caregiver:            { icon:'🤝',   label:'Pflegekraft',            methods:['self-declared','care-chamber-id','email-verified'] },
-  lawyer:               { icon:'⚖️',  label:'Anwalt / Anwältin',      methods:['self-declared','bar-association-id','lawyer-email'] },
-  notary:               { icon:'📜',   label:'Notar',                  methods:['self-declared','notary-chamber-id'] },
-  civil_servant:        { icon:'🏛️',  label:'Beamte / Behörde',       methods:['self-declared','official-email','service-id'] },
-  politician:           { icon:'🗳️',  label:'Politiker',              methods:['self-declared','official-email','bundestag-verified'] },
-  business:             { icon:'🏢',   label:'Unternehmen',            methods:['self-declared','domain-verified','handelsregister'] },
-  craftsman:            { icon:'🔧',   label:'Handwerker / Meister',   methods:['self-declared','craft-chamber-id','master-certificate'] }
+  citizen:              { icon:'🧑',   label:'Bürger',               de:'Bürger',               en:'Citizen',              methods:['self-declared'] },
+  journalist:           { icon:'📰',   label:'Journalist',           de:'Journalist',           en:'Journalist',           methods:['self-declared','press-card','email-verified'] },
+  student:              { icon:'🎓',   label:'Schüler / Student',    de:'Schüler / Student',    en:'Student',              methods:['self-declared','email-verified','student-id'] },
+  teacher:              { icon:'👨‍🏫', label:'Lehrer / Pädagoge',   de:'Lehrer / Pädagoge',    en:'Teacher',              methods:['self-declared','school-email','teacher-id'] },
+  researcher:           { icon:'🔬',   label:'Wissenschaftler',      de:'Wissenschaftler',      en:'Researcher',           methods:['self-declared','email-verified','orcid'] },
+  creative:             { icon:'🎭',   label:'Kreativschaffender',   de:'Kreativschaffender',   en:'Creative',             methods:['self-declared','association-member','email-verified'] },
+  developer:            { icon:'💻',   label:'Entwickler',           de:'Entwickler',           en:'Developer',            methods:['self-declared','email-verified','github-verified'] },
+  medical_professional: { icon:'🩺',   label:'Arzt / Medizinerin',   de:'Arzt / Medizinerin',   en:'Medical Professional', methods:['self-declared','approbation-id','medical-email'] },
+  caregiver:            { icon:'🤝',   label:'Pflegekraft',          de:'Pflegekraft',          en:'Caregiver',            methods:['self-declared','care-chamber-id','email-verified'] },
+  lawyer:               { icon:'⚖️',  label:'Anwalt / Anwältin',    de:'Anwalt / Anwältin',    en:'Lawyer',               methods:['self-declared','bar-association-id','lawyer-email'] },
+  notary:               { icon:'📜',   label:'Notar',                de:'Notar',                en:'Notary',               methods:['self-declared','notary-chamber-id'] },
+  civil_servant:        { icon:'🏛️',  label:'Beamte / Behörde',     de:'Beamte / Behörde',     en:'Civil Servant',        methods:['self-declared','official-email','service-id'] },
+  politician:           { icon:'🗳️',  label:'Politiker',            de:'Politiker',            en:'Politician',           methods:['self-declared','official-email','bundestag-verified'] },
+  business:             { icon:'🏢',   label:'Unternehmen',          de:'Unternehmen',          en:'Business',             methods:['self-declared','domain-verified','handelsregister'] },
+  craftsman:            { icon:'🔧',   label:'Handwerker / Meister', de:'Handwerker / Meister', en:'Craftsperson',         methods:['self-declared','craft-chamber-id','master-certificate'] }
 };
 
 const VMETHOD_LABELS = {
-  'self-declared':       { l:'Selbstdeklariert',   score:30, field:null },
-  'email-verified':      { l:'E-Mail verifiziert', score:70, field:{p:'E-Mail-Adresse', key:'email'} },
-  'github-verified':     { l:'GitHub verifiziert', score:72, field:{p:'GitHub-Username', key:'github'} },
-  'school-email':        { l:'Schul-E-Mail',       score:75, field:{p:'@*.schule.[bundesland].de', key:'email'} },
-  'medical-email':       { l:'Klinik-E-Mail',      score:78, field:{p:'Praxis-/Klinik-E-Mail', key:'email'} },
-  'lawyer-email':        { l:'Kanzlei-E-Mail',     score:78, field:{p:'Kanzlei-E-Mail', key:'email'} },
-  'domain-verified':     { l:'Domain verifiziert', score:82, field:{p:'Firmen-Domain', key:'domain'} },
-  'press-card':          { l:'Presseausweis',      score:85, field:{p:'Presseausweis-Nr.', key:'pressCardId'} },
-  'student-id':          { l:'Matrikelnummer',     score:85, field:{p:'Matrikelnummer + Uni', key:'studentId'} },
-  'association-member':  { l:'Verbandsmitglied',   score:85, field:{p:'Mitgliedsnr. (VDS/BFFS/...)', key:'memberId'} },
-  'teacher-id':          { l:'Lehrer-ID',          score:86, field:{p:'Lehrer-ID des Bundeslandes', key:'teacherId'} },
-  'craft-chamber-id':    { l:'Handwerksrolle',     score:86, field:{p:'Eintrag in der Handwerkskammer', key:'craftId'} },
-  'orcid':               { l:'ORCID',              score:88, field:{p:'ORCID (0000-0000-0000-0000)', key:'orcid'} },
-  'master-certificate':  { l:'Meisterbrief',       score:90, field:{p:'Meisterbrief-Nummer', key:'masterCertId'} },
-  'care-chamber-id':     { l:'Pflegekammer',       score:90, field:{p:'Pflegekammer-Mitgliedsnr.', key:'careId'} },
-  'service-id':          { l:'Dienstausweis',      score:90, field:{p:'Dienstausweis-Nummer', key:'serviceId'} },
-  'official-email':      { l:'Offizielle E-Mail',  score:90, field:{p:'@bundestag.de / @*.bund.de', key:'email'} },
-  'bar-association-id':  { l:'RAK-Eintrag',        score:92, field:{p:'Rechtsanwaltskammer-Eintrag', key:'barId'} },
-  'handelsregister':     { l:'Handelsregister',    score:92, field:{p:'HRB/HRA-Nummer', key:'hrNumber'} },
-  'approbation-id':      { l:'Approbation',        score:93, field:{p:'Approbationsnummer', key:'approbationId'} },
-  'notary-chamber-id':   { l:'Notarkammer',        score:95, field:{p:'Notarkammer-Eintrag', key:'notaryId'} },
-  'bundestag-verified':  { l:'Bundestag-ID',       score:98, field:{p:'Abgeordneten-ID (bundestag.de)', key:'bundestagId'} },
+  'self-declared':       { l:'Selbstdeklariert',   de:'Selbstdeklariert',   en:'Self-declared',        score:30, field:null },
+  'email-verified':      { l:'E-Mail verifiziert', de:'E-Mail verifiziert', en:'Email verified',       score:70, field:{p:'E-Mail-Adresse', pDe:'E-Mail-Adresse', pEn:'Email address', key:'email'} },
+  'github-verified':     { l:'GitHub verifiziert', de:'GitHub verifiziert', en:'GitHub verified',      score:72, field:{p:'GitHub-Username', pDe:'GitHub-Username', pEn:'GitHub username', key:'github'} },
+  'school-email':        { l:'Schul-E-Mail',       de:'Schul-E-Mail',       en:'School email',         score:75, field:{p:'@*.schule.[bundesland].de', pDe:'@*.schule.[bundesland].de', pEn:'School email address', key:'email'} },
+  'medical-email':       { l:'Klinik-E-Mail',      de:'Klinik-E-Mail',      en:'Clinic email',         score:78, field:{p:'Praxis-/Klinik-E-Mail', pDe:'Praxis-/Klinik-E-Mail', pEn:'Practice/clinic email', key:'email'} },
+  'lawyer-email':        { l:'Kanzlei-E-Mail',     de:'Kanzlei-E-Mail',     en:'Law-firm email',       score:78, field:{p:'Kanzlei-E-Mail', pDe:'Kanzlei-E-Mail', pEn:'Law-firm email', key:'email'} },
+  'domain-verified':     { l:'Domain verifiziert', de:'Domain verifiziert', en:'Domain verified',      score:82, field:{p:'Firmen-Domain', pDe:'Firmen-Domain', pEn:'Company domain', key:'domain'} },
+  'press-card':          { l:'Presseausweis',      de:'Presseausweis',      en:'Press card',           score:85, field:{p:'Presseausweis-Nr.', pDe:'Presseausweis-Nr.', pEn:'Press card no.', key:'pressCardId'} },
+  'student-id':          { l:'Matrikelnummer',     de:'Matrikelnummer',     en:'Student ID',           score:85, field:{p:'Matrikelnummer + Uni', pDe:'Matrikelnummer + Uni', pEn:'Student ID + university', key:'studentId'} },
+  'association-member':  { l:'Verbandsmitglied',   de:'Verbandsmitglied',   en:'Association member',   score:85, field:{p:'Mitgliedsnr. (VDS/BFFS/...)', pDe:'Mitgliedsnr. (VDS/BFFS/...)', pEn:'Member no. (VDS/BFFS/...)', key:'memberId'} },
+  'teacher-id':          { l:'Lehrer-ID',          de:'Lehrer-ID',          en:'Teacher ID',           score:86, field:{p:'Lehrer-ID des Bundeslandes', pDe:'Lehrer-ID des Bundeslandes', pEn:'State teacher ID', key:'teacherId'} },
+  'craft-chamber-id':    { l:'Handwerksrolle',     de:'Handwerksrolle',     en:'Chamber of Crafts',    score:86, field:{p:'Eintrag in der Handwerkskammer', pDe:'Eintrag in der Handwerkskammer', pEn:'Chamber of Crafts entry', key:'craftId'} },
+  'orcid':               { l:'ORCID',              de:'ORCID',              en:'ORCID',                score:88, field:{p:'ORCID (0000-0000-0000-0000)', pDe:'ORCID (0000-0000-0000-0000)', pEn:'ORCID (0000-0000-0000-0000)', key:'orcid'} },
+  'master-certificate':  { l:'Meisterbrief',       de:'Meisterbrief',       en:'Master certificate',   score:90, field:{p:'Meisterbrief-Nummer', pDe:'Meisterbrief-Nummer', pEn:'Master certificate number', key:'masterCertId'} },
+  'care-chamber-id':     { l:'Pflegekammer',       de:'Pflegekammer',       en:'Nursing chamber',      score:90, field:{p:'Pflegekammer-Mitgliedsnr.', pDe:'Pflegekammer-Mitgliedsnr.', pEn:'Nursing chamber member no.', key:'careId'} },
+  'service-id':          { l:'Dienstausweis',      de:'Dienstausweis',      en:'Service ID',           score:90, field:{p:'Dienstausweis-Nummer', pDe:'Dienstausweis-Nummer', pEn:'Service ID number', key:'serviceId'} },
+  'official-email':      { l:'Offizielle E-Mail',  de:'Offizielle E-Mail',  en:'Official email',       score:90, field:{p:'@bundestag.de / @*.bund.de', pDe:'@bundestag.de / @*.bund.de', pEn:'@bundestag.de / @*.bund.de', key:'email'} },
+  'bar-association-id':  { l:'RAK-Eintrag',        de:'RAK-Eintrag',        en:'Bar association',      score:92, field:{p:'Rechtsanwaltskammer-Eintrag', pDe:'Rechtsanwaltskammer-Eintrag', pEn:'Bar association entry', key:'barId'} },
+  'handelsregister':     { l:'Handelsregister',    de:'Handelsregister',    en:'Commercial register',  score:92, field:{p:'HRB/HRA-Nummer', pDe:'HRB/HRA-Nummer', pEn:'HRB/HRA number', key:'hrNumber'} },
+  'approbation-id':      { l:'Approbation',        de:'Approbation',        en:'Medical licence',      score:93, field:{p:'Approbationsnummer', pDe:'Approbationsnummer', pEn:'Medical licence number', key:'approbationId'} },
+  'notary-chamber-id':   { l:'Notarkammer',        de:'Notarkammer',        en:'Notary chamber',       score:95, field:{p:'Notarkammer-Eintrag', pDe:'Notarkammer-Eintrag', pEn:'Notary chamber entry', key:'notaryId'} },
+  'bundestag-verified':  { l:'Bundestag-ID',       de:'Bundestag-ID',       en:'Bundestag ID',         score:98, field:{p:'Abgeordneten-ID (bundestag.de)', pDe:'Abgeordneten-ID (bundestag.de)', pEn:'MP ID (bundestag.de)', key:'bundestagId'} },
 };
+
+// ── i18n runtime (DE/EN toggle, shared storage key 'iamhmn-lang') ───────────
+const T = {
+  de: {
+    "nav.roles":"Alle Rollen",
+    "hero.h1a":"Mensch oder Maschine?","hero.h1b":"Und welche Rolle?",
+    "hero.p1":"HHTTPS v4.1 beantwortet nicht nur","hero.q1":"„Ist das ein Mensch?\"","hero.p2":", sondern auch","hero.q2":"„Welche gesellschaftliche Rolle hat dieser Mensch?\"","hero.p3":"— kryptografisch verifiziert, Zero-Knowledge, offen.",
+    "verify.title":"TOKEN PRÜFEN — ÖFFENTLICHER SERVICE",
+    "verify.lead1":"Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er","verify.leadEm":"kryptografisch gültig","verify.lead2":"ist und von welcher Rolle er stammt. Keine Anmeldung nötig.",
+    "verify.inputPh":"HHTTPS-Token einfügen (eyJhbGc...)","verify.btn":"Prüfen →",
+    "flow.title":"IDENTITÄTS-FLOW — INTERAKTIV","flow.ready":"bereit",
+    "step.verify":"Verifizieren","step.role":"Rolle wählen","step.email":"E-Mail",
+    "p1.strong":"Schritt 1 — Passkey anlegen (WebAuthn)","p1.body":"Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.",
+    "btn.reg":"Passkey anlegen →","btn.skip":"Bereits registriert →","btn.skipTitle":"Wenn du schon einen Passkey hast",
+    "p2.strong":"Schritt 2 — Menschsein beweisen","p2.body1":"Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —","p2.bodyStrong":"kein biometrisches Datum verlässt das Gerät.",
+    "btn.auth":"Fingerabdruck / PIN bestätigen →",
+    "p3.strong":"Schritt 3 — Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
+    "trust.label":"Trust Score","veri.optional":"// OPTIONALE VERIFIKATION",
+    "email.h4":"// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN",
+    "email.p1":"Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen. Bildungs-Domains (","email.p2":"), offizielle Behörden (","email.p3":") und Verbände werden automatisch erkannt. ","email.strong":"Die Adresse wird nicht gespeichert.",
+    "email.inputPh":"deine@email.de","btn.sendEmail":"✉ Link senden","email.verifiedBadge":"✓ E-Mail verifiziert — Trust Score erhöht!",
+    "btn.declare":"Rolle bestätigen + Token ausstellen →","tk.badge":"✓ HHTTPS-Token ausgestellt","btn.check":"/hhttps/check aufrufen — Live-Test →",
+    "roletable.role":"Rolle","roletable.methods":"Verifikationsmethoden",
+    "btn.checking":"Prüfe…","vh.loading":"Token wird kryptografisch geprüft …",
+    "vh.noTokenStatus":"Kein Token angegeben","vh.noTokenSub":"Bitte füge einen HHTTPS-Token ein.",
+    "vh.invalidStatus":"Token ungültig","vh.invalidSub":"Signatur oder Token nicht gültig.",
+    "vh.machineStatus":"Maschine verifiziert","vh.machineSub":"Dieser Token wurde von einem Maschinen-Operator ausgestellt (kein Mensch).",
+    "vh.humanStatus":"Mensch verifiziert","vh.errorStatus":"Verbindungsfehler","vh.errorSub":"Server nicht erreichbar.",
+    "role.fallback":"Bürger","banner.wants":"möchte deine HHTTPS-Identität verifizieren.","banner.login":"Bitte logge dich unten ein — du wirst danach automatisch zurückgeleitet.",
+    "msg.confirmBio":"Bitte Fingerabdruck / Face ID / PIN bestätigen…","msg.passkeyReg":"✓ Passkey registriert!","msg.humanProven":"✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.",
+    "msg.doWebauthn":"Bitte erst WebAuthn durchführen.","msg.validEmail":"Bitte gültige E-Mail eingeben.","msg.emailConfirmed":"✓ E-Mail bestätigt! Bitte Rolle wählen und Token ausstellen.",
+    "msg.webauthnUnsupported":"⚠ WebAuthn wird von diesem Browser nicht unterstützt.","msg.devMode":"📧 DEV MODE: Verifiziere automatisch (kein SMTP konfiguriert)…","msg.passkeyFound":"Passkey gefunden — direkt zu Schritt 2.",
+    "btn.declareEmail":"Rolle + verifizierte E-Mail → Token ausstellen →","err.prefix":"Fehler: ","veri.header":"// OPTIONALE VERIFIKATION",
+    "msg.emailSent1":"✓ E-Mail gesendet! Bitte prüfe dein Postfach","msg.emailSent2":"Link gültig","msg.verified":"verifiziert","msg.domainVerifiedPre":"✓ E-Mail-Domain","msg.verifiedExcl":"verifiziert!",
+    "live.registering":"registrierung…","live.passkeyOk":"passkey ok","live.error":"fehler","live.signing":"signiere…","live.verified":"verifiziert ✓","live.issuing":"ausstellen…","live.tokenActive":"token aktiv ✓",
+    "hint.parliament":"🏛️ Offizielle Parlaments-E-Mail","hint.authority":"🏛️ Offizielle Behörden-E-Mail","hint.edu":"🎓 Bildungs-Domain erkannt","hint.media":"📰 Medien-Domain erkannt","hint.assoc":"🎭 Verbands-Domain erkannt","hint.standard":"✉ Standard E-Mail"
+  },
+  en: {
+    "nav.roles":"All roles",
+    "hero.h1a":"Human or machine?","hero.h1b":"And which role?",
+    "hero.p1":"HHTTPS v4.1 answers not only","hero.q1":"\u201cIs this a human?\u201d","hero.p2":", but also","hero.q2":"\u201cWhat societal role does this human have?\u201d","hero.p3":"\u2014 cryptographically verified, zero-knowledge, open.",
+    "verify.title":"VERIFY TOKEN — PUBLIC SERVICE",
+    "verify.lead1":"You received an HHTTPS token — from an email, a forum, a chat? Paste it here and instantly see whether it is","verify.leadEm":"cryptographically valid","verify.lead2":"and which role it comes from. No login required.",
+    "verify.inputPh":"Paste HHTTPS token (eyJhbGc...)","verify.btn":"Verify →",
+    "flow.title":"IDENTITY FLOW — INTERACTIVE","flow.ready":"ready",
+    "step.verify":"Verify","step.role":"Choose role","step.email":"Email",
+    "p1.strong":"Step 1 — Create passkey (WebAuthn)","p1.body":"Your device creates a cryptographic key pair in the secure chip. The private key never leaves your device. After registration you can verify yourself as a human and declare a role.",
+    "btn.reg":"Create passkey →","btn.skip":"Already registered →","btn.skipTitle":"If you already have a passkey",
+    "p2.strong":"Step 2 — Prove you're human","p2.body1":"Your device signs a server challenge locally with your private key. The server verifies the signature —","p2.bodyStrong":"no biometric data leaves the device.",
+    "btn.auth":"Confirm fingerprint / PIN →",
+    "p3.strong":"Step 3 — Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
+    "trust.label":"Trust Score","veri.optional":"// OPTIONAL VERIFICATION",
+    "email.h4":"// EMAIL VERIFICATION — INCREASE TRUST SCORE",
+    "email.p1":"Enter your email address to increase your trust score. Education domains (","email.p2":"), official authorities (","email.p3":") and associations are detected automatically. ","email.strong":"The address is not stored.",
+    "email.inputPh":"you@email.com","btn.sendEmail":"✉ Send link","email.verifiedBadge":"✓ Email verified — trust score increased!",
+    "btn.declare":"Confirm role + issue token →","tk.badge":"✓ HHTTPS token issued","btn.check":"Call /hhttps/check — live test →",
+    "roletable.role":"Role","roletable.methods":"Verification methods",
+    "btn.checking":"Checking…","vh.loading":"Verifying token cryptographically …",
+    "vh.noTokenStatus":"No token provided","vh.noTokenSub":"Please paste an HHTTPS token.",
+    "vh.invalidStatus":"Token invalid","vh.invalidSub":"Signature or token not valid.",
+    "vh.machineStatus":"Machine verified","vh.machineSub":"This token was issued by a machine operator (not a human).",
+    "vh.humanStatus":"Human verified","vh.errorStatus":"Connection error","vh.errorSub":"Server not reachable.",
+    "role.fallback":"Citizen","banner.wants":"wants to verify your HHTTPS identity.","banner.login":"Please log in below — you'll be redirected automatically afterwards.",
+    "msg.confirmBio":"Please confirm fingerprint / Face ID / PIN…","msg.passkeyReg":"✓ Passkey registered!","msg.humanProven":"✓ Humanity proven cryptographically! Please choose a role.",
+    "msg.doWebauthn":"Please complete WebAuthn first.","msg.validEmail":"Please enter a valid email.","msg.emailConfirmed":"✓ Email confirmed! Please choose a role and issue the token.",
+    "msg.webauthnUnsupported":"⚠ WebAuthn is not supported by this browser.","msg.devMode":"📧 DEV MODE: verifying automatically (no SMTP configured)…","msg.passkeyFound":"Passkey found — straight to step 2.",
+    "btn.declareEmail":"Role + verified email → issue token →","err.prefix":"Error: ","veri.header":"// OPTIONAL VERIFICATION",
+    "msg.emailSent1":"✓ Email sent! Please check your inbox","msg.emailSent2":"Link valid","msg.verified":"verified","msg.domainVerifiedPre":"✓ Email domain","msg.verifiedExcl":"verified!",
+    "live.registering":"registering…","live.passkeyOk":"passkey ok","live.error":"error","live.signing":"signing…","live.verified":"verified ✓","live.issuing":"issuing…","live.tokenActive":"token active ✓",
+    "hint.parliament":"🏛️ Official parliament email","hint.authority":"🏛️ Official authority email","hint.edu":"🎓 Education domain detected","hint.media":"📰 Media domain detected","hint.assoc":"🎭 Association domain detected","hint.standard":"✉ Standard email"
+  }
+};
+let LANG = 'de';
+function tr(k){ return (T[LANG]||T.de)[k] ?? (T.de[k] ?? k); }
+function setLanguage(lang){
+  LANG = T[lang] ? lang : 'de';
+  document.documentElement.lang = LANG;
+  Object.values(ROLES_LOCAL).forEach(r => { r.label = (LANG==='en') ? r.en : r.de; });
+  Object.values(VMETHOD_LABELS).forEach(m => { m.l = (LANG==='en') ? m.en : m.de; if (m.field) m.field.p = (LANG==='en') ? m.field.pEn : m.field.pDe; });
+  document.querySelectorAll('[data-i18n]').forEach(e => { const v = tr(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
+  document.querySelectorAll('[data-i18n-ph]').forEach(e => { const v = tr(e.getAttribute('data-i18n-ph')); if (v != null) e.placeholder = v; });
+  document.querySelectorAll('[data-i18n-title]').forEach(e => { const v = tr(e.getAttribute('data-i18n-title')); if (v != null) e.title = v; });
+  try { buildRoleGrid(); } catch(e){}
+  try { buildRoleTable(); } catch(e){}
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.classList.toggle('active', b.dataset.lang === LANG));
+  try { localStorage.setItem('iamhmn-lang', LANG); } catch(e){}
+}
+function detectLang(){
+  try { const sv = localStorage.getItem('iamhmn-lang'); if (sv && T[sv]) return sv; } catch(e){}
+  const n = (navigator.language || 'de').slice(0,2).toLowerCase();
+  return T[n] ? n : 'de';
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.addEventListener('click', () => setLanguage(b.dataset.lang)));
+  setLanguage(detectLang());
+});
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
 function msg(t, type='i') {
@@ -986,14 +1075,14 @@ async function verifyPastedToken() {
 
   if (!tok) {
     out.className = 'verify-result show';
-    out.innerHTML = renderVerifyHero('invalid', '🤔', 'Kein Token angegeben', 'Bitte füge einen HHTTPS-Token ein.', null, null);
+    out.innerHTML = renderVerifyHero('invalid', '🤔', tr('vh.noTokenStatus'), tr('vh.noTokenSub'), null, null);
     return;
   }
 
   btn.disabled = true;
-  btn.textContent = 'Prüfe…';
+  btn.textContent = tr('btn.checking');
   out.className = 'verify-result show';
-  out.innerHTML = '<div class="vr-hero"><div class="vr-icon">⏳</div><div class="vr-status" style="color:var(--muted)">Token wird kryptografisch geprüft …</div></div>';
+  out.innerHTML = '<div class="vr-hero"><div class="vr-icon">⏳</div><div class="vr-status" style="color:var(--muted)">'+tr('vh.loading')+'</div></div>';
 
   try {
     const res = await fetch('/hhttps/check', {
@@ -1004,8 +1093,8 @@ async function verifyPastedToken() {
     const data = await res.json();
 
     if (!res.ok) {
-      out.innerHTML = renderVerifyHero('invalid', '❌', 'Token ungültig',
-        data.error || 'Signatur oder Token nicht gültig.',
+      out.innerHTML = renderVerifyHero('invalid', '❌', tr('vh.invalidStatus'),
+        data.error || tr('vh.invalidSub'),
         null, null) +
         renderVerifyDetails({
           status: data.hhttps?.status || 'invalid',
@@ -1016,8 +1105,8 @@ async function verifyPastedToken() {
 
     // Machine token
     if (data.hhttps?.actorType === 'bot' || data.machine) {
-      out.innerHTML = renderVerifyHero('machine', '🤖', 'Maschine verifiziert',
-        'Dieser Token wurde von einem Maschinen-Operator ausgestellt (kein Mensch).',
+      out.innerHTML = renderVerifyHero('machine', '🤖', tr('vh.machineStatus'),
+        tr('vh.machineSub'),
         null, null) +
         renderVerifyDetails({
           status:      data.hhttps?.status,
@@ -1035,11 +1124,11 @@ async function verifyPastedToken() {
     const role  = data.role || {};
     const hh    = data.hhttps || {};
     const icon  = role.icon || '🧑';
-    const label = role.label || role.id || 'Bürger';
+    const label = role.label || role.id || tr('role.fallback');
     const score = role.trustScore || hh.trustScore || 0;
 
     out.innerHTML = renderVerifyHero('valid', icon,
-      'Mensch verifiziert',
+      tr('vh.humanStatus'),
       label,
       score,
       role.levelLabel || role.level) +
@@ -1060,12 +1149,12 @@ async function verifyPastedToken() {
       });
 
   } catch (e) {
-    out.innerHTML = renderVerifyHero('invalid', '⚠️', 'Verbindungsfehler',
-      e.message || 'Server nicht erreichbar.',
+    out.innerHTML = renderVerifyHero('invalid', '⚠️', tr('vh.errorStatus'),
+      e.message || tr('vh.errorSub'),
       null, null);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Prüfen →';
+    btn.textContent = tr('verify.btn');
   }
 }
 
@@ -1163,8 +1252,8 @@ function showOAuthReturnBanner() {
     `;
     banner.innerHTML = `
       <span style="font-size: 18px;">🔐</span>
-      <span><strong>${target.host}</strong> möchte deine HHTTPS-Identität verifizieren.</span>
-      <span>Bitte logge dich unten ein — du wirst danach automatisch zurückgeleitet.</span>
+      <span><strong>${target.host}</strong> ${tr('banner.wants')}</span>
+      <span>${tr('banner.login')}</span>
     `;
     document.body.insertBefore(banner, document.body.firstChild);
 
@@ -1247,7 +1336,7 @@ function buildRoleGrid() {
 // Build role table
 function buildRoleTable() {
   const t = document.getElementById('roleTableFull');
-  t.innerHTML = `<tr><th>Rolle</th><th>ID</th><th>Verifikationsmethoden</th></tr>` +
+  t.innerHTML = `<tr><th>${tr('roletable.role')}</th><th>ID</th><th>${tr('roletable.methods')}</th></tr>` +
     Object.entries(ROLES_LOCAL).map(([id, r]) => `
       <tr>
         <td>${r.icon} ${r.label}</td>
@@ -1266,7 +1355,7 @@ function selectRole(id) {
   // Build verification options for this role
   const methods = ROLES_LOCAL[id]?.methods || ['self-declared'];
   const vb = document.getElementById('veriBox');
-  vb.innerHTML = `<h4>// OPTIONALE VERIFIKATION — ${ROLES_LOCAL[id].label.toUpperCase()}</h4>
+  vb.innerHTML = `<h4>${tr('veri.header')} — ${ROLES_LOCAL[id].label.toUpperCase()}</h4>
     <div class="veri-opts">${methods.map(m => `
       <div class="vopt ${m==='self-declared'?'sel':''}" onclick="selectVMethod('${id}','${m}')">${VMETHOD_LABELS[m]?.l||m}</div>
     `).join('')}</div><div id="veriFields"></div>`;
@@ -1295,7 +1384,7 @@ function selectVMethod(roleId, method) {
 async function doRegister() {
   const btn = document.getElementById('btnReg');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
-  setFp(1,'scanning'); live('pend','registrierung…');
+  setFp(1,'scanning'); live('pend',tr('live.registering'));
   try {
     userId = userId || null;
     const r1 = await fetch('/hhttps/webauthn/register/start', {
@@ -1305,7 +1394,7 @@ async function doRegister() {
     const { userId: uid, options } = await r1.json();
     userId = uid; localStorage.setItem('hhttps_uid', userId);
 
-    msg('Bitte Fingerabdruck / Face ID / PIN bestätigen…','i');
+    msg(tr('msg.confirmBio'),'i');
     const attResp = await startRegistration(options);
 
     const r2 = await fetch('/hhttps/webauthn/register/finish', {
@@ -1315,11 +1404,11 @@ async function doRegister() {
     const d2 = await r2.json();
     if (!r2.ok) throw new Error(d2.error);
 
-    setFp(1,'success'); live('on','passkey ok');
-    msg('✓ Passkey registriert!','s');
+    setFp(1,'success'); live('on',tr('live.passkeyOk'));
+    msg(tr('msg.passkeyReg'),'s');
     setTimeout(() => setStep(2), 700);
   } catch(e) {
-    setFp(1,'error'); live('err','fehler');
+    setFp(1,'error'); live('err',tr('live.error'));
     msg('Fehler: '+e.message,'e');
     btn.disabled = false; btn.innerHTML = 'Passkey anlegen →';
   }
@@ -1331,7 +1420,7 @@ function skipToAuth() { setStep(2); }
 async function doAuth() {
   const btn = document.getElementById('btnAuth');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
-  setFp(2,'scanning'); live('pend','signiere…');
+  setFp(2,'scanning'); live('pend',tr('live.signing'));
   try {
     const r1 = await fetch('/hhttps/webauthn/auth/start', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1339,7 +1428,7 @@ async function doAuth() {
     });
     const { sessionId: sid, options } = await r1.json();
 
-    msg('Bitte Fingerabdruck / Face ID / PIN bestätigen…','i');
+    msg(tr('msg.confirmBio'),'i');
     const assertResp = await startAuthentication(options);
 
     const r2 = await fetch('/hhttps/webauthn/auth/finish', {
@@ -1350,14 +1439,14 @@ async function doAuth() {
     if (!r2.ok) throw new Error(d2.error);
 
     sessionId = d2.sessionId;
-    setFp(2,'success'); live('on','verifiziert ✓');
-    msg('✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.','s');
+    setFp(2,'success'); live('on',tr('live.verified'));
+    msg(tr('msg.humanProven'),'s');
     buildRoleGrid();
     setTimeout(() => setStep(3), 600);
   } catch(e) {
-    setFp(2,'error'); live('err','fehler');
+    setFp(2,'error'); live('err',tr('live.error'));
     msg('Fehler: '+e.message,'e');
-    btn.disabled = false; btn.innerHTML = 'Fingerabdruck / PIN bestätigen →';
+    btn.disabled = false; btn.innerHTML = tr('btn.auth');
   }
 }
 
@@ -1366,7 +1455,7 @@ async function doDeclarRole() {
   if (!selRole || !sessionId) return;
   const btn = document.getElementById('btnDeclare');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
-  live('pend','ausstellen…');
+  live('pend',tr('live.issuing'));
 
   // Gather vData from input if present
   const inp = document.getElementById('vfInput');
@@ -1421,14 +1510,14 @@ async function doDeclarRole() {
 
     updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;
-    live('on','token aktiv ✓');
+    live('on',tr('live.tokenActive'));
     msg('✓ '+d.message,'s');
     setStep(4);
   } catch(e) {
     msg('Fehler: '+e.message,'e');
     btn.disabled = false;
-    btn.innerHTML = 'Rolle bestätigen + Token ausstellen →';
-    live('err','fehler');
+    btn.innerHTML = tr('btn.declare');
+    live('err',tr('live.error'));
   }
 }
 
@@ -1546,7 +1635,7 @@ async function doCheck() {
         .replace(/: (true|false)/g, ': <span class="cv">$1</span>')
         .replace(/: (\d+)/g, ': <span class="cv">$1</span>');
 
-    msg('✓ /hhttps/check: Mensch='+d.hhttps.human+', Rolle='+d.role?.label,'s');
+    msg('✓ /hhttps/check: human='+d.hhttps.human+', role='+d.role?.label,'s');
     showTab('response');
   } catch(e) {
     msg('Fehler: '+e.message,'e');
@@ -1558,33 +1647,33 @@ async function doCheck() {
 
 // ── Email verification ─────────────────────────────────────────────────────
 const DOMAIN_HINTS = {
-  'bundestag.de': {l:'official-email',s:90,t:'🏛️ Offizielle Parlaments-E-Mail'},
-  'bmi.bund.de':  {l:'official-email',s:90,t:'🏛️ Offizielle Behörden-E-Mail'},
+  'bundestag.de': {l:'official-email',s:90,t:'hint.parliament'},
+  'bmi.bund.de':  {l:'official-email',s:90,t:'hint.authority'},
 };
 function getDomainHint(email) {
   const domain = email.split('@')[1]?.toLowerCase() || '';
   if (DOMAIN_HINTS[domain]) return DOMAIN_HINTS[domain];
   if (['.uni-','.tu-','.lmu.','.rwth','.tum.de','.fau.de','.fu-berlin','.kit.edu','.hs-','.fh-'].some(d=>domain.includes(d)))
-    return {l:'email-verified',s:75,t:'🎓 Bildungs-Domain erkannt'};
+    return {l:'email-verified',s:75,t:'hint.edu'};
   if (['spiegel.de','zeit.de','sueddeutsche.de','faz.net','dpa.com','ard.de','zdf.de'].some(d=>domain.endsWith(d)))
-    return {l:'email-verified',s:72,t:'📰 Medien-Domain erkannt'};
+    return {l:'email-verified',s:72,t:'hint.media'};
   if (['sprecherverband.de','bffs.de','synchronverband.de','bsd-synchron.de'].some(d=>domain.endsWith(d)))
-    return {l:'email-verified',s:78,t:'🎭 Verbands-Domain erkannt'};
-  return {l:'email-verified',s:65,t:'✉ Standard E-Mail'};
+    return {l:'email-verified',s:78,t:'hint.assoc'};
+  return {l:'email-verified',s:65,t:'hint.standard'};
 }
 
 function previewEmailDomain(email) {
   const el = document.getElementById('domainPreview');
   if (!email.includes('@')) { el.textContent=''; return; }
   const h = getDomainHint(email);
-  el.innerHTML = `<span style="color:var(--amber)">${h.t}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
+  el.innerHTML = `<span style="color:var(--amber)">${tr(h.t)}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
   if (selRole) setTrust(Math.max(60, h.s));
 }
 
 async function doSendEmail() {
-  if (!sessionId) { msg('Bitte erst WebAuthn durchführen.','e'); return; }
+  if (!sessionId) { msg(tr('msg.doWebauthn'),'e'); return; }
   const email = document.getElementById('emailInput').value.trim();
-  if (!email || !email.includes('@')) { msgEmail('Bitte gültige E-Mail eingeben.','e'); return; }
+  if (!email || !email.includes('@')) { msgEmail(tr('msg.validEmail'),'e'); return; }
 
   const btn = document.getElementById('btnSendEmail');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
@@ -1599,14 +1688,14 @@ async function doSendEmail() {
 
     if (d.devMode && d.devToken) {
       // Dev mode: auto-verify without actual email
-      msgEmail('📧 DEV MODE: Verifiziere automatisch (kein SMTP konfiguriert)…','i');
+      msgEmail(tr('msg.devMode'),'i');
       setTimeout(() => autoVerifyDev(d.devToken), 800);
     } else {
-      msgEmail(`✓ E-Mail gesendet! Bitte prüfe dein Postfach (${d.domain}). Link gültig: ${d.expiresIn}.`,'s');
+      msgEmail(`${tr('msg.emailSent1')} (${d.domain}). ${tr('msg.emailSent2')}: ${d.expiresIn}.`,'s');
     }
   } catch(e) {
-    msgEmail('Fehler: '+e.message,'e');
-    btn.disabled = false; btn.innerHTML = '✉ Link senden';
+    msgEmail(tr('err.prefix')+e.message,'e');
+    btn.disabled = false; btn.innerHTML = tr('btn.sendEmail');
   }
 }
 
@@ -1627,10 +1716,10 @@ async function checkEmailStatus() {
   if (d.emailVerified) {
     document.getElementById('emailVerifiedBadge').style.display = 'block';
     document.getElementById('emailVerifiedBadge').textContent =
-      `✓ ${d.emailDomain} verifiziert · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
+      `✓ ${d.emailDomain} ${tr('msg.verified')} · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
     setTrust(Math.max(60, d.trustBonus || 65));
-    msgEmail(`✓ E-Mail-Domain "${d.emailDomain}" verifiziert! Trust Score: ${d.trustBonus}/100`,'s');
-    document.getElementById('btnDeclare').innerHTML = 'Rolle + verifizierte E-Mail → Token ausstellen →';
+    msgEmail(`${tr('msg.domainVerifiedPre')} "${d.emailDomain}" ${tr('msg.verifiedExcl')} Trust Score: ${d.trustBonus}/100`,'s');
+    document.getElementById('btnDeclare').innerHTML = tr('btn.declareEmail');
   }
 }
 
@@ -1655,7 +1744,7 @@ window.addEventListener('load', () => {
     setTrust(Math.max(60, score));
     buildRoleGrid();
     setStep(3);
-    msg('✓ E-Mail bestätigt! Bitte Rolle wählen und Token ausstellen.','s');
+    msg(tr('msg.emailConfirmed'),'s');
     history.replaceState({}, '', '/');
   }
   if (p.get('email_verify') === 'success') {
@@ -1682,7 +1771,7 @@ const origDeclare = doDeclarRole;
 window.doDeclarRole = async function() {
   const btn = document.getElementById('btnDeclare');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
-  live('pend','ausstellen…');
+  live('pend',tr('live.issuing'));
   const inp = document.getElementById('vfInput');
   if (inp) {
     const vm = VMETHOD_LABELS[selVMethod];
@@ -1727,25 +1816,25 @@ window.doDeclarRole = async function() {
     document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
     updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;
-    live('on','token aktiv ✓');
+    live('on',tr('live.tokenActive'));
     msg('✓ '+d.message,'s');
     setStep(4);
   } catch(e) {
     msg('Fehler: '+e.message,'e');
     btn.disabled = false;
-    btn.innerHTML = 'Rolle bestätigen + Token ausstellen →';
-    live('err','fehler');
+    btn.innerHTML = tr('btn.declare');
+    live('err',tr('live.error'));
   }
 };
 
 // ── Init ───────────────────────────────────────────────────────────────────
 buildRoleTable();
 if (!window.PublicKeyCredential) {
-  msg('⚠ WebAuthn wird von diesem Browser nicht unterstützt.','e');
+  msg(tr('msg.webauthnUnsupported'),'e');
   document.getElementById('btnReg').disabled = true;
 }
 if (userId) {
-  msg('Passkey gefunden — direkt zu Schritt 2.','i');
+  msg(tr('msg.passkeyFound'),'i');
   setTimeout(() => setStep(2), 300);
 }
 

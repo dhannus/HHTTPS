@@ -9,6 +9,11 @@
  *      Function: sendPlatformRegistrationEmail({ to, platformName, homepageUrl,
  *                                                 confirmUrl, kind })
  *
+ * LANGUAGE: transactional emails are BILINGUAL (English first as the canonical
+ * text, German second), because the recipient's locale is generally unknown at
+ * send time. Role labels come from the i18n catalog (roles.i18n.js) so there is
+ * a single source of truth — no hardcoded role-name maps in this file.
+ *
  * Transport modes:
  *   - SMTP (production) — via nodemailer (Strato, Brevo, Mailgun, ...)
  *   - sendmail fallback (system MTA)
@@ -20,6 +25,8 @@
 import crypto     from 'crypto';
 import nodemailer from 'nodemailer';
 import { emailVerifications } from './db.js';
+import { ROLES } from './roles.js';
+import { roleLabel } from './roles.i18n.js';
 
 // ─── Config (from environment) ─────────────────────────────────────────────
 const SMTP_HOST = process.env.SMTP_HOST || null;
@@ -71,6 +78,25 @@ export function classifyDomain(email) {
     return { level: 'email-verified', trustBonus: 78, category: 'creative', domain };
   }
   return { level: 'email-verified', trustBonus: 65, category: 'generic', domain };
+}
+
+// ─── Bilingual helpers ──────────────────────────────────────────────────────
+// HTML: English block, a thin divider, then the German block.
+function biHtml(en, de) {
+  return `${en}
+    <div style="height:1px;background:#132035;margin:22px 0"></div>
+    <div lang="de">${de}</div>`;
+}
+// Plain text: English block, divider, German block.
+function biText(en, de) {
+  return `${en}\n\n— — —\n\n${de}`;
+}
+// Role display label for emails: icon + English / German (single source: catalog).
+function roleDisplay(role) {
+  const icon = ROLES[role]?.icon || '';
+  const en = roleLabel(role, 'en');
+  const de = roleLabel(role, 'de');
+  return `${icon} ${en} / ${de}`.trim();
 }
 
 // ─── Transport factory ─────────────────────────────────────────────────────
@@ -145,13 +171,14 @@ function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote })
     <div class="btn-wrap">
       <a href="${ctaUrl}" class="btn">${ctaLabel}</a>
     </div>
-    <p style="font-size:11px;color:#4a6080;">Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
+    <p style="font-size:11px;color:#4a6080;">If the button does not work, copy this link into your browser:<br>Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
     <div class="url-fallback">${ctaUrl}</div>
     ${footerNote ? `<p style="font-size:11px;color:#4a6080;margin-top:20px;">${footerNote}</p>` : ''}
   </div>
   <div class="footer">
     HHTTPS Project · <a href="https://github.com/dhannus/HHTTPS">github.com/dhannus/HHTTPS</a><br>
     <a href="https://hhttps.org">hhttps.org</a> · <a href="https://iamhmn.org">iamhmn.org</a><br>
+    This email was generated automatically. Please do not reply.<br>
     Diese E-Mail wurde automatisch generiert. Bitte nicht antworten.
   </div>
 </div>
@@ -181,37 +208,36 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
   });
 
   const verifyUrl = `${base}/hhttps/email/verify?token=${rawToken}&session=${sessionId}`;
+  const label = roleDisplay(role);
 
-  const roleLabels = {
-    journalist: '📰 Journalist', student: '🎓 Schüler/Student',
-    researcher: '🔬 Wissenschaftler', politician: '🏛️ Politiker',
-    creative: '🎭 Kreativschaffender', developer: '💻 Entwickler',
-    business: '🏢 Unternehmen', citizen: '🧑 Bürger'
-  };
-
-  const bodyHtml = `
-    <p>Du hast eine E-Mail-Verifikation für deine HHTTPS-Identität angefordert.</p>
+  const bodyHtml = biHtml(
+    `<p>You requested email verification for your HHTTPS identity.</p>
     <div class="info-box">
-      <div class="ib-key">Rolle</div>
-      <div class="ib-val">${roleLabels[role] || role}</div>
+      <div class="ib-key">Role</div>
+      <div class="ib-val">${label}</div>
     </div>
     <div class="info-box">
-      <div class="ib-key">Domain · Level · Trust-Bonus</div>
+      <div class="ib-key">Domain · Level · Trust bonus</div>
       <div class="ib-val">${classification.domain} · ${classification.level} · +${classification.trustBonus}</div>
     </div>
-    <p>Klicke auf den Button, um deine E-Mail-Domain zu bestätigen und deinen Trust Score zu erhöhen. Der Link ist <strong>15 Minuten</strong> gültig.</p>
-  `;
+    <p>Click the button to confirm your email domain and raise your trust score. The link is valid for <strong>15 minutes</strong>.</p>`,
+    `<p>Du hast eine E-Mail-Verifikation für deine HHTTPS-Identität angefordert.</p>
+    <p>Klicke auf den Button, um deine E-Mail-Domain zu bestätigen und deinen Trust Score zu erhöhen. Der Link ist <strong>15 Minuten</strong> gültig.</p>`
+  );
 
   const html = emailShell({
-    title:     'E-Mail-Verifikation',
+    title:     'Email verification',
     subtitle:  'HUMAN-VERIFIED HTTPS · ROLE VERIFICATION',
     bodyHtml,
     ctaUrl:    verifyUrl,
-    ctaLabel:  '✓ E-Mail bestätigen',
-    footerNote: '<strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nicht gespeichert. Nur ein Hash der Domain wird für die Rollenverifikation genutzt. Der Token verfällt automatisch nach 15 Minuten.'
+    ctaLabel:  '✓ Confirm email / E-Mail bestätigen',
+    footerNote: '<strong style="color:#a0b8d8">Privacy:</strong> your email address is not stored. Only a hash of the domain is used for role verification; the token expires automatically after 15 minutes. — <strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nicht gespeichert. Nur ein Hash der Domain wird für die Rollenverifikation genutzt. Der Token verfällt automatisch nach 15 Minuten.'
   });
 
-  const text = `HHTTPS — E-Mail-Verifikation\n\nRolle: ${roleLabels[role] || role}\nDomain: ${classification.domain}\nTrust-Bonus: +${classification.trustBonus}\n\nLink (15 Min gültig):\n${verifyUrl}\n\n— HHTTPS Project · hhttps.org`;
+  const text = biText(
+    `HHTTPS — Email verification\n\nRole: ${label}\nDomain: ${classification.domain}\nTrust bonus: +${classification.trustBonus}\n\nLink (valid 15 min):\n${verifyUrl}\n\n— HHTTPS Project · hhttps.org`,
+    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${label}\nDomain: ${classification.domain}\nTrust-Bonus: +${classification.trustBonus}\n\nLink (15 Min gültig):\n${verifyUrl}\n\n— HHTTPS Project · hhttps.org`
+  );
 
   const transporter = createTransport();
   if (!transporter) {
@@ -221,7 +247,7 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
 
   await transporter.sendMail(buildMailOptions({
     to:      email,
-    subject: `[HHTTPS] E-Mail-Verifikation für Rolle "${roleLabels[role] || role}"`,
+    subject: `[HHTTPS] Verify email for role "${roleLabel(role,'en')}" / E-Mail-Verifikation`,
     text,
     html
   }));
@@ -250,52 +276,52 @@ export async function sendPlatformRegistrationEmail({
 }) {
   const isChange = kind === 'email_change';
 
-  const titleDe = isChange
-    ? 'Neue Kontakt-Email bestätigen'
-    : 'Plattform-Anmeldung bestätigen';
+  const titleEn = isChange ? 'Confirm new contact email' : 'Confirm platform registration';
+  const titleDe = isChange ? 'Neue Kontakt-Email bestätigen' : 'Plattform-Anmeldung bestätigen';
 
-  const intro = isChange
+  const introEn = isChange
+    ? `<p>You set a new contact email for your HHTTPS platform <strong>${escapeHtml(platformName)}</strong>. Please confirm this email address by clicking the button.</p>`
+    : `<p>You registered a new platform with HHTTPS. Please confirm your contact email so the platform is activated.</p>`;
+  const introDe = isChange
     ? `<p>Du hast für deine HHTTPS-Plattform <strong>${escapeHtml(platformName)}</strong> eine neue Kontakt-Email hinterlegt. Bitte bestätige diese E-Mail-Adresse, indem du auf den Button klickst.</p>`
     : `<p>Du hast eine neue Plattform bei HHTTPS angemeldet. Bitte bestätige deine Kontakt-Email, damit die Plattform aktiviert wird.</p>`;
 
-  const bodyHtml = `
-    ${intro}
+  const bodyHtml = biHtml(
+    `${introEn}
     <div class="info-box">
-      <div class="ib-key">Plattform</div>
+      <div class="ib-key">Platform</div>
       <div class="ib-val">${escapeHtml(platformName)}</div>
     </div>
     <div class="info-box">
       <div class="ib-key">Homepage</div>
       <div class="ib-val">${escapeHtml(homepageUrl)}</div>
     </div>
+    <p>After confirmation your platform moves to status <code>unverified</code> and can immediately be used by users for login. For <code>verified</code> status (green badge on the consent screen) you additionally need to set a DNS TXT record and request a review.</p>
+    <p style="font-size:11px;color:#4a6080;">The link is valid for <strong style="color:#a0b8d8">48 hours</strong>.</p>`,
+    `${introDe}
     <p>Nach der Bestätigung wechselt deine Plattform in den Status <code>unverified</code> und kann sofort von Usern für den Login genutzt werden. Für den <code>verified</code>-Status (grüner Badge auf der Consent-Seite) musst du zusätzlich einen DNS-TXT-Record setzen und einen Review beantragen.</p>
-    <p style="font-size:11px;color:#4a6080;">Der Link ist <strong style="color:#a0b8d8">48 Stunden</strong> gültig.</p>
-  `;
+    <p style="font-size:11px;color:#4a6080;">Der Link ist <strong style="color:#a0b8d8">48 Stunden</strong> gültig.</p>`
+  );
 
   const html = emailShell({
-    title:     titleDe,
+    title:     titleEn,
     subtitle:  'HUMAN-VERIFIED HTTPS · PLATFORM REGISTRATION',
     bodyHtml,
     ctaUrl:    confirmUrl,
-    ctaLabel:  '✓ Email bestätigen',
-    footerNote: 'Du erhältst diese E-Mail, weil sich jemand mit dieser Adresse als Kontakt für die genannte Plattform angemeldet hat. Falls das nicht du warst, ignoriere diese E-Mail einfach — ohne Bestätigung wird die Plattform automatisch nach 48 Stunden gelöscht.'
+    ctaLabel:  '✓ Confirm email / Email bestätigen',
+    footerNote: 'You received this email because someone registered this address as the contact for the named platform. If that was not you, simply ignore this email — without confirmation the platform is deleted automatically after 48 hours. — Du erhältst diese E-Mail, weil sich jemand mit dieser Adresse als Kontakt für die genannte Plattform angemeldet hat. Falls das nicht du warst, ignoriere diese E-Mail einfach — ohne Bestätigung wird die Plattform automatisch nach 48 Stunden gelöscht.'
   });
 
-  const text = [
-    `HHTTPS — ${titleDe}`,
-    '',
-    `Plattform: ${platformName}`,
-    `Homepage:  ${homepageUrl}`,
-    '',
-    `Bestätigungslink (48 Stunden gültig):`,
-    confirmUrl,
-    '',
-    `— HHTTPS Project · hhttps.org`
-  ].join('\n');
+  const text = biText(
+    [`HHTTPS — ${titleEn}`, '', `Platform: ${platformName}`, `Homepage:  ${homepageUrl}`, '',
+     `Confirmation link (valid 48 hours):`, confirmUrl, '', `— HHTTPS Project · hhttps.org`].join('\n'),
+    [`HHTTPS — ${titleDe}`, '', `Plattform: ${platformName}`, `Homepage:  ${homepageUrl}`, '',
+     `Bestätigungslink (48 Stunden gültig):`, confirmUrl, '', `— HHTTPS Project · hhttps.org`].join('\n')
+  );
 
   const subject = isChange
-    ? `[HHTTPS] Neue Email für Plattform "${platformName}" bestätigen`
-    : `[HHTTPS] Bestätige deine Plattform-Anmeldung: ${platformName}`;
+    ? `[HHTTPS] Confirm new email for platform "${platformName}" / Neue Email bestätigen`
+    : `[HHTTPS] Confirm your platform registration: ${platformName}`;
 
   const transporter = createTransport();
   if (!transporter) {
@@ -303,13 +329,7 @@ export async function sendPlatformRegistrationEmail({
     return { sent: false, devMode: true };
   }
 
-  await transporter.sendMail(buildMailOptions({
-    to,
-    subject,
-    text,
-    html
-  }));
-
+  await transporter.sendMail(buildMailOptions({ to, subject, text, html }));
   return { sent: true, devMode: false };
 }
 
@@ -317,40 +337,46 @@ export async function sendPlatformRegistrationEmail({
  * Notify the platform owner that their submission was verified by admin.
  */
 export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl }) {
-  const bodyHtml = `
-    <p>Glückwunsch! Deine Plattform <strong>${escapeHtml(platformName)}</strong> ist jetzt offiziell <strong style="color:#00e5ff">verifiziert</strong>.</p>
+  const bodyHtml = biHtml(
+    `<p>Congratulations! Your platform <strong>${escapeHtml(platformName)}</strong> is now officially <strong style="color:#00e5ff">verified</strong>.</p>
     <div class="info-box">
-      <div class="ib-key">Plattform</div>
+      <div class="ib-key">Platform</div>
       <div class="ib-val">${escapeHtml(platformName)}</div>
     </div>
+    <p>What changes from now on:</p>
+    <ul style="color:#a0b8d8;font-size:13px;line-height:1.7;padding-left:20px;">
+      <li>On the consent screen your platform shows a green <strong>Verified</strong> badge</li>
+      <li>User trust at login rises — no more warning banners</li>
+      <li>Your platform appears in the Connected Platforms list on hhttps.org</li>
+    </ul>
+    <p>Check your dashboard to see stats and status.</p>`,
+    `<p>Glückwunsch! Deine Plattform <strong>${escapeHtml(platformName)}</strong> ist jetzt offiziell <strong style="color:#00e5ff">verifiziert</strong>.</p>
     <p>Was sich ab jetzt ändert:</p>
     <ul style="color:#a0b8d8;font-size:13px;line-height:1.7;padding-left:20px;">
       <li>Auf der Consent-Seite zeigt deine Plattform einen grünen <strong>Verified</strong>-Badge</li>
       <li>User-Trust beim Login steigt — keine Warnbanner mehr</li>
       <li>Deine Plattform erscheint in der Liste der Connected Platforms auf hhttps.org</li>
     </ul>
-    <p>Schau dir dein Dashboard an, um Stats und Status zu sehen.</p>
-  `;
+    <p>Schau dir dein Dashboard an, um Stats und Status zu sehen.</p>`
+  );
 
   const html = emailShell({
-    title:     'Plattform verifiziert',
+    title:     'Platform verified',
     subtitle:  'HUMAN-VERIFIED HTTPS · VERIFICATION APPROVED',
     bodyHtml,
     ctaUrl:    `${BASE_URL}/developers`,
-    ctaLabel:  '→ Zum Dashboard',
+    ctaLabel:  '→ To the dashboard / Zum Dashboard',
     footerNote: null
   });
 
-  const text = [
-    `HHTTPS — Plattform verifiziert`,
-    '',
-    `${platformName} wurde vom HHTTPS-Admin verifiziert.`,
-    `Sie erscheint ab sofort mit grünem Badge auf der Consent-Seite.`,
-    '',
-    `Dashboard: ${BASE_URL}/developers`,
-    '',
-    `— HHTTPS Project · hhttps.org`
-  ].join('\n');
+  const text = biText(
+    [`HHTTPS — Platform verified`, '', `${platformName} was verified by the HHTTPS admin.`,
+     `It now appears with a green badge on the consent screen.`, '',
+     `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n'),
+    [`HHTTPS — Plattform verifiziert`, '', `${platformName} wurde vom HHTTPS-Admin verifiziert.`,
+     `Sie erscheint ab sofort mit grünem Badge auf der Consent-Seite.`, '',
+     `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n')
+  );
 
   const transporter = createTransport();
   if (!transporter) {
@@ -360,7 +386,7 @@ export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl 
 
   await transporter.sendMail(buildMailOptions({
     to,
-    subject: `[HHTTPS] ✓ ${platformName} ist jetzt verifiziert`,
+    subject: `[HHTTPS] ✓ ${platformName} is now verified / ist jetzt verifiziert`,
     text, html
   }));
 
@@ -371,34 +397,35 @@ export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl 
  * Notify the platform owner that their submission was rejected.
  */
 export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
-  const bodyHtml = `
-    <p>Wir haben deinen Antrag zur Verifikation der Plattform <strong>${escapeHtml(platformName)}</strong> geprüft und müssen ihn leider ablehnen.</p>
+  const reasonEn = escapeHtml(reason || '(no reason given)');
+  const reasonDe = escapeHtml(reason || '(kein Grund angegeben)');
+
+  const bodyHtml = biHtml(
+    `<p>We reviewed your request to verify the platform <strong>${escapeHtml(platformName)}</strong> and unfortunately have to reject it.</p>
     <div class="info-box">
-      <div class="ib-key">Grund</div>
-      <div class="ib-val" style="font-weight:400;">${escapeHtml(reason || '(kein Grund angegeben)')}</div>
+      <div class="ib-key">Reason</div>
+      <div class="ib-val" style="font-weight:400;">${reasonEn}</div>
     </div>
-    <p>Deine Plattform bleibt im Status <code>unverified</code> und kann weiterhin von Usern genutzt werden — sie zeigt nur einen Warnbanner auf der Consent-Seite. Wenn du die Punkte oben behoben hast, kannst du den Antrag im Dashboard erneut einreichen.</p>
-  `;
+    <p>Your platform stays in status <code>unverified</code> and can still be used by users — it only shows a warning banner on the consent screen. Once you have addressed the points above, you can resubmit the request from the dashboard.</p>`,
+    `<p>Wir haben deinen Antrag zur Verifikation der Plattform <strong>${escapeHtml(platformName)}</strong> geprüft und müssen ihn leider ablehnen.</p>
+    <p>Deine Plattform bleibt im Status <code>unverified</code> und kann weiterhin von Usern genutzt werden — sie zeigt nur einen Warnbanner auf der Consent-Seite. Wenn du die Punkte oben behoben hast, kannst du den Antrag im Dashboard erneut einreichen.</p>`
+  );
 
   const html = emailShell({
-    title:     'Antrag abgelehnt',
+    title:     'Request rejected',
     subtitle:  'HUMAN-VERIFIED HTTPS · VERIFICATION REJECTED',
     bodyHtml,
     ctaUrl:    `${BASE_URL}/developers`,
-    ctaLabel:  '→ Zum Dashboard',
-    footerNote: 'Falls du die Begründung nicht nachvollziehen kannst oder Fragen hast, antworte gerne auf diese E-Mail — wir helfen weiter.'
+    ctaLabel:  '→ To the dashboard / Zum Dashboard',
+    footerNote: 'If you cannot follow the reasoning or have questions, feel free to reply to this email — we are happy to help. — Falls du die Begründung nicht nachvollziehen kannst oder Fragen hast, antworte gerne auf diese E-Mail — wir helfen weiter.'
   });
 
-  const text = [
-    `HHTTPS — Verifikations-Antrag abgelehnt`,
-    '',
-    `Plattform: ${platformName}`,
-    `Grund: ${reason || '(kein Grund angegeben)'}`,
-    '',
-    `Dashboard: ${BASE_URL}/developers`,
-    '',
-    `— HHTTPS Project · hhttps.org`
-  ].join('\n');
+  const text = biText(
+    [`HHTTPS — Verification request rejected`, '', `Platform: ${platformName}`, `Reason: ${reason || '(no reason given)'}`,
+     '', `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n'),
+    [`HHTTPS — Verifikations-Antrag abgelehnt`, '', `Plattform: ${platformName}`, `Grund: ${reason || '(kein Grund angegeben)'}`,
+     '', `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n')
+  );
 
   const transporter = createTransport();
   if (!transporter) {
@@ -408,7 +435,7 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
 
   await transporter.sendMail(buildMailOptions({
     to,
-    subject: `[HHTTPS] Antrag für "${platformName}" abgelehnt`,
+    subject: `[HHTTPS] Request for "${platformName}" rejected / Antrag abgelehnt`,
     text, html
   }));
 
@@ -423,7 +450,7 @@ export async function verifyEmailToken(rawToken) {
 
   if (!entry) return {
     valid: false,
-    error: 'Token nicht gefunden, abgelaufen oder bereits verwendet (gültig: 15 Min).'
+    error: 'Token not found, expired, or already used (valid: 15 min).'
   };
 
   return {
@@ -468,11 +495,10 @@ function escapeHtml(s) {
 /**
  * Send the Privacy Pass wallet's email verification link.
  *
- * This is a separate code path from sendVerificationEmail (the legacy HHTTPS
- * role declaration flow) because:
- *   - the verify link points to a different endpoint (/privacy-pass/email/verify)
- *   - the wallet has its own role concept and trust model
- *   - the email body is shorter and wallet-specific
+ * Separate code path from sendVerificationEmail (the legacy HHTTPS role
+ * declaration flow) because the verify link points to a different endpoint
+ * (/privacy-pass/email/verify), the wallet has its own role concept and trust
+ * model, and the body is shorter and wallet-specific.
  *
  * Hash-only: the email plaintext is NEVER stored. The caller stores only the
  * SHA-256 hash. We use the plaintext here just for sending and then discard it.
@@ -484,50 +510,34 @@ function escapeHtml(s) {
  * @returns {Promise<{sent: boolean, devMode: boolean}>}
  */
 export async function sendPrivacyPassVerification({ to, role, link }) {
-  const roleLabels = {
-    citizen:              '🧑 Bürger:in',
-    journalist:           '📰 Journalist:in',
-    student:              '🎓 Student:in',
-    teacher:              '🧑‍🏫 Lehrkraft',
-    researcher:           '🔬 Forscher:in',
-    creative:             '🎭 Kreative:r',
-    developer:            '💻 Entwickler:in',
-    medical_professional: '🩺 Medizin',
-    caregiver:            '🤝 Pflege',
-    lawyer:               '⚖️ Jurist:in',
-    notary:               '📜 Notar:in',
-    civil_servant:        '🏛️ Verwaltung',
-    politician:           '🗳️ Politik',
-    business:             '🏢 Unternehmen',
-    craftsman:            '🔧 Handwerk',
-  };
-  const roleLabel = roleLabels[role] || role;
+  const label = roleDisplay(role);
 
-  const bodyHtml = `
-    <p>Du hast eine E-Mail-Verifikation für deine <strong>Privacy Pass Wallet</strong> angefordert.</p>
+  const bodyHtml = biHtml(
+    `<p>You requested email verification for your <strong>Privacy Pass wallet</strong>.</p>
     <div class="info-box">
-      <div class="ib-key">Rolle</div>
-      <div class="ib-val">${roleLabel}</div>
+      <div class="ib-key">Role</div>
+      <div class="ib-val">${label}</div>
     </div>
+    <p>Click the button to confirm your email address. Afterwards you can fetch anonymous tokens in the wallet.</p>
+    <p style="color:#a0b8d8;font-size:12px;margin-top:18px">The link is valid for <strong>15 minutes</strong>.</p>`,
+    `<p>Du hast eine E-Mail-Verifikation für deine <strong>Privacy Pass Wallet</strong> angefordert.</p>
     <p>Klicke auf den Button, um deine E-Mail-Adresse zu bestätigen. Danach kannst du anonyme Tokens in der Wallet abrufen.</p>
-    <p style="color:#a0b8d8;font-size:12px;margin-top:18px">Der Link ist <strong>15 Minuten</strong> gültig.</p>
-  `;
+    <p style="color:#a0b8d8;font-size:12px;margin-top:18px">Der Link ist <strong>15 Minuten</strong> gültig.</p>`
+  );
 
   const html = emailShell({
-    title:    'Privacy Pass — E-Mail-Verifikation',
-    subtitle: 'HHTTPS · ANONYME WALLET',
+    title:    'Privacy Pass — email verification',
+    subtitle: 'HHTTPS · ANONYMOUS WALLET',
     bodyHtml,
     ctaUrl:   link,
-    ctaLabel: '✓ E-Mail bestätigen',
-    footerNote: '<strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nur als Hash gespeichert, niemals im Klartext. Die später ausgestellten anonymen Tokens lassen sich nicht zu dir zurückverfolgen.'
+    ctaLabel: '✓ Confirm email / E-Mail bestätigen',
+    footerNote: '<strong style="color:#a0b8d8">Privacy:</strong> your email address is stored only as a hash, never in plaintext. The anonymous tokens issued later cannot be traced back to you. — <strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nur als Hash gespeichert, niemals im Klartext. Die später ausgestellten anonymen Tokens lassen sich nicht zu dir zurückverfolgen.'
   });
 
-  const text =
-    `HHTTPS Privacy Pass — E-Mail-Verifikation\n\n` +
-    `Rolle: ${roleLabel}\n\n` +
-    `Bestätige deine E-Mail-Adresse:\n${link}\n\n` +
-    `Der Link ist 15 Minuten gültig.\n\n` +
-    `— HHTTPS · hhttps.org`;
+  const text = biText(
+    `HHTTPS Privacy Pass — email verification\n\nRole: ${label}\n\nConfirm your email address:\n${link}\n\nThe link is valid for 15 minutes.\n\n— HHTTPS · hhttps.org`,
+    `HHTTPS Privacy Pass — E-Mail-Verifikation\n\nRolle: ${label}\n\nBestätige deine E-Mail-Adresse:\n${link}\n\nDer Link ist 15 Minuten gültig.\n\n— HHTTPS · hhttps.org`
+  );
 
   const transporter = createTransport();
   if (!transporter) {
@@ -537,7 +547,7 @@ export async function sendPrivacyPassVerification({ to, role, link }) {
 
   await transporter.sendMail(buildMailOptions({
     to,
-    subject: `[HHTTPS Privacy Pass] E-Mail-Verifikation — ${roleLabel}`,
+    subject: `[HHTTPS Privacy Pass] Email verification / E-Mail-Verifikation — ${roleLabel(role,'en')}`,
     text,
     html,
   }));

@@ -84,7 +84,7 @@ verificationsRouter.post('/email/start', async (req, res) => {
       const req = ROLE_REQUIREMENTS[role];
       return res.status(400).json({
         error: 'domain_does_not_match',
-        detail: req.emailDomainHint || 'Die E-Mail-Domain passt nicht zur gewählten Rolle.',
+        detail: req.emailDomainHint || 'The email domain does not match the selected role.',
         hint: req.emailDomainHint,
       });
     }
@@ -138,8 +138,8 @@ verificationsRouter.get('/email/verify', async (req, res) => {
   if (!token || typeof token !== 'string') {
     return res.status(400).send(renderEmailResult({
       ok: false,
-      title: 'Link ungültig',
-      message: 'Kein Token im Link gefunden.',
+      title: 'Link invalid · Link ungültig',
+      message: 'No token found in the link.<br><br><span lang="de">Kein Token im Link gefunden.</span>',
     }));
   }
 
@@ -148,8 +148,8 @@ verificationsRouter.get('/email/verify', async (req, res) => {
     if (!pending) {
       return res.status(410).send(renderEmailResult({
         ok: false,
-        title: 'Link abgelaufen oder bereits benutzt',
-        message: 'Der Bestätigungslink ist nicht mehr gültig. Fordere bitte einen neuen an.',
+        title: 'Link expired or already used · Link abgelaufen oder bereits benutzt',
+        message: 'The confirmation link is no longer valid. Please request a new one.<br><br><span lang="de">Der Bestätigungslink ist nicht mehr gültig. Fordere bitte einen neuen an.</span>',
       }));
     }
 
@@ -160,15 +160,15 @@ verificationsRouter.get('/email/verify', async (req, res) => {
 
     res.send(renderEmailResult({
       ok:        true,
-      title:     'E-Mail bestätigt',
-      message:   `Deine E-Mail wurde für die Rolle "${pending.role}" verifiziert. Du kannst dieses Fenster schließen und in der Wallet die Tokens holen.`,
+      title:     'Email confirmed · E-Mail bestätigt',
+      message:   `Your email was verified for the role "${pending.role}". You can close this window and fetch your tokens in the wallet.<br><br><span lang="de">Deine E-Mail wurde für die Rolle "${pending.role}" verifiziert. Du kannst dieses Fenster schließen und in der Wallet die Tokens holen.</span>`,
       role:      pending.role,
       domain:    pending.email_domain,
     }));
   } catch (err) {
     res.status(500).send(renderEmailResult({
       ok: false,
-      title: 'Fehler bei der Verifikation',
+      title: 'Verification error · Fehler bei der Verifikation',
       message: err.message,
     }));
   }
@@ -177,7 +177,7 @@ verificationsRouter.get('/email/verify', async (req, res) => {
 function renderEmailResult({ ok, title, message, role, domain }) {
   const icon = ok ? '✓' : '✗';
   const color = ok ? '#00e676' : '#ff5252';
-  return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title} — HHTTPS</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;800&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
@@ -196,8 +196,8 @@ p{font-size:13px;color:#4a6080;line-height:1.6;margin-bottom:18px;}
   <div class="icon">${icon}</div>
   <h1>${title}</h1>
   <p>${message}</p>
-  ${role ? `<div class="meta">Rolle: <strong>${role}</strong>${domain ? ` · ${domain}` : ''}</div>` : ''}
-  <a href="/privacy-pass" class="btn">Zur Wallet →</a>
+  ${role ? `<div class="meta">Role: <strong>${role}</strong>${domain ? ` · ${domain}` : ''}</div>` : ''}
+  <a href="/privacy-pass" class="btn">To the wallet →</a>
 </div>
 </body></html>`;
 }
@@ -303,14 +303,14 @@ verificationsRouter.post('/recovery/use', async (req, res) => {
     if (!userId) {
       return res.status(401).json({
         error: 'invalid_or_used_code',
-        detail: 'Der Code ist ungültig oder wurde bereits verwendet.',
+        detail: 'The code is invalid or has already been used.',
       });
     }
 
     res.json({
       ok: true,
       userId,
-      message: 'Code akzeptiert. Du kannst jetzt einen neuen Sicherheitsschlüssel zu deinem Account hinzufügen.',
+      message: 'Code accepted. You can now add a new security key to your account.',
     });
   } catch (err) {
     res.status(500).json({ error: 'recovery_use_failed', detail: err.message });

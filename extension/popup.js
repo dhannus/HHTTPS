@@ -27,7 +27,14 @@ const pageLabel     = el('pageLabel');
 const pageUrl       = el('pageUrl');
 
 // ─── Initial state ──────────────────────────────────────────────────────────
+function applyStaticI18n(root = document) {
+  root.querySelectorAll('[data-i18n]').forEach(e => { const m = chrome.i18n.getMessage(e.dataset.i18n); if (m) e.textContent = m; });
+  root.querySelectorAll('[data-i18n-title]').forEach(e => { const m = chrome.i18n.getMessage(e.dataset.i18nTitle); if (m) e.title = m; });
+  try { document.documentElement.lang = chrome.i18n.getUILanguage().split('-')[0]; } catch (e) {}
+}
+
 async function init() {
+  applyStaticI18n();
   // Load identity
   const idResp = await sendMsg({ type: 'GET_ACTIVE_IDENTITY' });
   const ident = idResp?.identity;
@@ -74,7 +81,7 @@ function renderIdentity(ident) {
   idActions.classList.add('show');
 
   identityIcon.textContent  = ident.roleIcon || '👤';
-  identityStatus.textContent = '✓ Verifiziert';
+  identityStatus.textContent = chrome.i18n.getMessage('verifiedStatus');
   identityRole.textContent  = ident.roleLabel || ident.role || 'Verified';
   identityLevel.textContent = ident.levelLabel
     ? `via ${ident.levelLabel}`
@@ -101,9 +108,9 @@ function renderEmptyState() {
   roleSwitch.classList.remove('show');
 
   identityIcon.textContent  = '🔒';
-  identityStatus.textContent = 'Nicht eingeloggt';
-  identityRole.textContent  = 'Keine Identität';
-  identityLevel.textContent = 'Logge dich bei hhttps.org ein';
+  identityStatus.textContent = chrome.i18n.getMessage('identityStatusLoggedOut');
+  identityRole.textContent  = chrome.i18n.getMessage('identityNoIdentity');
+  identityLevel.textContent = chrome.i18n.getMessage('loginAtHhttpsLong');
   trustWrap.classList.remove('show');
   expiry.textContent = '';
 }
@@ -118,16 +125,16 @@ function renderExpiry(ident) {
   const minLeft = Math.floor((exp - now) / 60_000);
 
   if (minLeft <= 0) {
-    expiry.textContent = 'Token abgelaufen — wird aktualisiert …';
+    expiry.textContent = chrome.i18n.getMessage('tokenExpiredRefreshing');
     expiry.classList.add('warning');
   } else if (minLeft < 10) {
-    expiry.textContent = `Token läuft ab in ${minLeft} Min`;
+    expiry.textContent = chrome.i18n.getMessage('tokenExpiresInMin', [String(minLeft)]);
     expiry.classList.add('warning');
   } else if (minLeft < 60) {
-    expiry.textContent = `Token gültig · ${minLeft} Min verbleibend`;
+    expiry.textContent = chrome.i18n.getMessage('tokenValidMinLeft', [String(minLeft)]);
     expiry.classList.remove('warning');
   } else {
-    expiry.textContent = `Token gültig · ${Math.floor(minLeft / 60)}h ${minLeft % 60}min`;
+    expiry.textContent = chrome.i18n.getMessage('tokenValidHm', [String(Math.floor(minLeft / 60)), String(minLeft % 60)]);
     expiry.classList.remove('warning');
   }
 }
@@ -172,7 +179,7 @@ function buildSnippet(ident) {
   const role   = ident.role || 'human';
   const trust  = ident.trustScore || 60;
   const icon   = ident.roleIcon || '👤';
-  const label  = ident.roleLabel || ident.role || 'Verifiziert';
+  const label  = ident.roleLabel || ident.role || chrome.i18n.getMessage('roleFallback');
   return `[HHTTPS ✓ ${icon} ${label} · Trust ${trust}/100 · ${ident.token}]`;
 }
 
@@ -216,11 +223,11 @@ async function renderPageState() {
     pageRow.querySelector('.page-icon').textContent =
       state.human ? '✓' : (state.status === 'unverified' ? '!' : '?');
     pageLabel.textContent = state.status === 'verified'
-      ? `HHTTPS aktiv (${state.role || 'verifiziert'})`
-      : 'HHTTPS unterstützt, nicht verifiziert';
+      ? chrome.i18n.getMessage('pageHhttpsActive', [state.role || chrome.i18n.getMessage('verifiedFallback')])
+      : chrome.i18n.getMessage('pageSupportedNotVerified');
   } else {
     pageRow.querySelector('.page-icon').textContent = '○';
-    pageLabel.textContent = 'Unterstützt HHTTPS nicht';
+    pageLabel.textContent = chrome.i18n.getMessage('pageNotSupported');
   }
 }
 
@@ -234,15 +241,15 @@ async function doRefresh(ident) {
   const r = await sendMsg({ type: 'REFRESH_NOW', id: ident.id });
   if (r?.ok && r.identity) {
     renderIdentity(r.identity);
-    btn.innerHTML = '<span>✓</span> <span>Aktualisiert</span>';
+    btn.innerHTML = `<span>✓</span> <span>${chrome.i18n.getMessage('updatedLabel')}</span>`;
     setTimeout(() => {
-      btn.innerHTML = '<span>↻</span> <span>Refresh</span>';
+      btn.innerHTML = `<span>↻</span> <span>${chrome.i18n.getMessage('refreshLabel')}</span>`;
       btn.disabled = false;
     }, 1500);
   } else {
-    btn.innerHTML = '<span>✗</span> <span>Fehler</span>';
+    btn.innerHTML = `<span>✗</span> <span>${chrome.i18n.getMessage('errorLabel')}</span>`;
     setTimeout(() => {
-      btn.innerHTML = '<span>↻</span> <span>Refresh</span>';
+      btn.innerHTML = `<span>↻</span> <span>${chrome.i18n.getMessage('refreshLabel')}</span>`;
       btn.disabled = false;
     }, 2000);
   }
@@ -253,14 +260,14 @@ async function doCopyToken(ident) {
   const btn = el('copyTokenBtn');
   try {
     await navigator.clipboard.writeText(ident.token);
-    btn.innerHTML = '<span>✓</span> <span>Kopiert!</span>';
+    btn.innerHTML = `<span>✓</span> <span>${chrome.i18n.getMessage('copiedLabel')}</span>`;
     setTimeout(() => {
-      btn.innerHTML = '<span>⎘</span> <span>Token</span>';
+      btn.innerHTML = `<span>⎘</span> <span>${chrome.i18n.getMessage('tokenLabel')}</span>`;
     }, 1500);
   } catch (e) {
-    btn.innerHTML = '<span>✗</span> <span>Fehler</span>';
+    btn.innerHTML = `<span>✗</span> <span>${chrome.i18n.getMessage('errorLabel')}</span>`;
     setTimeout(() => {
-      btn.innerHTML = '<span>⎘</span> <span>Token</span>';
+      btn.innerHTML = `<span>⎘</span> <span>${chrome.i18n.getMessage('tokenLabel')}</span>`;
     }, 2000);
   }
 }
@@ -270,34 +277,30 @@ async function doCopySnippet(ident) {
   const btn = el('copySnippetBtn');
   try {
     await navigator.clipboard.writeText(buildSnippet(ident));
-    btn.textContent = '✓ Kopiert!';
+    btn.textContent = chrome.i18n.getMessage('copiedCheck');
     btn.classList.add('copied');
     setTimeout(() => {
-      btn.textContent = '📋 In Zwischenablage kopieren';
+      btn.textContent = chrome.i18n.getMessage('copyToClipboard');
       btn.classList.remove('copied');
     }, 1500);
   } catch (e) {
-    btn.textContent = '✗ Fehler — Browser blockiert Zwischenablage';
+    btn.textContent = chrome.i18n.getMessage('copyBlocked');
     setTimeout(() => {
-      btn.textContent = '📋 In Zwischenablage kopieren';
+      btn.textContent = chrome.i18n.getMessage('copyToClipboard');
     }, 2500);
   }
 }
 
 async function doLogout(ident) {
   if (!ident) return;
-  const confirmed = confirm(
-    'Diese Identität entfernen?\n\n' +
-    'Der Token wird beim Server widerrufen und aus dem Browser gelöscht. ' +
-    'Du musst dich danach neu bei hhttps.org einloggen.'
-  );
+  const confirmed = confirm(chrome.i18n.getMessage('logoutConfirm'));
   if (!confirmed) return;
 
   const r = await sendMsg({ type: 'REVOKE_IDENTITY', id: ident.id });
   if (r?.ok) {
     window.location.reload();
   } else {
-    alert('Logout fehlgeschlagen: ' + (r?.error || 'unbekannt'));
+    alert(chrome.i18n.getMessage('logoutFailed', [r?.error || chrome.i18n.getMessage('unknownError')]));
   }
 }
 

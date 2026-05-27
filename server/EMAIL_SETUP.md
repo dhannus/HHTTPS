@@ -20,9 +20,9 @@ in der Server-Konsole ausgegeben und automatisch im Browser getestet.
 ```bash
 # ─── HHTTPS Basis ──────────────────────────────────────────────
 PORT=3000
-RP_ID=hhttps.funnysearch.eu
-ORIGIN=https://hhttps.funnysearch.eu
-BASE_URL=https://hhttps.funnysearch.eu
+RP_ID=hhttps.org
+ORIGIN=https://hhttps.org
+BASE_URL=https://hhttps.org
 JWT_SECRET=$(openssl rand -hex 64)   # einmal generieren, sicher speichern!
 
 # ─── E-Mail (Option A: SMTP) ────────────────────────────────────
@@ -30,7 +30,7 @@ SMTP_HOST=smtp.your-provider.com
 SMTP_PORT=587
 SMTP_USER=your@email.com
 SMTP_PASS=your-password
-SMTP_FROM=noreply@hhttps.funnysearch.eu
+SMTP_FROM=noreply@hhttps.org
 
 # ─── E-Mail (Option B: Brevo/Sendinblue — kostenlos bis 300/Tag) ─
 SMTP_HOST=smtp-relay.brevo.com
@@ -67,15 +67,15 @@ Brevo ist kostenlos bis 300 E-Mails/Tag — ideal für die Demo.
 # .env anlegen
 cat > .env << 'EOF'
 PORT=3000
-RP_ID=hhttps.funnysearch.eu
-ORIGIN=https://hhttps.funnysearch.eu
-BASE_URL=https://hhttps.funnysearch.eu
+RP_ID=hhttps.org
+ORIGIN=https://hhttps.org
+BASE_URL=https://hhttps.org
 JWT_SECRET=HIER_LANGEN_ZUFALLSWERT_EINTRAGEN
 SMTP_HOST=smtp-relay.brevo.com
 SMTP_PORT=587
 SMTP_USER=deine@email.com
 SMTP_PASS=dein-brevo-key
-SMTP_FROM=noreply@funnysearch.eu
+SMTP_FROM=noreply@hhttps.org
 EOF
 
 # dotenv laden (server.js bereits ESM, dotenv muss manuell geladen werden)

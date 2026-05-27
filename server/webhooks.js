@@ -15,7 +15,7 @@ const VALID_EVENTS = ['token.issued', 'token.revoked', 'role.declared', '*'];
 
 // ─── Register ─────────────────────────────────────────────────────────────────
 export async function registerWebhook({ url, events, secret }) {
-  try { new URL(url); } catch { throw new Error('Ungültige Webhook-URL.'); }
+  try { new URL(url); } catch { throw new Error('Invalid webhook URL.'); }
 
   const invalid = events.find(e => !VALID_EVENTS.includes(e));
   if (invalid) throw new Error(`Unbekanntes Event: ${invalid}`);

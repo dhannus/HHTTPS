@@ -1,0 +1,224 @@
+{
+  "extName": {
+    "message": "HHTTPS — iamhmn"
+  },
+  "extDescription": {
+    "message": "Deine HHTTPS-Identität als Browser-Brieftasche — mit Inline-Signaturen und automatischer Siegel-Erkennung auf jeder Webseite."
+  },
+  "identityStatusLoggedOut": {
+    "message": "Nicht eingeloggt"
+  },
+  "identityNoIdentity": {
+    "message": "Keine Identität"
+  },
+  "trustScoreLabel": {
+    "message": "Trust Score"
+  },
+  "loginCta": {
+    "message": "Bei hhttps.org einloggen →"
+  },
+  "loginHint": {
+    "message": "Passkey-Verifikation in 30 Sekunden"
+  },
+  "refreshTitle": {
+    "message": "Token neu vom Server holen"
+  },
+  "refreshLabel": {
+    "message": "Refresh"
+  },
+  "copyTokenTitle": {
+    "message": "Token in die Zwischenablage"
+  },
+  "tokenLabel": {
+    "message": "Token"
+  },
+  "logoutTitle": {
+    "message": "Identität entfernen + Token widerrufen"
+  },
+  "logoutLabel": {
+    "message": "Logout"
+  },
+  "switchIdentity": {
+    "message": "Identität wechseln"
+  },
+  "identityAsSignature": {
+    "message": "Identität als Signatur"
+  },
+  "rightClickInField": {
+    "message": "Rechtsklick im Textfeld"
+  },
+  "signatureMode": {
+    "message": "Signatur-Modus:"
+  },
+  "modeIdentityHead": {
+    "message": "🛡️ Identität"
+  },
+  "modeIdentityDesc": {
+    "message": "Stempel mit deiner Rolle. Text darf editiert werden."
+  },
+  "modeTextBoundHead": {
+    "message": "🔒 Text-gebunden"
+  },
+  "modeTextBoundDesc": {
+    "message": "Bindet die Signatur an den genauen Text. Edit bricht Signatur."
+  },
+  "quickAlphaStamp": {
+    "message": "Schneller Alpha-Stempel"
+  },
+  "toCopy": {
+    "message": "zum Kopieren"
+  },
+  "copyBtn": {
+    "message": "📋 Kopieren"
+  },
+  "currentPage": {
+    "message": "Aktuelle Seite"
+  },
+  "checking": {
+    "message": "Wird geprüft …"
+  },
+  "verifiedStatus": {
+    "message": "✓ Verifiziert"
+  },
+  "loginAtHhttpsLong": {
+    "message": "Logge dich bei hhttps.org ein"
+  },
+  "tokenExpiredRefreshing": {
+    "message": "Token abgelaufen — wird aktualisiert …"
+  },
+  "tokenExpiresInMin": {
+    "message": "Token läuft ab in $1 Min"
+  },
+  "tokenValidMinLeft": {
+    "message": "Token gültig · $1 Min verbleibend"
+  },
+  "tokenValidHm": {
+    "message": "Token gültig · $1h $2min"
+  },
+  "pageHhttpsActive": {
+    "message": "HHTTPS aktiv ($1)"
+  },
+  "verifiedFallback": {
+    "message": "verifiziert"
+  },
+  "pageSupportedNotVerified": {
+    "message": "HHTTPS unterstützt, nicht verifiziert"
+  },
+  "pageNotSupported": {
+    "message": "Unterstützt HHTTPS nicht"
+  },
+  "updatedLabel": {
+    "message": "Aktualisiert"
+  },
+  "errorLabel": {
+    "message": "Fehler"
+  },
+  "copiedLabel": {
+    "message": "Kopiert!"
+  },
+  "copiedCheck": {
+    "message": "✓ Kopiert!"
+  },
+  "copyToClipboard": {
+    "message": "📋 In Zwischenablage kopieren"
+  },
+  "copyBlocked": {
+    "message": "✗ Fehler — Browser blockiert Zwischenablage"
+  },
+  "logoutConfirm": {
+    "message": "Diese Identität entfernen?\n\nDer Token wird beim Server widerrufen und aus dem Browser gelöscht. Du musst dich danach neu bei hhttps.org einloggen."
+  },
+  "logoutFailed": {
+    "message": "Logout fehlgeschlagen: $1"
+  },
+  "unknownError": {
+    "message": "unbekannt"
+  },
+  "roleFallback": {
+    "message": "Verifiziert"
+  },
+  "badgeTitleLoggedOut": {
+    "message": "HHTTPS — Nicht eingeloggt. Klick zum Verifizieren."
+  },
+  "ctxSignAlpha": {
+    "message": "Mit HHTTPS signieren (Identität)"
+  },
+  "ctxSignBeta": {
+    "message": "Mit HHTTPS signieren (Identität + Text)"
+  },
+  "errNoIdentityStored": {
+    "message": "Keine Identität gespeichert"
+  },
+  "errNoTextToSign": {
+    "message": "Kein Text zum Signieren"
+  },
+  "errNoDomain": {
+    "message": "Keine Domain — bitte auf einer Webseite signieren"
+  },
+  "errNoMarker": {
+    "message": "Keine Marker-Antwort vom Server"
+  },
+  "sealChecking": {
+    "message": "Prüfe…"
+  },
+  "sealTextChanged": {
+    "message": "Text geändert"
+  },
+  "oldFormatWarning": {
+    "message": "Diese Signatur nutzt das alte Format (vor Phase 2.5). Aus Sicherheitsgründen wird sie nicht mehr verifiziert. Bitte neu signieren."
+  },
+  "detailVerified": {
+    "message": "✓ Verifiziert"
+  },
+  "detailWrongDomainTitle": {
+    "message": "⚠ Diese Signatur gehört nicht hierher."
+  },
+  "detailIssuedFor": {
+    "message": "Ausgestellt für:"
+  },
+  "detailUsedOn": {
+    "message": "Verwendet auf:"
+  },
+  "detailTextModified": {
+    "message": "⚠ Der Text wurde nach dem Signieren verändert."
+  },
+  "detailRevokedOn": {
+    "message": "✗ Widerrufen am $1"
+  },
+  "detailClose": {
+    "message": "Schließen"
+  },
+  "rowSignature": {
+    "message": "Signatur"
+  },
+  "rowBoundTo": {
+    "message": "Gebunden an"
+  },
+  "rowBindingType": {
+    "message": "Bindungstyp"
+  },
+  "rowSignedOn": {
+    "message": "Signiert am"
+  },
+  "rowTextExcerpt": {
+    "message": "Text-Auszug"
+  },
+  "viewOnHhttps": {
+    "message": "Auf hhttps.org anzeigen →"
+  },
+  "flashInserted": {
+    "message": "HHTTPS-Signatur eingefügt"
+  },
+  "flashEnterTextFirst": {
+    "message": "Bitte zuerst Text in das Feld eingeben"
+  },
+  "flashSigningFailed": {
+    "message": "Signieren fehlgeschlagen"
+  },
+  "flashClickFieldFirst": {
+    "message": "Klicke zuerst in ein Eingabefeld"
+  },
+  "identitySaved": {
+    "message": "Identität gespeichert · $1"
+  }
+}

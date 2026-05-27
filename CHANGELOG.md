@@ -44,7 +44,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [0.4.0] — 2026-05-06
 
 ### Added
-- Initial v4 production deployment on `funnysearch.eu`.
+- Initial v4 production deployment.
 - ES256 asymmetric signing with JWKS endpoint.
 - WebAuthn passkey registration and authentication.
 - 8 initial roles with email verification.

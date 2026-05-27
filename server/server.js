@@ -376,7 +376,7 @@ app.use(helmet({
 const rl = (max, windowMs = 60000) => rateLimit({
   max, windowMs, standardHeaders: true, legacyHeaders: false,
   handler: (req, res) => res.status(429).json({
-    error: 'Rate limit erreicht.', retryAfter: Math.ceil(windowMs / 1000)
+    error: 'Rate limit exceeded.', retryAfter: Math.ceil(windowMs / 1000)
   })
 });
 
@@ -618,7 +618,7 @@ async function issueRefreshToken(userId, credId, role) {
 
 async function checkTokenValid(token) {
   const decoded = verifyToken(token);
-  if (await db.revokedTokens.has(decoded.jti)) throw new Error('Token widerrufen');
+  if (await db.revokedTokens.has(decoded.jti)) throw new Error('Token revoked');
   if (decoded.sub === 'refresh') {
     if (!await db.refreshTokens.get(decoded.jti)) throw new Error('Refresh-Token nicht aktiv');
   } else {
@@ -740,7 +740,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     setHHTPPS(res, { status: 'unverified', human: false, actorType: 'unknown' });
     return res.json({
       hhttps: { version: '0.4.1', human: false, actorType: 'unknown',
-                status: 'unverified', message: 'Kein HHTTPS-Token. Bitte verifizieren.' }
+                status: 'unverified', message: 'No HHTTPS token. Please verify.' }
     });
   }
 
@@ -772,7 +772,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
                 method: d.method, trustScore: d.trustScore,
                 issuedAt: new Date(d.iat * 1000).toISOString(),
                 expiresAt: new Date(d.exp * 1000).toISOString(), issuer: d.iss },
-      role: { id: d.role, label: roleDef.label, labelEn: roleDef.labelEn, icon: roleDef.icon,
+      role: { id: d.role, label: roleDef.label, icon: roleDef.icon,
               description: roleDef.description, level: d.roleLevel,
               levelLabel: vlevel.label, trustScore: d.trustScore,
               privileges: roleDef.privileges, userStory: roleDef.userStory }
@@ -870,21 +870,21 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
       return res.json({
         hhttps: { status: 'invalid', reason: 'text-modified' },
         match:  false,
-        message: 'Der Text wurde nach dem Signieren verändert.'
+        message: 'The text was modified after signing.'
       });
     }
     if (revoked) {
       return res.json({
         hhttps: { status: 'revoked' },
         match:  true,
-        message: 'Signatur wurde widerrufen.'
+        message: 'Signature was revoked.'
       });
     }
     if (d.exp * 1000 < Date.now()) {
       return res.json({
         hhttps: { status: 'expired', match: true },
         match:  true,
-        message: 'Signatur abgelaufen (Text aber unverändert).'
+        message: 'Signature expired (text unchanged).'
       });
     }
 
@@ -1061,8 +1061,8 @@ app.get('/hhttps/s/:slug', async (req, res) => {
     out.revokedAt     = sig.revoked_at;
     out.revokeReason  = sig.revoke_reason;
     return sendJson(req, res, out, {
-      title: 'Signatur widerrufen',
-      subtitle: 'Diese Signatur wurde vom Unterzeichner widerrufen.'
+      title: 'Signature revoked',
+      subtitle: 'This signature was revoked by the signer.'
     });
   }
 
@@ -1072,9 +1072,9 @@ app.get('/hhttps/s/:slug', async (req, res) => {
     out.hhttps.status      = 'wrong-domain';
     out.hhttps.expected    = sig.bound_domain;
     out.hhttps.observed    = reqDomain;
-    out.warning            = `Diese Signatur wurde für ${sig.bound_domain} ausgestellt, aber auf ${reqDomain} verwendet. Möglicher Diebstahl.`;
+    out.warning            = `This signature was issued for ${sig.bound_domain} but used on ${reqDomain}. Possible theft.`;
     return sendJson(req, res, out, {
-      title: 'Falsche Domain',
+      title: 'Wrong domain',
       subtitle: out.warning
     });
   }
@@ -1093,7 +1093,7 @@ app.get('/hhttps/s/:slug', async (req, res) => {
       const actualStrict   = hashTextStrict(preview);
       if (expectedStrict !== actualStrict) {
         out.hhttps.status = 'text-modified';
-        out.warning       = 'Der Text wurde nach dem Signieren verändert.';
+        out.warning       = 'The text was modified after signing.';
       }
     } catch (e) {
       // Ignore preview parse errors
@@ -1101,7 +1101,7 @@ app.get('/hhttps/s/:slug', async (req, res) => {
   }
 
   return sendJson(req, res, out, {
-    title: `Signatur ${slug}`,
+    title: `Signature ${slug}`,
     subtitle: `${sig.role_icon || ''} ${sig.role_label} · Trust ${sig.trust_score}/100`
   });
 });
@@ -1271,18 +1271,18 @@ app.get('/hhttps/oauth/authorize', async (req, res) => {
 
   // Step 1: validate the request
   if (response_type !== 'code') {
-    return res.status(400).send(renderOAuthError('Nur response_type=code wird unterstützt.', 400));
+    return res.status(400).send(renderOAuthError('Only response_type=code is supported.', 400));
   }
   if (!client_id) {
-    return res.status(400).send(renderOAuthError('client_id ist erforderlich.', 400));
+    return res.status(400).send(renderOAuthError('client_id is required.', 400));
   }
   const client = await db.oauthClients.get(client_id);
   if (!client) {
-    return res.status(400).send(renderOAuthError('Unbekannte client_id. Plattform ist nicht registriert.', 400));
+    return res.status(400).send(renderOAuthError('Unknown client_id. Platform is not registered.', 400));
   }
   if (!redirect_uri || !client.redirect_uris.includes(redirect_uri)) {
     return res.status(400).send(renderOAuthError(
-      'redirect_uri stimmt nicht mit dem registrierten Wert überein. Aus Sicherheitsgründen abgelehnt.', 400
+      'redirect_uri does not match the registered value. Rejected for security reasons.', 400
     ));
   }
 
@@ -1290,24 +1290,24 @@ app.get('/hhttps/oauth/authorize', async (req, res) => {
   const isPublicClient = !client.client_secret_hash;
   if (isPublicClient && !code_challenge) {
     return redirectWithError(redirect_uri, state, 'invalid_request',
-      'PKCE code_challenge ist für public clients erforderlich.');
+      'PKCE code_challenge is required for public clients.');
   }
 
   // Scope validation
   const requestedScopes = (scope || 'openid').split(/\s+/).filter(Boolean);
   if (!requestedScopes.includes('openid')) {
     return redirectWithError(redirect_uri, state, 'invalid_scope',
-      'Der Scope "openid" ist erforderlich.');
+      'The "openid" scope is required.');
   }
   const unknownScopes = requestedScopes.filter(s => !SCOPES_KNOWN.has(s));
   if (unknownScopes.length > 0) {
     return redirectWithError(redirect_uri, state, 'invalid_scope',
-      `Unbekannte Scopes: ${unknownScopes.join(', ')}`);
+      `Unknown scopes: ${unknownScopes.join(', ')}`);
   }
   const deniedScopes = requestedScopes.filter(s => !client.allowed_scopes.includes(s));
   if (deniedScopes.length > 0) {
     return redirectWithError(redirect_uri, state, 'invalid_scope',
-      `Plattform darf diese Scopes nicht anfragen: ${deniedScopes.join(', ')}`);
+      `Platform may not request these scopes: ${deniedScopes.join(', ')}`);
   }
 
   // Step 2: render the consent page. The user's session/identity will be
@@ -1592,26 +1592,25 @@ function redirectWithError(redirectUri, state, errorCode, errorDescription) {
 
 function renderOAuthError(message, status) {
   return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
-<title>OAuth-Fehler · HHTTPS</title>
+<title>OAuth error · HHTTPS</title>
 <style>body{font-family:system-ui;background:#F8F1E4;color:#2D2823;padding:60px 20px;text-align:center}
 .box{max-width:520px;margin:0 auto;background:#FCFAF5;border-radius:14px;padding:32px;box-shadow:0 4px 20px rgba(45,40,35,.08)}
 h1{font-family:'Fraunces',serif;color:#C97D5B;margin-bottom:16px}
 p{line-height:1.6;color:#4A413A}
 a{color:#A86246;text-decoration:none}
-</style></head><body><div class="box"><h1>OAuth-Fehler ${status}</h1><p>${message}</p>
-<p><a href="https://hhttps.org">← zurück zu hhttps.org</a></p></div></body></html>`;
+</style></head><body><div class="box"><h1>OAuth error ${status}</h1><p>${message}</p>
+<p><a href="https://hhttps.org">← back to hhttps.org</a></p></div></body></html>`;
 }
 
 function renderConsentPage({ client, scopes, params }) {
   const verifiedBadge = client.verified
-    ? `<span class="badge badge-verified">✓ Verifizierte Plattform</span>`
-    : `<span class="badge badge-unverified">⚠ Nicht verifiziert</span>`;
+    ? `<span class="badge badge-verified" data-i18n="consent.verified">✓ Verifizierte Plattform</span>`
+    : `<span class="badge badge-unverified" data-i18n="consent.unverified">⚠ Nicht verifiziert</span>`;
 
   const unverifiedWarning = client.verified ? '' : `
     <div class="warning">
-      <strong>Achtung — Diese Plattform ist nicht von hhttps.org geprüft.</strong>
-      Klicke nur auf "Erlauben", wenn du der Plattform <em>${escapeHtml(client.name)}</em> wirklich vertraust.
-      Prüfe besonders, ob die URL in der Adressleiste mit <code>${escapeHtml(client.homepage_url || '?')}</code> übereinstimmt.
+      <strong data-i18n="consent.warnStrong">Achtung — Diese Plattform ist nicht von hhttps.org geprüft.</strong>
+      <span data-i18n="consent.warnB1">Klicke nur auf "Erlauben", wenn du der Plattform</span> <em>${escapeHtml(client.name)}</em> <span data-i18n="consent.warnB2">wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit</span> <code>${escapeHtml(client.homepage_url || '?')}</code> <span data-i18n="consent.warnB3">übereinstimmt.</span>
     </div>
   `;
 
@@ -1624,8 +1623,8 @@ function renderConsentPage({ client, scopes, params }) {
     }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
     return `<div class="scope-row">
       <span class="scope-icon">${label.icon}</span>
-      <div><div class="scope-title">${label.title}</div>
-           <div class="scope-desc">${label.desc}</div></div>
+      <div><div class="scope-title" data-i18n="scope.${s}.title">${label.title}</div>
+           <div class="scope-desc" data-i18n="scope.${s}.desc">${label.desc}</div></div>
     </div>`;
   }).join('');
 
@@ -1680,6 +1679,10 @@ function renderConsentPage({ client, scopes, params }) {
   .footer-note { padding: 14px 28px; background: var(--cream); border-top: 1px solid var(--line); text-align:center; font-size: 11px; color: var(--ink-mute); font-family:'JetBrains Mono',monospace; }
   .status { padding: 14px 28px; font-size: 13px; text-align:center; display:none; }
   .status.error { background: rgba(201,125,91,0.1); color: var(--terra-dp); display:block; }
+  .lang-toggle { display:inline-flex; gap:2px; background:var(--sand); border-radius:100px; padding:2px; margin-top:12px; }
+  .lang-toggle button { border:none; background:transparent; color:var(--ink-mute); font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.5px; padding:5px 9px; border-radius:100px; cursor:pointer; transition:all .15s; }
+  .lang-toggle button:hover { color:var(--ink); }
+  .lang-toggle button.active { background:var(--paper); color:var(--terra-dp); box-shadow:0 1px 3px rgba(45,40,35,.12); }
 </style></head><body>
 <div class="wrap">
   <div class="header">
@@ -1687,25 +1690,29 @@ function renderConsentPage({ client, scopes, params }) {
       <div class="logo-mark"></div>
       <div class="logo-text">HHTTPS</div>
     </a>
+    <div class="lang-toggle" role="group" aria-label="Language">
+      <button type="button" data-lang="de" class="active">DE</button>
+      <button type="button" data-lang="en">EN</button>
+    </div>
   </div>
   <div class="card">
     <div class="card-head">
       <div class="client-logo">${client.logo_url ? `<img src="${escapeHtml(client.logo_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">` : '🏛️'}</div>
-      <h1><em>${escapeHtml(client.name)}</em> möchte deine Identität sehen</h1>
+      <h1><em>${escapeHtml(client.name)}</em> <span data-i18n="consent.heading">möchte deine Identität sehen</span></h1>
       ${client.homepage_url ? `<div class="client-url">${escapeHtml(client.homepage_url)}</div>` : ''}
       ${verifiedBadge}
     </div>
     ${unverifiedWarning}
     <div class="scope-list">
-      <div class="scope-list-head">Folgende Daten werden geteilt</div>
+      <div class="scope-list-head" data-i18n="consent.scopeHead">Folgende Daten werden geteilt</div>
       ${scopeRows}
     </div>
     <div class="status" id="status"></div>
     <div class="actions">
-      <button class="btn btn-deny" id="denyBtn">Ablehnen</button>
-      <button class="btn btn-allow" id="allowBtn">Erlauben</button>
+      <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
+      <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">Erlauben</button>
     </div>
-    <div class="footer-note">Nur Rolle und Trust-Score werden geteilt. Keine PII. Du kannst die Verbindung jederzeit auf <a href="https://hhttps.org" style="color:var(--terra-dp);text-decoration:none">hhttps.org</a> widerrufen.</div>
+    <div class="footer-note"><span data-i18n="consent.footPre">Nur Rolle und Trust-Score werden geteilt. Keine PII. Du kannst die Verbindung jederzeit auf</span> <a href="https://hhttps.org" style="color:var(--terra-dp);text-decoration:none">hhttps.org</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
   </div>
 </div>
 <script>
@@ -1725,7 +1732,7 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
   const allow = document.getElementById('allowBtn');
   const status = document.getElementById('status');
   allow.disabled = true;
-  allow.textContent = 'Wird verarbeitet…';
+  allow.textContent = t('consent.processing');
 
   // Look for an identity in localStorage (published by hhttps.org main page)
   // or in browser extension storage. For Phase 3a we use localStorage.
@@ -1737,7 +1744,7 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
 
   if (!identity || !identity.token) {
     status.className = 'status error';
-    status.textContent = 'Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.';
+    status.textContent = t('consent.noIdentity');
     setTimeout(() => {
       window.location = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
     }, 2000);
@@ -1760,15 +1767,69 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
       })
     });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'OAuth-Fehler');
+    if (!r.ok) throw new Error(d.error || 'OAuth error');
     window.location = d.redirect;
   } catch (e) {
     status.className = 'status error';
-    status.textContent = 'Fehler: ' + e.message;
+    status.textContent = t('consent.errorPrefix') + e.message;
     allow.disabled = false;
-    allow.textContent = 'Erlauben';
+    allow.textContent = t('consent.allow');
   }
 });
+
+// ─── Consent page i18n (DE/EN toggle, shared storage key) ──────────────────
+const CONSENT_I18N = {
+  de: {
+    "consent.verified":"✓ Verifizierte Plattform","consent.unverified":"⚠ Nicht verifiziert",
+    "consent.warnStrong":"Achtung — Diese Plattform ist nicht von hhttps.org geprüft.",
+    "consent.warnB1":"Klicke nur auf \"Erlauben\", wenn du der Plattform",
+    "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
+    "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
+    "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
+    "consent.footPre":"Nur Rolle und Trust-Score werden geteilt. Keine PII. Du kannst die Verbindung jederzeit auf",
+    "consent.footPost":"widerrufen.","consent.processing":"Wird verarbeitet…",
+    "consent.noIdentity":"Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.",
+    "consent.errorPrefix":"Fehler: ",
+    "scope.openid.title":"Anonyme Identität","scope.openid.desc":"Eine pseudonyme Kennung, die nur diese Plattform sieht.",
+    "scope.role.title":"Rolle + Trust-Score","scope.role.desc":"Deine gesellschaftliche Rolle (z. B. Entwickler) und dein Vertrauenswert.",
+    "scope.verification_method.title":"Verifikationsmethode","scope.verification_method.desc":"Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).",
+    "scope.age_group.title":"Altersgruppe","scope.age_group.desc":"Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe."
+  },
+  en: {
+    "consent.verified":"✓ Verified platform","consent.unverified":"⚠ Not verified",
+    "consent.warnStrong":"Caution — this platform has not been checked by hhttps.org.",
+    "consent.warnB1":"Only click \"Allow\" if you really trust the platform",
+    "consent.warnB2":". Check in particular that the URL in the address bar matches",
+    "consent.warnB3":".","consent.heading":"wants to see your identity",
+    "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
+    "consent.footPre":"Only role and trust score are shared. No PII. You can revoke the connection any time at",
+    "consent.footPost":".","consent.processing":"Processing…",
+    "consent.noIdentity":"No HHTTPS identity found. Please log in at hhttps.org first.",
+    "consent.errorPrefix":"Error: ",
+    "scope.openid.title":"Anonymous identity","scope.openid.desc":"A pseudonymous identifier that only this platform sees.",
+    "scope.role.title":"Role + trust score","scope.role.desc":"Your societal role (e.g. developer) and your trust value.",
+    "scope.verification_method.title":"Verification method","scope.verification_method.desc":"How your role was verified (e.g. ORCID, press card).",
+    "scope.age_group.title":"Age group","scope.age_group.desc":"Your rough age group (e.g. 18+), not your date of birth. Currently self-declared."
+  }
+};
+let CONSENT_LANG = 'de';
+function t(k){ return (CONSENT_I18N[CONSENT_LANG]||CONSENT_I18N.de)[k] ?? (CONSENT_I18N.de[k] ?? k); }
+function applyConsentLang(lang){
+  CONSENT_LANG = CONSENT_I18N[lang] ? lang : 'de';
+  document.documentElement.lang = CONSENT_LANG;
+  document.querySelectorAll('[data-i18n]').forEach(function(e){ var v = t(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
+  document.querySelectorAll('.lang-toggle button').forEach(function(b){ b.classList.toggle('active', b.dataset.lang === CONSENT_LANG); });
+  try { localStorage.setItem('iamhmn-lang', CONSENT_LANG); } catch(e){}
+}
+function detectConsentLang(){
+  try { var sv = localStorage.getItem('iamhmn-lang'); if (sv && CONSENT_I18N[sv]) return sv; } catch(e){}
+  var n = (navigator.language || 'de').slice(0,2).toLowerCase();
+  return CONSENT_I18N[n] ? n : 'de';
+}
+document.querySelectorAll('.lang-toggle button').forEach(function(b){
+  b.addEventListener('click', function(){ applyConsentLang(b.dataset.lang); });
+});
+applyConsentLang(detectConsentLang());
 </script>
 </body></html>`;
 }
@@ -1785,7 +1846,7 @@ app.get('/hhttps/roles', (req, res) => {
   sendJson(req, res, {
     hhttps: { version: '0.4.1' },
     roles: Object.values(ROLES).map(r => ({
-      id: r.id, label: r.label, labelEn: r.labelEn, icon: r.icon,
+      id: r.id, label: r.label, icon: r.icon,
       description: r.description, verificationMethods: r.verificationMethods,
       verificationHints: r.verificationHints || {},
       privileges: r.privileges, userStory: r.userStory
@@ -1830,7 +1891,7 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
 app.post('/hhttps/webauthn/register/finish', async (req, res) => {
   const { userId, response } = req.body;
   const stored = await db.challenges.get(userId);
-  if (!stored) return res.status(400).json({ error: 'Challenge abgelaufen.' });
+  if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
 
   try {
     const v = await verifyRegistrationResponse({
@@ -1891,7 +1952,7 @@ app.post('/hhttps/webauthn/auth/start', limit.webauthn, async (req, res) => {
 app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
   const { sessionId, response } = req.body;
   const stored = await db.challenges.get(sessionId);
-  if (!stored) return res.status(400).json({ error: 'Session abgelaufen.' });
+  if (!stored) return res.status(400).json({ error: 'Session expired.' });
 
   const cred = await db.credentials.get(response.id);
   if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
@@ -1925,7 +1986,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     }, 600_000);
     await db.stats.increment('verifications');
 
-    res.json({ verified: true, sessionId: sid, message: 'WebAuthn OK. Bitte Rolle deklarieren.' });
+    res.json({ verified: true, sessionId: sid, message: 'WebAuthn OK. Please declare a role.' });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -1938,7 +1999,7 @@ app.post('/hhttps/token/refresh', async (req, res) => {
   try {
     const d = verifyToken(refreshToken);
     if (d.sub !== 'refresh')              throw new Error('Kein Refresh-Token');
-    if (await db.revokedTokens.has(d.jti)) throw new Error('Refresh-Token widerrufen');
+    if (await db.revokedTokens.has(d.jti)) throw new Error('Refresh token revoked');
 
     const stored = await db.refreshTokens.get(d.jti);
     if (!stored) throw new Error('Refresh-Token nicht aktiv');
@@ -1969,7 +2030,7 @@ app.post('/hhttps/token/refresh', async (req, res) => {
       token:     newAccess,
       expiresAt: new Date(Date.now() + ACCESS_TTL * 1000).toISOString(),
       role:      { id: role, label: roleDef.label, trustScore: savedRole?.trust_score || 60 },
-      message:   '✓ Neuer Access-Token ausgestellt — kein erneuter Fingerabdruck nötig.'
+      message:   '✓ New access token issued — no re-authentication needed.'
     });
   } catch (e) {
     res.status(401).json({ error: e.message });
@@ -1981,9 +2042,9 @@ app.post('/hhttps/token/refresh', async (req, res) => {
 app.post('/hhttps/email/send', limit.email, async (req, res) => {
   const { sessionId, email, role } = req.body;
   const session = await db.sessions.get(sessionId);
-  if (!session?.verified) return res.status(401).json({ error: 'Ungültige Session.' });
+  if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-    return res.status(400).json({ error: 'Ungültige E-Mail-Adresse.' });
+    return res.status(400).json({ error: 'Invalid email address.' });
 
   const sentCount = await db.sessions.incrementEmailsSent(sessionId);
   if (sentCount > 3)
@@ -2033,7 +2094,7 @@ app.get('/hhttps/email/verify', async (req, res) => {
 
 app.post('/hhttps/email/status', async (req, res) => {
   const session = await db.sessions.get(req.body.sessionId);
-  if (!session) return res.status(404).json({ error: 'Session nicht gefunden.' });
+  if (!session) return res.status(404).json({ error: 'Session not found.' });
   res.json({
     emailVerified: session.emailVerified || false,
     emailLevel:    session.emailLevel    || null,
@@ -2052,12 +2113,12 @@ app.get('/hhttps/verify/github/start', async (req, res) => {
   if (!sessionId) return res.status(400).send('session parameter required');
 
   const session = await db.sessions.get(sessionId);
-  if (!session?.verified) return res.status(401).send('Ungültige Session.');
+  if (!session?.verified) return res.status(401).send('Invalid session.');
 
   if (!isGithubConfigured()) {
     return res.status(503).json({
       error: 'github_not_configured',
-      detail: 'Dieser HHTTPS-Issuer hat keine GitHub-OAuth-App konfiguriert. Bitte den Betreiber kontaktieren.'
+      detail: 'This HHTTPS issuer has no GitHub OAuth app configured. Please contact the operator.'
     });
   }
 
@@ -2096,11 +2157,11 @@ app.post('/hhttps/verify/github/status', async (req, res) => {
 app.post('/hhttps/role/declare', async (req, res) => {
   const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body;
   const session = await db.sessions.get(sessionId);
-  if (!session?.verified) return res.status(401).json({ error: 'Ungültige oder abgelaufene Session.' });
+  if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
 
   const roleDef = ROLES[role];
   if (!roleDef) return res.status(400).json({
-    error: `Unbekannte Rolle: ${role}`, available: Object.keys(ROLES)
+    error: `Unknown role: ${role}`, available: Object.keys(ROLES)
   });
 
   // Optional age_group (orthogonal to role). Phase 1: self-declared only —
@@ -2110,7 +2171,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
   if (ageGroup) {
     const ag = AGE_GROUPS[ageGroup];
     if (!ag) return res.status(400).json({
-      error: `Unbekannte Altersgruppe: ${ageGroup}`, available: Object.keys(AGE_GROUPS)
+      error: `Unknown age group: ${ageGroup}`, available: Object.keys(AGE_GROUPS)
     });
     const ageMethod = AGE_VERIFICATION_METHODS['self-declared'];
     ageClaims = {
@@ -2132,12 +2193,12 @@ app.post('/hhttps/role/declare', async (req, res) => {
   if (session.githubVerified && session.githubTrustBonus && role === 'developer') {
     vMethod    = 'github-verified';
     trustScore = Math.max(trustScore, session.githubTrustBonus);
-    note       = `GitHub-Konto verifiziert (Trust ${session.githubTrustBonus}).`;
+    note       = `GitHub account verified (trust ${session.githubTrustBonus}).`;
     vClaimStatus = 'verified';
   } else if (session.emailVerified && session.emailTrustBonus) {
     vMethod    = session.emailLevel || 'email-verified';
     trustScore = Math.max(trustScore, session.emailTrustBonus);
-    note = `E-Mail-Domain "${session.emailDomain}" automatisch verifiziert.`;
+    note = `Email domain "${session.emailDomain}" verified automatically.`;
     vClaimStatus = 'verified';
   } else {
     // Honesty gate (Phase 2): a method only grants its trust if a REAL automated
@@ -2161,8 +2222,8 @@ app.post('/hhttps/role/declare', async (req, res) => {
       vMethod    = 'self-declared';
       trustScore = resolved.trustScore;        // stays 30
       note = submitted
-        ? `Eigenangabe "${submitted}" für ${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} erfasst — noch nicht automatisch geprüft, kein Trust-Bonus.`
-        : `${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} als Eigenangabe erfasst — noch nicht automatisch geprüft, kein Trust-Bonus.`;
+        ? `Self-declared "${submitted}" for ${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} recorded — not yet automatically checked, no trust bonus.`
+        : `${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} recorded as self-declared — not yet automatically checked, no trust bonus.`;
     } else {
       // Real check (or ORCID format gate). ORCID still needs its format validated.
       vMethod    = resolved.method;
@@ -2171,9 +2232,9 @@ app.post('/hhttps/role/declare', async (req, res) => {
         const ok = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(verificationData.orcid);
         if (!ok) {
           vMethod = 'self-declared'; trustScore = 30; vClaimStatus = 'self-declared';
-          note = 'ORCID-Format ungültig — keine Verifikation.';
+          note = 'ORCID format invalid — no verification.';
         } else {
-          note = `ORCID ${verificationData.orcid} (Format geprüft, nicht gegen orcid.org bestätigt).`;
+          note = `ORCID ${verificationData.orcid} (format checked, not confirmed against orcid.org).`;
         }
       }
     }
@@ -2241,7 +2302,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
       verified:  ageClaims.age_verified,
       method:    ageClaims.age_verification_method,
       methodLabel: AGE_VERIFICATION_METHODS[ageClaims.age_verification_method]?.label,
-      note:      'Eigenangabe — später per EUDI-Wallet verifizierbar.'
+      note:      'Self-declared — verifiable later via EUDI Wallet.'
     } : null,
     message: `✓ "${roleDef.label}" · Trust ${trustScore}/100 · Access (1h) + Refresh (7d)`
   });
@@ -2354,7 +2415,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
         method:   eudiMethod.id,
         trust:    eudiMethod.trustScore
       },
-      message: `✓ Alter verifiziert: ${ag.label} (EUDI-Wallet)`
+      message: `✓ Age verified: ${ag.label} (EUDI Wallet)`
     });
   } catch (e) {
     console.error('[AGE-UPGRADE] error:', e.message);
@@ -2444,9 +2505,9 @@ app.get('/hhttps/protected', async (req, res) => {
                      role: d.role, trustScore: d.trustScore, token, method: d.method });
     res.json({
       hhttps:  { status: 'verified', method: d.method },
-      message: '🎉 Menschlich verifizierter Zugang gewährt.',
-      resource: { title: 'HHTTPS-geschützter Inhalt',
-                  content: 'Nur für Menschen. Kryptografisch bewiesen ohne persönliche Daten.',
+      message: '🎉 Human-verified access granted.',
+      resource: { title: 'HHTTPS-protected content',
+                  content: 'For humans only. Cryptographically proven without personal data.',
                   verifiedAt: new Date().toISOString(), role: d.role }
     });
   } catch (e) { res.status(401).json({ hhttps: { status: 'invalid' }, error: e.message }); }
@@ -2457,7 +2518,7 @@ app.get('/hhttps/protected', async (req, res) => {
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   const { operatorName, operatorUrl, purpose, contactEmail, role } = req.body;
   if (!operatorName || !purpose)
-    return res.status(400).json({ error: 'operatorName und purpose sind erforderlich.' });
+    return res.status(400).json({ error: 'operatorName and purpose are required.' });
 
   // Optional self-declared role for the bot. Must be one of the existing
   // HHTTPS roles. No verification — pilot mode (see migration-phase-4 docs).
@@ -2468,7 +2529,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     if (!ROLES[role]) {
       return res.status(400).json({
         error: 'invalid_role',
-        detail: `Unbekannte Rolle "${role}". Erlaubte Rollen: ${Object.keys(ROLES).join(', ')}.`,
+        detail: `Unknown role "${role}". Allowed roles: ${Object.keys(ROLES).join(', ')}.`,
       });
     }
     normalizedRole = role;
@@ -2490,23 +2551,23 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     operatorId, apiKey,
     role: normalizedRole,
     roleLabel,
-    warning: 'Speichere den API-Key sicher — er wird nur einmal angezeigt.',
+    warning: 'Store the API key securely — it is shown only once.',
     tokenEndpoint: `${BASE_URL}/hhttps/machine/token`,
-    message: `Operator "${operatorName}"${normalizedRole ? ` (Rolle: ${roleLabel})` : ''} registriert. Mit apiKey Maschinen-Token ausstellen.`
+    message: `Operator "${operatorName}"${normalizedRole ? ` (role: ${roleLabel})` : ''} registered. Issue machine tokens with apiKey.`
   });
 });
 
 app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
   const { operatorId, apiKey } = req.body;
   if (!operatorId || !apiKey)
-    return res.status(400).json({ error: 'operatorId und apiKey erforderlich.' });
+    return res.status(400).json({ error: 'operatorId and apiKey are required.' });
 
   const op = await db.machineOperators.get(operatorId);
-  if (!op) return res.status(404).json({ error: 'Operator nicht gefunden.' });
+  if (!op) return res.status(404).json({ error: 'Operator not found.' });
 
   const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
   if (keyHash !== op.api_key_hash)
-    return res.status(401).json({ error: 'Ungültiger API-Key.' });
+    return res.status(401).json({ error: 'Invalid API key.' });
 
   const jti   = uuid();
   const tokenPayload = {
@@ -2548,7 +2609,7 @@ app.get('/hhttps/webhooks', limit.webhooks, async (req, res) => {
 
 app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
   const { url, events = ['*'], secret } = req.body;
-  if (!url) return res.status(400).json({ error: 'url erforderlich.' });
+  if (!url) return res.status(400).json({ error: 'url is required.' });
   try {
     const wh = await registerWebhook({ url, events, secret });
     res.status(201).json({
@@ -2562,13 +2623,13 @@ app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
 app.delete('/hhttps/webhooks/:id', limit.webhooks, async (req, res) => {
   const ok = await removeWebhook(req.params.id);
   ok ? res.json({ deleted: true, id: req.params.id })
-     : res.status(404).json({ error: 'Webhook nicht gefunden.' });
+     : res.status(404).json({ error: 'Webhook not found.' });
 });
 
 app.post('/hhttps/webhooks/verify', (req, res) => {
   const { payload, signature, secret } = req.body;
   if (!payload || !signature || !secret)
-    return res.status(400).json({ error: 'payload, signature, secret erforderlich.' });
+    return res.status(400).json({ error: 'payload, signature, secret are required.' });
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
   res.json({ valid: expected === signature, expected, received: signature });
 });
@@ -2799,17 +2860,20 @@ app.get('/hhttps/developers/confirm-email', async (req, res) => {
   const client = await db.oauthClients.getByEmailToken(token);
   if (!client) {
     return res.status(404).type('html').send(renderSimplePage(
-      'Link ungültig oder abgelaufen',
-      'Der Bestätigungslink ist ungültig oder bereits abgelaufen. Bitte fordere im Dashboard einen neuen Link an.'
+      'Link invalid or expired · Link ungültig oder abgelaufen',
+      'The confirmation link is invalid or has already expired. Please request a new link in the dashboard.'
+      + '<br><br><span lang="de">Der Bestätigungslink ist ungültig oder bereits abgelaufen. Bitte fordere im Dashboard einen neuen Link an.</span>'
     ));
   }
 
   await db.oauthClients.confirmEmail(client.client_id);
   res.type('html').send(renderSimplePage(
-    'Email bestätigt ✓',
-    `Deine Plattform <strong>${escapeHtml(client.name)}</strong> ist jetzt im Status <code>unverified</code>. ` +
+    'Email confirmed ✓ · Email bestätigt ✓',
+    `Your platform <strong>${escapeHtml(client.name)}</strong> is now in status <code>unverified</code>. ` +
+    `You can now log in at <a href="${BASE_URL}/developers">developers</a> and set the DNS TXT record to request verification.` +
+    `<br><br><span lang="de">Deine Plattform <strong>${escapeHtml(client.name)}</strong> ist jetzt im Status <code>unverified</code>. ` +
     `Du kannst dich jetzt einloggen unter <a href="${BASE_URL}/developers">developers</a> und ` +
-    `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.`
+    `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.</span>`
   ));
 });
 
@@ -3185,7 +3249,7 @@ function serializeClientForAdmin(c) {
 
 /** Tiny HTML response template — used by the email confirm callback. */
 function renderSimplePage(title, body) {
-  return `<!doctype html><html lang="de"><head>
+  return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>

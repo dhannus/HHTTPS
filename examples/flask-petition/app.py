@@ -106,7 +106,7 @@ def index():
         role_breakdown[r] = role_breakdown.get(r, 0) + 1
     return jsonify({
         "title":           "Demo Petition: Mehr Datenschutz im Netz",
-        "description":     "Eine Beispielpetition, die HHTTPS für authentische Unterstützung nutzt.",
+        "description":     "A sample petition that uses HHTTPS for authentic support.",
         "totalSignatures": len(signatures),
         "byRole":          role_breakdown,
         "minimumTrust":    60,

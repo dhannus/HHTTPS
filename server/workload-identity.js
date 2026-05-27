@@ -105,7 +105,7 @@ export function isProviderSupported(provider) {
 export function decodeOidcUnverified(token) {
   const claims = jwt.decode(token);
   if (!claims || typeof claims !== 'object') {
-    throw new Error('OIDC-Token konnte nicht dekodiert werden.');
+    throw new Error('OIDC token could not be decoded.');
   }
   return claims;
 }
@@ -123,7 +123,7 @@ async function getProviderKeys(provider, { forceRefresh = false } = {}) {
   }
 
   const res = await fetch(cfg.jwksUri, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`JWKS-Abruf fehlgeschlagen (${res.status}) für ${provider}.`);
+  if (!res.ok) throw new Error(`JWKS fetch failed (${res.status}) for ${provider}.`);
   const jwks = await res.json();
 
   const keys = new Map();
@@ -148,9 +148,9 @@ export async function verifyOidcToken(provider, token, expectedAudience) {
 
   // Decode header to find the key id
   const decoded = jwt.decode(token, { complete: true });
-  if (!decoded || !decoded.header) throw new Error('OIDC-Token konnte nicht dekodiert werden.');
+  if (!decoded || !decoded.header) throw new Error('OIDC token could not be decoded.');
   const kid = decoded.header.kid;
-  if (!kid) throw new Error('OIDC-Token-Header enthält keine kid.');
+  if (!kid) throw new Error('OIDC token header contains no kid.');
 
   // Find the matching JWK; on miss, force a JWKS refresh once (key rotation)
   let keys = await getProviderKeys(provider);
@@ -159,7 +159,7 @@ export async function verifyOidcToken(provider, token, expectedAudience) {
     keys = await getProviderKeys(provider, { forceRefresh: true });
     jwk = keys.get(kid);
   }
-  if (!jwk) throw new Error(`Kein passender Signaturschlüssel (kid=${kid}) in der JWKS des Providers.`);
+  if (!jwk) throw new Error(`No matching signature key (kid=${kid}) in the provider's JWKS.`);
 
   // Build a verify key from the JWK (no extra dependency needed)
   const verifyKey = crypto.createPublicKey({ key: jwk, format: 'jwk' });
@@ -173,7 +173,7 @@ export async function verifyOidcToken(provider, token, expectedAudience) {
       audience:   expectedAudience,
     });
   } catch (e) {
-    throw new Error(`OIDC-Token ungültig: ${e.message}`);
+    throw new Error(`OIDC token invalid: ${e.message}`);
   }
   return claims;
 }

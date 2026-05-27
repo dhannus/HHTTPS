@@ -145,7 +145,7 @@ export function createEudiVerifierRouter() {
         // cross-device, or uses it as a tappable link on the phone itself.
         deepLink: walletLink,
         expiresInMs: TX_TTL_MS,
-        message: `Scanne den QR-Code mit deiner EUDI-Wallet, oder öffne ihn auf dem Handy direkt.`
+        message: `Scan the QR code with your EUDI wallet, or open it directly on your phone.`
       });
     } catch (e) {
       console.error('[EUDI-VERIFIER] /age/request error:', e.message);

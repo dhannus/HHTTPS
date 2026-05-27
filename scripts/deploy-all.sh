@@ -18,7 +18,6 @@ DB_USER="hhttps"
 
 DOMAIN_HHTTPS="hhttps.org"
 DOMAIN_IAMHMN="iamhmn.org"
-DOMAIN_LEGACY="funnysearch.eu"
 EMAIL_CERTBOT="daniel.hannuschka@tweakz.de"
 
 G=$'\033[0;32m'; Y=$'\033[0;33m'; R=$'\033[0;31m'; B=$'\033[0;36m'; N=$'\033[0m'
@@ -37,7 +36,6 @@ echo ""
 echo "  Ziel-Domains:"
 echo "    ${DOMAIN_HHTTPS}         (Protokoll-Server + Spec)"
 echo "    ${DOMAIN_IAMHMN}         (Marketing-Landing)"
-echo "    ${DOMAIN_LEGACY}         (bestehend, bleibt funktionsfähig)"
 echo ""
 if ! ask "Mit Deployment beginnen?"; then
   echo "  Abgebrochen."

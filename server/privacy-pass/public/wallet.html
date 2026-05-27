@@ -348,6 +348,10 @@ footer .b { color: var(--text); }
 .hidden { display: none !important; }
 .fade-in { animation: fade .3s ease-out; }
 @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.lang-toggle{display:inline-flex;gap:2px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:100px;padding:2px;margin-left:6px;vertical-align:middle;}
+.lang-toggle button{border:none;background:transparent;color:var(--muted);font:600 11px/1 var(--mono);letter-spacing:.5px;padding:5px 9px;border-radius:100px;cursor:pointer;transition:all .15s;}
+.lang-toggle button:hover{color:var(--text);}
+.lang-toggle button.active{background:rgba(0,229,255,.15);color:var(--cyan);}
 </style>
 </head>
 <body>
@@ -360,69 +364,60 @@ footer .b { color: var(--text); }
     <div class="tag">PRIVACY PASS WALLET</div>
   </div>
   <div class="links">
-    <a href="/">Hauptseite</a>
+    <a href="/" data-i18n="nav.home">Hauptseite</a>
     <a href="/spec">Spec</a>
     <a href="https://github.com/dhannus/HHTTPS" target="_blank">GitHub</a>
+    <span class="lang-toggle" role="group" aria-label="Language">
+      <button type="button" data-lang="de" class="active">DE</button>
+      <button type="button" data-lang="en">EN</button>
+    </span>
   </div>
 </div>
 
 <!-- ═══ Hero ═════════════════════════════════════════════════════════════ -->
 <div class="hero">
-  <h1>Anonyme <span>Mensch-Tokens</span> mit verifizierter Rolle.</h1>
-  <p>
-    Hier holst du dir Privacy-Pass-Tokens, mit denen du dich auf anderen Webseiten anonym als verifizierter Mensch
-    und in deiner gewählten Rolle ausweisen kannst — ohne dass die Webseite weiß, wer du bist.
-  </p>
-  <p>
-    Voraussetzung: ein <em>Hardware-Sicherheitsschlüssel</em> (Yubikey, Passkey, Smartphone) und eine
-    <em>E-Mail-Verifikation</em> beim ersten Mal. Manche Rollen erfordern zusätzliche Nachweise.
-  </p>
+  <h1><span data-i18n="hero.h1a">Anonyme</span> <span data-i18n="hero.h1span">Mensch-Tokens</span> <span data-i18n="hero.h1b">mit verifizierter Rolle.</span></h1>
+  <p data-i18n="hero.p1">Hier holst du dir Privacy-Pass-Tokens …</p>
+  <p><span data-i18n="hero.p2a">Voraussetzung: ein</span> <em data-i18n="hero.p2em1">Hardware-Sicherheitsschlüssel</em> <span data-i18n="hero.p2b">(Yubikey, Passkey, Smartphone) und eine</span> <em data-i18n="hero.p2em2">E-Mail-Verifikation</em> <span data-i18n="hero.p2c">beim ersten Mal. Manche Rollen erfordern zusätzliche Nachweise.</span></p>
 </div>
 
 <!-- ═══ Step 1: Authenticate ════════════════════════════════════════════ -->
 <div class="card active" id="card-auth">
   <div class="card-head">
     <div class="card-num">1</div>
-    <h2>Anmelden</h2>
+    <h2 data-i18n="s1.h2">Anmelden</h2>
   </div>
-  <p class="sub">
-    Mit deinem Sicherheitsschlüssel. Beim ersten Mal legst du einen neuen Account an,
-    danach kannst du mehrere Schlüssel pro Account registrieren (empfohlen für Backup).
-  </p>
+  <p class="sub" data-i18n="s1.sub">Mit deinem Sicherheitsschlüssel …</p>
   <div id="auth-area">
-    <button id="btn-login" onclick="doLogin()">Mit Passkey / Yubikey anmelden →</button>
-    <button class="outline" id="btn-recovery-open" onclick="openRecovery()">Schlüssel verloren?</button>
+    <button id="btn-login" onclick="doLogin()" data-i18n="btn.login">Mit Passkey / Yubikey anmelden →</button>
+    <button class="outline" id="btn-recovery-open" onclick="openRecovery()" data-i18n="btn.recoveryOpen">Schlüssel verloren?</button>
   </div>
 
   <!-- Recovery flow (initially hidden) -->
   <div id="recovery-area" class="hidden" style="margin-top:14px;padding:14px;background:var(--s2);border-radius:6px;border:1px solid var(--b1);">
-    <h3 style="font-family:var(--syne);font-size:14px;margin-bottom:8px;color:var(--p-apricot)">Mit Recovery-Code anmelden</h3>
-    <p style="font-size:11px;color:var(--muted);margin-bottom:10px">
-      Wenn du beim Onboarding 10 Codes erhalten und gespeichert hast, kannst du dich hier einmalig anmelden und einen neuen Schlüssel hinzufügen.
-    </p>
+    <h3 style="font-family:var(--syne);font-size:14px;margin-bottom:8px;color:var(--p-apricot)" data-i18n="recovery.h3">Mit Recovery-Code anmelden</h3>
+    <p style="font-size:11px;color:var(--muted);margin-bottom:10px" data-i18n="recovery.p">Wenn du beim Onboarding …</p>
     <input type="text" id="recovery-input" placeholder="XXXXX-XXXXX" maxlength="11" autocomplete="off">
     <div>
-      <button onclick="useRecoveryCode()">Code einlösen</button>
-      <button class="outline" onclick="closeRecovery()">Abbrechen</button>
+      <button onclick="useRecoveryCode()" data-i18n="btn.recoveryRedeem">Code einlösen</button>
+      <button class="outline" onclick="closeRecovery()" data-i18n="btn.cancel">Abbrechen</button>
     </div>
   </div>
 
-  <div class="log" id="log-auth"><span class="dim">Bereit.</span></div>
+  <div class="log" id="log-auth"><span class="dim" data-i18n="log.ready">Bereit.</span></div>
 </div>
 
 <!-- ═══ Step 1.5: Multi-Credential management (shown after login) ═══════ -->
 <div class="card hidden" id="card-creds">
   <div class="card-head">
     <div class="card-num">★</div>
-    <h2>Deine Sicherheitsschlüssel</h2>
+    <h2 data-i18n="creds.h2">Deine Sicherheitsschlüssel</h2>
   </div>
-  <p class="sub">
-    Du solltest <em>mindestens zwei Schlüssel</em> registrieren — sonst verlierst du den Zugang bei Geräteverlust.
-  </p>
+  <p class="sub"><span data-i18n="creds.sub1">Du solltest</span> <em data-i18n="creds.subEm">mindestens zwei Schlüssel</em> <span data-i18n="creds.sub2">registrieren — sonst verlierst du den Zugang bei Geräteverlust.</span></p>
   <div id="cred-list" class="cred-list"></div>
   <div style="margin-top:12px">
-    <button class="alt" onclick="addCredential()">Weiteren Schlüssel hinzufügen →</button>
-    <button class="outline" id="btn-recovery-gen" onclick="generateRecoveryCodes()">Recovery-Codes erstellen</button>
+    <button class="alt" onclick="addCredential()" data-i18n="btn.addCred">Weiteren Schlüssel hinzufügen →</button>
+    <button class="outline" id="btn-recovery-gen" onclick="generateRecoveryCodes()" data-i18n="btn.recoveryGen">Recovery-Codes erstellen</button>
   </div>
   <div id="recovery-codes-area" class="hidden"></div>
 </div>
@@ -431,145 +426,130 @@ footer .b { color: var(--text); }
 <div class="card hidden" id="card-role">
   <div class="card-head">
     <div class="card-num">2</div>
-    <h2>Rolle wählen</h2>
+    <h2 data-i18n="role.h2">Rolle wählen</h2>
   </div>
-  <p class="sub">
-    Jede Rolle hat einen eigenen Issuer-Schlüssel. Strikte Rollen (🔒) erfordern zusätzliche Nachweise.
-  </p>
+  <p class="sub" data-i18n="role.sub">Jede Rolle hat einen eigenen Issuer-Schlüssel …</p>
   <div class="role-grid" id="role-grid"></div>
   <div style="margin-top:16px">
-    <button id="btn-role-confirm" onclick="confirmRole()" disabled>Rolle bestätigen →</button>
+    <button id="btn-role-confirm" onclick="confirmRole()" disabled data-i18n="btn.roleConfirm">Rolle bestätigen →</button>
   </div>
-  <div class="log" id="log-role"><span class="dim">Warte auf Schritt 1.</span></div>
+  <div class="log" id="log-role"><span class="dim" data-i18n="log.waitStep1">Warte auf Schritt 1.</span></div>
 </div>
 
 <!-- ═══ Step 3: Verification requirements ═══════════════════════════════ -->
 <div class="card hidden" id="card-verify">
   <div class="card-head">
     <div class="card-num">3</div>
-    <h2>Verifikation <span class="pill violet" id="role-pill">—</span></h2>
+    <h2><span data-i18n="verify.h2">Verifikation</span> <span class="pill violet" id="role-pill">—</span></h2>
   </div>
-  <p class="sub">
-    Bevor du anonyme Tokens für diese Rolle ausstellen lassen kannst, müssen die Anforderungen erfüllt sein.
-  </p>
+  <p class="sub" data-i18n="verify.sub">Bevor du anonyme Tokens …</p>
   <div id="req-list" class="req-list"></div>
 
   <!-- Email verification input -->
   <div id="email-area" class="attribute-input hidden">
-    <h3>E-Mail-Verifikation</h3>
-    <p class="h" id="email-hint">Bitte eine E-Mail-Adresse eingeben.</p>
-    <input type="email" id="email-input" placeholder="vorname@beispiel.de">
+    <h3 data-i18n="email.h3">E-Mail-Verifikation</h3>
+    <p class="h" id="email-hint" data-i18n="email.hint">Bitte eine E-Mail-Adresse eingeben.</p>
+    <input type="email" id="email-input" data-i18n-ph="email.inputPh" placeholder="vorname@beispiel.de">
     <div>
-      <button onclick="sendVerifyEmail()">Verifikations-Mail senden →</button>
-      <button class="outline" onclick="refreshEligibility()">Verifikation prüfen</button>
+      <button onclick="sendVerifyEmail()" data-i18n="btn.sendVerify">Verifikations-Mail senden →</button>
+      <button class="outline" onclick="refreshEligibility()" data-i18n="btn.refreshElig">Verifikation prüfen</button>
     </div>
-    <p class="h" style="margin-top:10px">
-      Du erhältst einen Bestätigungs-Link. Klicke auf den Link in der Mail, dann hier auf <em>"Verifikation prüfen"</em>.
-    </p>
+    <p class="h" style="margin-top:10px"><span data-i18n="email.note1">Du erhältst einen Bestätigungs-Link. Klicke auf den Link in der Mail, dann hier auf</span> <em data-i18n="email.noteEm">"Verifikation prüfen"</em><span data-i18n="email.note2">.</span></p>
   </div>
 
   <!-- Approbation / institutional ID input (for strict roles) -->
   <div id="attr-area" class="attribute-input hidden">
-    <h3 id="attr-title">Weiterer Nachweis</h3>
+    <h3 id="attr-title" data-i18n="attr.h3">Weiterer Nachweis</h3>
     <p class="h" id="attr-hint"></p>
     <input type="text" id="attr-input" placeholder="">
     <div>
-      <button onclick="submitAttribute()">Nachweis hinzufügen →</button>
+      <button onclick="submitAttribute()" data-i18n="btn.submitAttr">Nachweis hinzufügen →</button>
     </div>
-    <p class="h" style="margin-top:10px;color:var(--amber)">
-      Hinweis: Im Pilot-Stadium akzeptieren wir Selbsteinträge. Bei Live-Betrieb werden diese gegen offizielle Register verifiziert.
-    </p>
+    <p class="h" style="margin-top:10px;color:var(--amber)" data-i18n="attr.note">Hinweis: Im Pilot-Stadium …</p>
   </div>
 
-  <div class="log" id="log-verify"><span class="dim">Warte auf Rollenwahl.</span></div>
+  <div class="log" id="log-verify"><span class="dim" data-i18n="log.waitRole">Warte auf Rollenwahl.</span></div>
 </div>
 
 <!-- ═══ Step 4: Wallet ══════════════════════════════════════════════════ -->
 <div class="card hidden" id="card-wallet">
   <div class="card-head">
     <div class="card-num">4</div>
-    <h2>Tokens holen</h2>
+    <h2 data-i18n="tokens.h2">Tokens holen</h2>
   </div>
-  <p class="sub">
-    Hole dir einen Vorrat von 10 anonymen Tokens für deine Rolle. Diese werden lokal in deinem Browser gespeichert.
-    Bei Verbrauch kannst du neue holen — bis zur 24h-Obergrenze.
-  </p>
+  <p class="sub" data-i18n="tokens.sub">Hole dir einen Vorrat …</p>
   <div class="quota" id="quota">
-    <span>Verbraucht: <span class="v" id="quota-used">—</span></span>
-    <span>Verbleibend: <span class="v" id="quota-remaining">—</span></span>
-    <span>Vertrauensstufe: <span class="v" id="trust-score">—</span></span>
+    <span><span data-i18n="quota.used">Verbraucht:</span> <span class="v" id="quota-used">—</span></span>
+    <span><span data-i18n="quota.remaining">Verbleibend:</span> <span class="v" id="quota-remaining">—</span></span>
+    <span><span data-i18n="quota.trust">Vertrauensstufe:</span> <span class="v" id="trust-score">—</span></span>
   </div>
   <div style="margin-top:14px">
-    <button id="btn-get-tokens" onclick="getTokens()">10 anonyme Tokens holen →</button>
-    <button class="outline" onclick="refreshWallet()">Wallet aktualisieren</button>
-    <button class="danger" onclick="clearWallet()">Wallet leeren</button>
+    <button id="btn-get-tokens" onclick="getTokens()" data-i18n="btn.getTokens">10 anonyme Tokens holen →</button>
+    <button class="outline" onclick="refreshWallet()" data-i18n="btn.refreshWallet">Wallet aktualisieren</button>
+    <button class="danger" onclick="clearWallet()" data-i18n="btn.clearWallet">Wallet leeren</button>
   </div>
   <div class="log" id="log-tokens"><span class="dim">Bereit.</span></div>
 
-  <h3 style="font-family:var(--syne);font-size:13px;margin-top:20px;margin-bottom:8px;color:var(--muted)">Aktueller Vorrat</h3>
-  <div id="wallet-content" class="wallet-empty">Noch keine Tokens.</div>
+  <h3 style="font-family:var(--syne);font-size:13px;margin-top:20px;margin-bottom:8px;color:var(--muted)" data-i18n="tokens.stock">Aktueller Vorrat</h3>
+  <div id="wallet-content" class="wallet-empty" data-i18n="wallet.empty">Noch keine Tokens.</div>
 </div>
 
 <!-- ═══ Card 5: Token verwenden (Demo) ══════════════════════════════════ -->
 <div class="card hidden" id="card-redeem">
   <div class="card-head">
     <div class="card-num">5</div>
-    <h2>Token verwenden</h2>
+    <h2 data-i18n="redeem.h2">Token verwenden</h2>
   </div>
-  <p class="sub">
-    So sieht es aus, wenn eine Plattform dich verifizieren lässt. <em>Du</em> entscheidest,
-    wie du dich bestätigst: anonym (ein Token wird verbraucht) oder mit deiner verifizierten
-    HHTTPS-Rolle. Probier den Klick hier mit deinem Vorrat aus.
-  </p>
+  <p class="sub"><span data-i18n="redeem.sub1">So sieht es aus, wenn eine Plattform dich verifizieren lässt.</span> <em data-i18n="redeem.subEm">Du</em> <span data-i18n="redeem.sub2">entscheidest, wie du dich bestätigst: anonym (ein Token wird verbraucht) oder mit deiner verifizierten HHTTPS-Rolle. Probier den Klick hier mit deinem Vorrat aus.</span></p>
 
   <div class="method-demo">
-    <div class="method-demo-q">„Bist du ein Mensch?"</div>
+    <div class="method-demo-q" data-i18n="demo.q">„Bist du ein Mensch?"</div>
     <div class="method-grid">
       <div class="method">
         <div class="method-ico">🕶️</div>
-        <h4>Anonym bestätigen</h4>
-        <p>Verbraucht einen Privacy-Pass-Token. Unverknüpfbar — kein Profil, keine Rolle, kein Trace.</p>
-        <button id="btn-redeem" onclick="redeemDemo()">✓ Anonym bestätigen</button>
+        <h4 data-i18n="demo.anonH4">Anonym bestätigen</h4>
+        <p data-i18n="demo.anonP">Verbraucht einen Privacy-Pass-Token. Unverknüpfbar — kein Profil, keine Rolle, kein Trace.</p>
+        <button id="btn-redeem" onclick="redeemDemo()" data-i18n="btn.redeemDemo">✓ Anonym bestätigen</button>
       </div>
-      <div class="method-or">oder</div>
+      <div class="method-or" data-i18n="demo.or">oder</div>
       <div class="method">
         <div class="method-ico">🪪</div>
-        <h4>Mit HHTTPS verifizieren</h4>
-        <p>Zeigt deine verifizierte Rolle + Trust-Score (pseudonym). Kein Token-Verbrauch.</p>
-        <a class="method-btn-link" href="https://hhttps.org/" target="_blank" rel="noopener">🪪 Mit HHTTPS verifizieren →</a>
+        <h4 data-i18n="demo.hhttpsH4">Mit HHTTPS verifizieren</h4>
+        <p data-i18n="demo.hhttpsP">Zeigt deine verifizierte Rolle + Trust-Score (pseudonym). Kein Token-Verbrauch.</p>
+        <a class="method-btn-link" href="https://hhttps.org/" target="_blank" rel="noopener" data-i18n="demo.hhttpsBtn">🪪 Mit HHTTPS verifizieren →</a>
       </div>
     </div>
-    <div class="log" id="log-redeem"><span class="dim">Wähle eine Methode.</span></div>
+    <div class="log" id="log-redeem"><span class="dim" data-i18n="log.chooseMethod">Wähle eine Methode.</span></div>
   </div>
 
   <div class="code-example">
     <div class="code-example-head">
-      So baust du den „Anonym bestätigen"-Button selbst ein
+      <span data-i18n="code.head1">So baust du den „Anonym bestätigen"-Button selbst ein</span>
       <span class="code-example-tag">Frontend</span>
     </div>
-    <pre><span class="c">&lt;!-- Button auf deiner Seite --&gt;</span>
-&lt;button <span class="k">id</span>=<span class="s">"confirm-human"</span>&gt;✓ Anonym bestätigen&lt;/button&gt;
+    <pre><span class="c">&lt;!-- Button on your page --&gt;</span>
+&lt;button <span class="k">id</span>=<span class="s">"confirm-human"</span>&gt;✓ Confirm anonymously&lt;/button&gt;
 
 &lt;script&gt;
 <span class="fn">document</span>.getElementById(<span class="s">'confirm-human'</span>).onclick = <span class="k">async</span> () =&gt; {
-  <span class="c">// 1. Token aus dem Privacy-Pass-Wallet des Nutzers holen</span>
+  <span class="c">// 1. Get a token from the user's Privacy Pass wallet</span>
   <span class="k">const</span> token = <span class="k">await</span> window.hhttpsWallet.take();
 
-  <span class="c">// 2. An DEIN Backend schicken — niemals dem Client-Ergebnis trauen</span>
+  <span class="c">// 2. Send to YOUR backend — never trust the client result</span>
   <span class="k">const</span> ok = <span class="k">await</span> fetch(<span class="s">'/api/confirm-human'</span>, {
     method: <span class="s">'POST'</span>,
     headers: { <span class="s">'Content-Type'</span>: <span class="s">'application/json'</span> },
     body: JSON.stringify({ token })
   }).then(r =&gt; r.ok);
 
-  <span class="k">if</span> (ok) showSuccess(<span class="s">'✓ Als Mensch bestätigt — anonym'</span>);
+  <span class="k">if</span> (ok) showSuccess(<span class="s">'✓ Confirmed as human — anonymous'</span>);
 };
 &lt;/script&gt;</pre>
   </div>
 
   <div class="code-example">
     <div class="code-example-head">
-      Einlösung — immer serverseitig
+      <span data-i18n="code.head2">Einlösung — immer serverseitig</span>
       <span class="code-example-tag">Backend · Node/Express</span>
     </div>
     <pre>app.<span class="fn">post</span>(<span class="s">'/api/confirm-human'</span>, <span class="k">async</span> (req, res) =&gt; {
@@ -580,18 +560,15 @@ footer .b { color: var(--text); }
   });
   <span class="k">const</span> d = <span class="k">await</span> r.json();
 
-  <span class="c">// d.valid &amp;&amp; d.redeemed          → echter Mensch, Token einmalig verbraucht</span>
-  <span class="c">// d.reason === 'already_redeemed' → Token schon benutzt (Double-Spend)</span>
-  <span class="c">// d.role                          → attestierte Rolle (optional)</span>
+  <span class="c">// d.valid &amp;&amp; d.redeemed          → genuine human, token used once</span>
+  <span class="c">// d.reason === 'already_redeemed' → token already used (double-spend)</span>
+  <span class="c">// d.role                          → attested role (optional)</span>
   res.sendStatus(d.valid &amp;&amp; d.redeemed ? <span class="s">200</span> : <span class="s">403</span>);
 });</pre>
   </div>
 
   <p class="sub" style="margin-top:18px;font-size:13px;">
-    <strong style="color:var(--text)">Wann was?</strong> Anonym (Privacy Pass) eignet sich,
-    wenn nur „echter Mensch" zählt — z. B. Abstimmungen, Kommentare, Rate-Limiting ohne Tracking.
-    Mit HHTTPS-Token, wenn die <em>Rolle</em> zählt — z. B. „verifizierter Arzt" oder
-    „Journalistin mit Trust 85".
+    <strong style="color:var(--text)" data-i18n="wann.strong">Wann was?</strong> <span data-i18n="wann.p1">Anonym (Privacy Pass) eignet sich, wenn nur „echter Mensch" zählt — z. B. Abstimmungen, Kommentare, Rate-Limiting ohne Tracking. Mit HHTTPS-Token, wenn die</span> <em data-i18n="wann.em">Rolle</em> <span data-i18n="wann.p2">zählt — z. B. „verifizierter Arzt" oder „Journalistin mit Trust 85".</span>
   </p>
 </div>
 
@@ -623,43 +600,124 @@ let role      = null;
 let eligibilityCache = null;
 
 const ROLE_DEFS = {
-  citizen:              { icon: '🧑', label: 'Bürger:in',       strict: false },
-  journalist:           { icon: '📰', label: 'Journalist:in',    strict: false },
-  student:              { icon: '🎓', label: 'Student:in',       strict: false },
-  teacher:              { icon: '🧑‍🏫', label: 'Lehrkraft',      strict: false },
-  researcher:           { icon: '🔬', label: 'Forscher:in',      strict: false },
-  creative:             { icon: '🎭', label: 'Kreative:r',       strict: false },
-  developer:            { icon: '💻', label: 'Entwickler:in',    strict: false },
-  medical_professional: { icon: '🩺', label: 'Medizin',          strict: true  },
-  caregiver:            { icon: '🤝', label: 'Pflege',           strict: false },
-  lawyer:               { icon: '⚖️', label: 'Jurist:in',        strict: true  },
-  notary:               { icon: '📜', label: 'Notar:in',         strict: true  },
-  civil_servant:        { icon: '🏛️', label: 'Verwaltung',       strict: true  },
-  politician:           { icon: '🗳️', label: 'Politik',          strict: true  },
-  business:             { icon: '🏢', label: 'Unternehmen',      strict: false },
-  craftsman:            { icon: '🔧', label: 'Handwerk',         strict: false },
+  citizen:              { icon: '🧑', label: 'Bürger:in',    de: 'Bürger:in',    en: 'Citizen',      strict: false },
+  journalist:           { icon: '📰', label: 'Journalist:in', de: 'Journalist:in', en: 'Journalist',  strict: false },
+  student:              { icon: '🎓', label: 'Student:in',    de: 'Student:in',    en: 'Student',      strict: false },
+  teacher:              { icon: '🧑‍🏫', label: 'Lehrkraft',  de: 'Lehrkraft',     en: 'Teacher',      strict: false },
+  researcher:           { icon: '🔬', label: 'Forscher:in',   de: 'Forscher:in',   en: 'Researcher',   strict: false },
+  creative:             { icon: '🎭', label: 'Kreative:r',    de: 'Kreative:r',    en: 'Creative',     strict: false },
+  developer:            { icon: '💻', label: 'Entwickler:in', de: 'Entwickler:in', en: 'Developer',    strict: false },
+  medical_professional: { icon: '🩺', label: 'Medizin',       de: 'Medizin',       en: 'Medical',      strict: true  },
+  caregiver:            { icon: '🤝', label: 'Pflege',        de: 'Pflege',        en: 'Care',         strict: false },
+  lawyer:               { icon: '⚖️', label: 'Jurist:in',     de: 'Jurist:in',     en: 'Lawyer',       strict: true  },
+  notary:               { icon: '📜', label: 'Notar:in',      de: 'Notar:in',      en: 'Notary',       strict: true  },
+  civil_servant:        { icon: '🏛️', label: 'Verwaltung',    de: 'Verwaltung',    en: 'Administration', strict: true },
+  politician:           { icon: '🗳️', label: 'Politik',       de: 'Politik',       en: 'Politics',     strict: true  },
+  business:             { icon: '🏢', label: 'Unternehmen',    de: 'Unternehmen',   en: 'Business',     strict: false },
+  craftsman:            { icon: '🔧', label: 'Handwerk',       de: 'Handwerk',      en: 'Trade',        strict: false },
 };
 
 const METHOD_LABELS = {
-  'webauthn':            { name: 'Hardware-Schlüssel',  hint: 'Passkey, Yubikey, Smartphone-Biometrie' },
-  'email-verified':      { name: 'E-Mail verifiziert',   hint: 'Eine Mail mit Bestätigungs-Link senden' },
-  'press-card':          { name: 'Presseausweis',         hint: 'DJV, dju, VDZ-Nummer' },
-  'student-id':          { name: 'Matrikelnummer',        hint: 'Mit Institution' },
-  'teacher-id':          { name: 'Lehrer-ID',             hint: 'des Bundeslandes' },
-  'association-member':  { name: 'Verbandsmitgliedschaft', hint: 'VDS, BFFS, GEMA, VG Wort etc.' },
-  'orcid':               { name: 'ORCID',                 hint: 'orcid.org-Kennung' },
-  'github-verified':     { name: 'GitHub-Verifikation',   hint: 'Account mit Commit-Historie' },
-  'approbation-id':      { name: 'Approbations-Nummer',   hint: 'Bundesärztekammer-Eintrag' },
-  'care-chamber-id':     { name: 'Pflegekammer-Nummer',   hint: 'NRW, Niedersachsen, RLP' },
-  'bar-association-id':  { name: 'Rechtsanwaltskammer',   hint: 'BRAK-Eintrag' },
-  'notary-chamber-id':   { name: 'Notarkammer',           hint: 'Kammer-Eintrag' },
-  'service-id':          { name: 'Dienstausweis',         hint: 'Behörden-Dienstausweis-Nr.' },
-  'bundestag-verified':  { name: 'Bundestag-ID',          hint: 'Abgeordneten-Profil' },
-  'domain-verified':     { name: 'Domain-Verifikation',   hint: 'Firmen-Domain-Inhaberschaft' },
-  'handelsregister':     { name: 'Handelsregister',       hint: 'HRB/HRA-Nummer' },
-  'craft-chamber-id':    { name: 'Handwerksrolle',        hint: 'Handwerkskammer-Eintrag' },
-  'master-certificate':  { name: 'Meisterbrief',          hint: 'Meisterbrief-Nummer' },
+  'webauthn':            { name: 'Hardware-Schlüssel',  nameDe: 'Hardware-Schlüssel',   nameEn: 'Hardware key',          hint: 'Passkey, Yubikey, Smartphone-Biometrie', hintDe: 'Passkey, Yubikey, Smartphone-Biometrie', hintEn: 'Passkey, Yubikey, smartphone biometrics' },
+  'email-verified':      { name: 'E-Mail verifiziert',   nameDe: 'E-Mail verifiziert',   nameEn: 'Email verified',        hint: 'Eine Mail mit Bestätigungs-Link senden', hintDe: 'Eine Mail mit Bestätigungs-Link senden', hintEn: 'Send an email with a confirmation link' },
+  'press-card':          { name: 'Presseausweis',         nameDe: 'Presseausweis',        nameEn: 'Press card',            hint: 'DJV, dju, VDZ-Nummer', hintDe: 'DJV, dju, VDZ-Nummer', hintEn: 'DJV, dju, VDZ number' },
+  'student-id':          { name: 'Matrikelnummer',        nameDe: 'Matrikelnummer',       nameEn: 'Student ID',            hint: 'Mit Institution', hintDe: 'Mit Institution', hintEn: 'With institution' },
+  'teacher-id':          { name: 'Lehrer-ID',             nameDe: 'Lehrer-ID',            nameEn: 'Teacher ID',            hint: 'des Bundeslandes', hintDe: 'des Bundeslandes', hintEn: 'of the federal state' },
+  'association-member':  { name: 'Verbandsmitgliedschaft', nameDe: 'Verbandsmitgliedschaft', nameEn: 'Association membership', hint: 'VDS, BFFS, GEMA, VG Wort etc.', hintDe: 'VDS, BFFS, GEMA, VG Wort etc.', hintEn: 'VDS, BFFS, GEMA, VG Wort etc.' },
+  'orcid':               { name: 'ORCID',                 nameDe: 'ORCID',                nameEn: 'ORCID',                 hint: 'orcid.org-Kennung', hintDe: 'orcid.org-Kennung', hintEn: 'orcid.org identifier' },
+  'github-verified':     { name: 'GitHub-Verifikation',   nameDe: 'GitHub-Verifikation',  nameEn: 'GitHub verification',   hint: 'Account mit Commit-Historie', hintDe: 'Account mit Commit-Historie', hintEn: 'Account with commit history' },
+  'approbation-id':      { name: 'Approbations-Nummer',   nameDe: 'Approbations-Nummer',  nameEn: 'Medical licence no.',   hint: 'Bundesärztekammer-Eintrag', hintDe: 'Bundesärztekammer-Eintrag', hintEn: 'Federal Medical Chamber entry' },
+  'care-chamber-id':     { name: 'Pflegekammer-Nummer',   nameDe: 'Pflegekammer-Nummer',  nameEn: 'Nursing chamber no.',   hint: 'NRW, Niedersachsen, RLP', hintDe: 'NRW, Niedersachsen, RLP', hintEn: 'NRW, Lower Saxony, RLP' },
+  'bar-association-id':  { name: 'Rechtsanwaltskammer',   nameDe: 'Rechtsanwaltskammer',  nameEn: 'Bar association',       hint: 'BRAK-Eintrag', hintDe: 'BRAK-Eintrag', hintEn: 'BRAK entry' },
+  'notary-chamber-id':   { name: 'Notarkammer',           nameDe: 'Notarkammer',          nameEn: 'Notary chamber',        hint: 'Kammer-Eintrag', hintDe: 'Kammer-Eintrag', hintEn: 'Chamber entry' },
+  'service-id':          { name: 'Dienstausweis',         nameDe: 'Dienstausweis',        nameEn: 'Service ID',            hint: 'Behörden-Dienstausweis-Nr.', hintDe: 'Behörden-Dienstausweis-Nr.', hintEn: 'Authority service ID no.' },
+  'bundestag-verified':  { name: 'Bundestag-ID',          nameDe: 'Bundestag-ID',         nameEn: 'Bundestag ID',          hint: 'Abgeordneten-Profil', hintDe: 'Abgeordneten-Profil', hintEn: 'MP profile' },
+  'domain-verified':     { name: 'Domain-Verifikation',   nameDe: 'Domain-Verifikation',  nameEn: 'Domain verification',   hint: 'Firmen-Domain-Inhaberschaft', hintDe: 'Firmen-Domain-Inhaberschaft', hintEn: 'Company domain ownership' },
+  'handelsregister':     { name: 'Handelsregister',       nameDe: 'Handelsregister',      nameEn: 'Commercial register',   hint: 'HRB/HRA-Nummer', hintDe: 'HRB/HRA-Nummer', hintEn: 'HRB/HRA number' },
+  'craft-chamber-id':    { name: 'Handwerksrolle',        nameDe: 'Handwerksrolle',       nameEn: 'Chamber of Crafts',     hint: 'Handwerkskammer-Eintrag', hintDe: 'Handwerkskammer-Eintrag', hintEn: 'Chamber of Crafts entry' },
+  'master-certificate':  { name: 'Meisterbrief',          nameDe: 'Meisterbrief',         nameEn: 'Master certificate',    hint: 'Meisterbrief-Nummer', hintDe: 'Meisterbrief-Nummer', hintEn: 'Master certificate number' },
 };
+
+// ── i18n runtime (DE/EN toggle, shared storage key 'iamhmn-lang') ───────────
+const T = {
+  de: {
+    "nav.home":"Hauptseite",
+    "hero.h1a":"Anonyme","hero.h1span":"Mensch-Tokens","hero.h1b":"mit verifizierter Rolle.",
+    "hero.p1":"Hier holst du dir Privacy-Pass-Tokens, mit denen du dich auf anderen Webseiten anonym als verifizierter Mensch und in deiner gewählten Rolle ausweisen kannst — ohne dass die Webseite weiß, wer du bist.",
+    "hero.p2a":"Voraussetzung: ein","hero.p2em1":"Hardware-Sicherheitsschlüssel","hero.p2b":"(Yubikey, Passkey, Smartphone) und eine","hero.p2em2":"E-Mail-Verifikation","hero.p2c":"beim ersten Mal. Manche Rollen erfordern zusätzliche Nachweise.",
+    "s1.h2":"Anmelden","s1.sub":"Mit deinem Sicherheitsschlüssel. Beim ersten Mal legst du einen neuen Account an, danach kannst du mehrere Schlüssel pro Account registrieren (empfohlen für Backup).",
+    "btn.login":"Mit Passkey / Yubikey anmelden →","btn.recoveryOpen":"Schlüssel verloren?",
+    "recovery.h3":"Mit Recovery-Code anmelden","recovery.p":"Wenn du beim Onboarding 10 Codes erhalten und gespeichert hast, kannst du dich hier einmalig anmelden und einen neuen Schlüssel hinzufügen.","btn.recoveryRedeem":"Code einlösen","btn.cancel":"Abbrechen",
+    "log.ready":"Bereit.","log.waitStep1":"Warte auf Schritt 1.","log.waitRole":"Warte auf Rollenwahl.","log.chooseMethod":"Wähle eine Methode.",
+    "creds.h2":"Deine Sicherheitsschlüssel","creds.sub1":"Du solltest","creds.subEm":"mindestens zwei Schlüssel","creds.sub2":"registrieren — sonst verlierst du den Zugang bei Geräteverlust.","btn.addCred":"Weiteren Schlüssel hinzufügen →","btn.recoveryGen":"Recovery-Codes erstellen",
+    "role.h2":"Rolle wählen","role.sub":"Jede Rolle hat einen eigenen Issuer-Schlüssel. Strikte Rollen (🔒) erfordern zusätzliche Nachweise.","btn.roleConfirm":"Rolle bestätigen →",
+    "verify.h2":"Verifikation","verify.sub":"Bevor du anonyme Tokens für diese Rolle ausstellen lassen kannst, müssen die Anforderungen erfüllt sein.",
+    "email.h3":"E-Mail-Verifikation","email.hint":"Bitte eine E-Mail-Adresse eingeben.","email.inputPh":"vorname@beispiel.de","btn.sendVerify":"Verifikations-Mail senden →","btn.refreshElig":"Verifikation prüfen","email.note1":"Du erhältst einen Bestätigungs-Link. Klicke auf den Link in der Mail, dann hier auf","email.noteEm":"\"Verifikation prüfen\"","email.note2":".",
+    "attr.h3":"Weiterer Nachweis","btn.submitAttr":"Nachweis hinzufügen →","attr.note":"Hinweis: Im Pilot-Stadium akzeptieren wir Selbsteinträge. Bei Live-Betrieb werden diese gegen offizielle Register verifiziert.",
+    "tokens.h2":"Tokens holen","tokens.sub":"Hole dir einen Vorrat von 10 anonymen Tokens für deine Rolle. Diese werden lokal in deinem Browser gespeichert. Bei Verbrauch kannst du neue holen — bis zur 24h-Obergrenze.",
+    "quota.used":"Verbraucht:","quota.remaining":"Verbleibend:","quota.trust":"Vertrauensstufe:","btn.getTokens":"10 anonyme Tokens holen →","btn.refreshWallet":"Wallet aktualisieren","btn.clearWallet":"Wallet leeren","tokens.stock":"Aktueller Vorrat","wallet.empty":"Noch keine Tokens.",
+    "redeem.h2":"Token verwenden","redeem.sub1":"So sieht es aus, wenn eine Plattform dich verifizieren lässt.","redeem.subEm":"Du","redeem.sub2":"entscheidest, wie du dich bestätigst: anonym (ein Token wird verbraucht) oder mit deiner verifizierten HHTTPS-Rolle. Probier den Klick hier mit deinem Vorrat aus.",
+    "demo.q":"„Bist du ein Mensch?\"","demo.anonH4":"Anonym bestätigen","demo.anonP":"Verbraucht einen Privacy-Pass-Token. Unverknüpfbar — kein Profil, keine Rolle, kein Trace.","btn.redeemDemo":"✓ Anonym bestätigen","demo.or":"oder","demo.hhttpsH4":"Mit HHTTPS verifizieren","demo.hhttpsP":"Zeigt deine verifizierte Rolle + Trust-Score (pseudonym). Kein Token-Verbrauch.","demo.hhttpsBtn":"🪪 Mit HHTTPS verifizieren →",
+    "code.head1":"So baust du den „Anonym bestätigen\"-Button selbst ein","code.head2":"Einlösung — immer serverseitig",
+    "wann.strong":"Wann was?","wann.p1":"Anonym (Privacy Pass) eignet sich, wenn nur „echter Mensch\" zählt — z. B. Abstimmungen, Kommentare, Rate-Limiting ohne Tracking. Mit HHTTPS-Token, wenn die","wann.em":"Rolle","wann.p2":"zählt — z. B. „verifizierter Arzt\" oder „Journalistin mit Trust 85\".",
+    "tag.done":"erfüllt","tag.required":"pflicht","tag.optional":"optional",
+    "js.newKeyPrompt":"Bitte registriere jetzt einen neuen Sicherheitsschlüssel.","js.keyRegistered":"✓ Neuer Schlüssel registriert. Jetzt einloggen.","js.oneKeyWarn":"Du hast nur einen Schlüssel. Bei Verlust verlierst du den Zugang. Füge bitte einen zweiten hinzu.","js.recoveryAvail":"Recovery-Codes verfügbar","js.recoveryConfirm":"10 neue Recovery-Codes werden generiert. Alte Codes (falls vorhanden) werden ungültig. Fortfahren?","js.recoveryHeading":"Deine Recovery-Codes",
+    "js.roleAttest":"mit HHTTPS attestieren …","js.roleAttested":"✓ Rolle attestiert","js.eligCheck":"Eligibility prüfen …","js.allMet":"✓ Alle Anforderungen erfüllt. Trust-Score:","js.domainHint":"Diese Rolle verlangt eine spezifische Domain:",
+    "js.validEmail":"Bitte eine gültige E-Mail eingeben.","js.mailSent1":"✓ Mail an","js.mailSent2":"versandt. Klicke den Link in der Mail und dann hier auf \"Verifikation prüfen\".","js.pilotAccepted":"Im Pilot-Modus akzeptiert. Bei Live-Betrieb gegen offizielle Register geprüft.",
+    "js.discovery":"Discovery: lade Issuer-Verzeichnis …","js.noIssuer1":"Kein Issuer-Schlüssel für Rolle","js.issuerLoaded1":"✓ Issuer für","js.issuerLoaded2":"geladen","js.tokensStored2":"Tokens in der Wallet gespeichert",
+    "js.clearConfirm":"Wirklich alle Tokens löschen?","js.walletCleared":"Wallet geleert.","js.noTokenStock":"Kein Token im Vorrat — hole oben in Schritt 4 erst welche.","js.redeemPost":"POST /privacy-pass/redeem — löse einen Token ein …","js.confirmedAnon1":"✓ Als Mensch bestätigt — anonym (Rolle:","js.confirmedAnon2":"1 Token verbraucht ·","js.confirmedAnon3":"im Vorrat · unverknüpfbar.","js.alreadySpent":"Dieser Token war bereits verbraucht — aus dem Vorrat entfernt.","js.tokenInvalid":"✗ Token ungültig:","js.unknown":"unbekannt","js.error":"Fehler: ","js.lab":"anonyme Tokens","js.passkeyRegistered":"✓ Passkey registriert","js.credActive":"aktiv","js.credRegistered":"registriert","js.cloudBackup":"Cloud-Backup","js.genReq1":"Erzeuge","js.genReq2":"geblindete Token-Anfragen lokal …","js.tokensStored1":"✓","js.tokensStored2":"Tokens in der Wallet gespeichert"
+  },
+  en: {
+    "nav.home":"Home",
+    "hero.h1a":"Anonymous","hero.h1span":"human tokens","hero.h1b":"with a verified role.",
+    "hero.p1":"Here you get Privacy Pass tokens with which you can identify yourself on other websites anonymously as a verified human and in your chosen role — without the website knowing who you are.",
+    "hero.p2a":"Requirement: a","hero.p2em1":"hardware security key","hero.p2b":"(Yubikey, passkey, smartphone) and an","hero.p2em2":"email verification","hero.p2c":"the first time. Some roles require additional proof.",
+    "s1.h2":"Sign in","s1.sub":"With your security key. The first time you create a new account, after that you can register several keys per account (recommended for backup).",
+    "btn.login":"Sign in with passkey / Yubikey →","btn.recoveryOpen":"Lost your key?",
+    "recovery.h3":"Sign in with a recovery code","recovery.p":"If you received and saved 10 codes during onboarding, you can sign in here once and add a new key.","btn.recoveryRedeem":"Redeem code","btn.cancel":"Cancel",
+    "log.ready":"Ready.","log.waitStep1":"Waiting for step 1.","log.waitRole":"Waiting for role selection.","log.chooseMethod":"Choose a method.",
+    "creds.h2":"Your security keys","creds.sub1":"You should","creds.subEm":"register at least two keys","creds.sub2":"— otherwise you'll lose access if you lose your device.","btn.addCred":"Add another key →","btn.recoveryGen":"Create recovery codes",
+    "role.h2":"Choose role","role.sub":"Each role has its own issuer key. Strict roles (🔒) require additional proof.","btn.roleConfirm":"Confirm role →",
+    "verify.h2":"Verification","verify.sub":"Before you can have anonymous tokens issued for this role, the requirements must be met.",
+    "email.h3":"Email verification","email.hint":"Please enter an email address.","email.inputPh":"firstname@example.com","btn.sendVerify":"Send verification email →","btn.refreshElig":"Check verification","email.note1":"You'll receive a confirmation link. Click the link in the email, then click here on","email.noteEm":"\"Check verification\"","email.note2":".",
+    "attr.h3":"Further proof","btn.submitAttr":"Add proof →","attr.note":"Note: in the pilot phase we accept self-entries. In live operation these are verified against official registers.",
+    "tokens.h2":"Get tokens","tokens.sub":"Get a stock of 10 anonymous tokens for your role. These are stored locally in your browser. When used up you can get new ones — up to the 24h cap.",
+    "quota.used":"Used:","quota.remaining":"Remaining:","quota.trust":"Trust level:","btn.getTokens":"Get 10 anonymous tokens →","btn.refreshWallet":"Refresh wallet","btn.clearWallet":"Clear wallet","tokens.stock":"Current stock","wallet.empty":"No tokens yet.",
+    "redeem.h2":"Use token","redeem.sub1":"This is what it looks like when a platform has you verify.","redeem.subEm":"You","redeem.sub2":"decide how you confirm: anonymously (one token is used) or with your verified HHTTPS role. Try the click here with your stock.",
+    "demo.q":"\"Are you human?\"","demo.anonH4":"Confirm anonymously","demo.anonP":"Uses one Privacy Pass token. Unlinkable — no profile, no role, no trace.","btn.redeemDemo":"✓ Confirm anonymously","demo.or":"or","demo.hhttpsH4":"Verify with HHTTPS","demo.hhttpsP":"Shows your verified role + trust score (pseudonymous). No token used.","demo.hhttpsBtn":"🪪 Verify with HHTTPS →",
+    "code.head1":"How to add the \"Confirm anonymously\" button yourself","code.head2":"Redemption — always server-side",
+    "wann.strong":"When to use which?","wann.p1":"Anonymous (Privacy Pass) is suitable when only \"genuine human\" matters — e.g. votes, comments, rate limiting without tracking. With an HHTTPS token when the","wann.em":"role","wann.p2":"matters — e.g. \"verified doctor\" or \"journalist with trust 85\".",
+    "tag.done":"met","tag.required":"required","tag.optional":"optional",
+    "js.newKeyPrompt":"Please register a new security key now.","js.keyRegistered":"✓ New key registered. Now sign in.","js.oneKeyWarn":"You only have one key. If you lose it you lose access. Please add a second one.","js.recoveryAvail":"recovery codes available","js.recoveryConfirm":"10 new recovery codes will be generated. Old codes (if any) become invalid. Continue?","js.recoveryHeading":"Your recovery codes",
+    "js.roleAttest":"attest with HHTTPS …","js.roleAttested":"✓ Role attested","js.eligCheck":"Checking eligibility …","js.allMet":"✓ All requirements met. Trust score:","js.domainHint":"This role requires a specific domain:",
+    "js.validEmail":"Please enter a valid email.","js.mailSent1":"✓ Email sent to","js.mailSent2":". Click the link in the email and then here on \"Check verification\".","js.pilotAccepted":"Accepted in pilot mode. In live operation checked against official registers.",
+    "js.discovery":"Discovery: loading issuer directory …","js.noIssuer1":"No issuer key for role","js.issuerLoaded1":"✓ Issuer for","js.issuerLoaded2":"loaded","js.tokensStored2":"tokens stored in the wallet",
+    "js.clearConfirm":"Really delete all tokens?","js.walletCleared":"Wallet cleared.","js.noTokenStock":"No token in stock — get some in step 4 above first.","js.redeemPost":"POST /privacy-pass/redeem — redeeming a token …","js.confirmedAnon1":"✓ Confirmed as human — anonymous (role:","js.confirmedAnon2":"1 token used ·","js.confirmedAnon3":"in stock · unlinkable.","js.alreadySpent":"This token was already used — removed from the stock.","js.tokenInvalid":"✗ Token invalid:","js.unknown":"unknown","js.error":"Error: ","js.lab":"anonymous tokens","js.passkeyRegistered":"✓ Passkey registered","js.credActive":"active","js.credRegistered":"registered","js.cloudBackup":"cloud backup","js.genReq1":"Generating","js.genReq2":"blinded token requests locally …","js.tokensStored1":"✓","js.tokensStored2":"tokens stored in the wallet"
+  }
+};
+let LANG = 'de';
+function tr(k){ return (T[LANG]||T.de)[k] ?? (T.de[k] ?? k); }
+function setLanguage(lang){
+  LANG = T[lang] ? lang : 'de';
+  document.documentElement.lang = LANG;
+  Object.values(ROLE_DEFS).forEach(r => { r.label = (LANG==='en') ? r.en : r.de; });
+  Object.values(METHOD_LABELS).forEach(m => { m.name = (LANG==='en') ? m.nameEn : m.nameDe; m.hint = (LANG==='en') ? m.hintEn : m.hintDe; });
+  document.querySelectorAll('[data-i18n]').forEach(e => { const v = tr(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
+  document.querySelectorAll('[data-i18n-ph]').forEach(e => { const v = tr(e.getAttribute('data-i18n-ph')); if (v != null) e.placeholder = v; });
+  try { buildRoleGrid(); } catch(e){}
+  try { if (eligibilityCache) renderEligibility(eligibilityCache); } catch(e){}
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.classList.toggle('active', b.dataset.lang === LANG));
+  try { localStorage.setItem('iamhmn-lang', LANG); } catch(e){}
+}
+function detectLang(){
+  try { const sv = localStorage.getItem('iamhmn-lang'); if (sv && T[sv]) return sv; } catch(e){}
+  const n = (navigator.language || 'de').slice(0,2).toLowerCase();
+  return T[n] ? n : 'de';
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.addEventListener('click', () => setLanguage(b.dataset.lang)));
+  setLanguage(detectLang());
+});
 
 // ─── Logging ─────────────────────────────────────────────────────────────
 function log(id, msg, cls = 'dim') {
@@ -778,7 +836,7 @@ window.doLogin = async function () {
       });
       const d2 = await r2.json();
       if (!r2.ok) throw new Error(d2.error || `HTTP ${r2.status}`);
-      L.auth('✓ Passkey registriert', 'ok');
+      L.auth(tr('js.passkeyRegistered'), 'ok');
 
       // auto-login
       const r3 = await fetch('/hhttps/webauthn/auth/start', {
@@ -836,7 +894,7 @@ window.useRecoveryCode = async function () {
     if (!r.ok) throw new Error(d.detail || d.error);
 
     L.auth(`✓ Code akzeptiert. Account: ${d.userId.slice(0, 8)}…`, 'ok');
-    L.auth('Bitte registriere jetzt einen neuen Sicherheitsschlüssel.', 'info');
+    L.auth(tr('js.newKeyPrompt'), 'info');
 
     // Re-login with the recovered userId — register new credential
     userId = d.userId;
@@ -861,7 +919,7 @@ async function registerNewCredential() {
     body: JSON.stringify({ userId, response: att }),
   });
   if (!r2.ok) throw new Error('Registrierung fehlgeschlagen');
-  L.auth('✓ Neuer Schlüssel registriert. Jetzt einloggen.', 'ok');
+  L.auth(tr('js.keyRegistered'), 'ok');
   // Now login
   doLogin();
 }
@@ -879,16 +937,16 @@ async function refreshCredentials() {
         <div class="icon">${c.backedUp ? '☁️' : '🔑'}</div>
         <div class="info">
           <div class="id">${c.credentialId.slice(0, 24)}…
-            ${c.isCurrent ? '<span class="pill green">aktiv</span>' : ''}
+            ${c.isCurrent ? '<span class="pill green">'+tr('js.credActive')+'</span>' : ''}
             ${c.isAdmin ? '<span class="pill amber">admin</span>' : ''}
           </div>
-          <div class="meta">${c.deviceType || 'unknown'}${c.backedUp ? ' · Cloud-Backup' : ''} · registriert ${new Date(c.registeredAt).toLocaleDateString()}</div>
+          <div class="meta">${c.deviceType || 'unknown'}${c.backedUp ? ' · '+tr('js.cloudBackup')+'' : ''} · ${tr('js.credRegistered')} ${new Date(c.registeredAt).toLocaleDateString()}</div>
         </div>
       </div>
     `).join('');
 
     if (d.credentials.length < 2) {
-      list.innerHTML += `<div class="recovery-warn" style="margin-top:8px">Du hast nur einen Schlüssel. Bei Verlust verlierst du den Zugang. Füge bitte einen zweiten hinzu.</div>`;
+      list.innerHTML += `<div class="recovery-warn" style="margin-top:8px">${tr('js.oneKeyWarn')}</div>`;
     }
   } catch {}
 }
@@ -919,14 +977,14 @@ async function refreshRecoveryStatus() {
     const d = await r.json();
     const btn = document.getElementById('btn-recovery-gen');
     if (d.hasCodes) {
-      btn.textContent = `${d.remaining} Recovery-Codes verfügbar`;
+      btn.textContent = `${d.remaining} ${tr('js.recoveryAvail')}`;
       btn.disabled = true;
     }
   } catch {}
 }
 
 window.generateRecoveryCodes = async function () {
-  if (!confirm('10 neue Recovery-Codes werden generiert. Alte Codes (falls vorhanden) werden ungültig. Fortfahren?')) return;
+  if (!confirm(tr('js.recoveryConfirm'))) return;
   try {
     const r = await fetch('/privacy-pass/recovery/generate', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -938,7 +996,7 @@ window.generateRecoveryCodes = async function () {
     const area = document.getElementById('recovery-codes-area');
     area.classList.remove('hidden');
     area.innerHTML = `
-      <h3 style="font-family:var(--syne);font-size:14px;margin-top:14px;margin-bottom:8px;color:var(--p-apricot)">Deine Recovery-Codes</h3>
+      <h3 style="font-family:var(--syne);font-size:14px;margin-top:14px;margin-bottom:8px;color:var(--p-apricot)">${tr('js.recoveryHeading')}</h3>
       <div class="recovery-grid">
         ${d.codes.map(c => `<div class="recovery-code">${c}</div>`).join('')}
       </div>
@@ -979,7 +1037,7 @@ function buildRoleGrid() {
 window.confirmRole = async function () {
   const btn = document.getElementById('btn-role-confirm');
   btn.disabled = true;
-  L.role(`Rolle "${role}" mit HHTTPS attestieren …`, 'info');
+  L.role(`"${role}" — ${tr('js.roleAttest')}`, 'info');
 
   try {
     const r = await fetch('/hhttps/role/declare', {
@@ -992,7 +1050,7 @@ window.confirmRole = async function () {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
-    L.role('✓ Rolle attestiert', 'ok');
+    L.role(tr('js.roleAttested'), 'ok');
 
     document.getElementById('role-pill').textContent = ROLE_DEFS[role].label;
     setDone('card-role');
@@ -1008,7 +1066,7 @@ window.confirmRole = async function () {
 
 // ─── Step 3: Eligibility & verifications ─────────────────────────────────
 window.refreshEligibility = async function () {
-  L.verify('Eligibility prüfen …', 'info');
+  L.verify(tr('js.eligCheck'), 'info');
   try {
     const r = await fetch(`/privacy-pass/eligibility?sessionId=${sessionId}&role=${role}`);
     const d = await r.json();
@@ -1017,7 +1075,7 @@ window.refreshEligibility = async function () {
     renderEligibility(d);
 
     if (d.ok) {
-      L.verify(`✓ Alle Anforderungen erfüllt. Trust-Score: ${d.trustScore}`, 'ok');
+      L.verify(`${tr('js.allMet')} ${d.trustScore}`, 'ok');
       setDone('card-verify');
       document.getElementById('card-wallet').classList.remove('hidden');
       document.getElementById('card-redeem').classList.remove('hidden');
@@ -1048,7 +1106,7 @@ function renderEligibility(elig) {
       <div class="req-row ${isDone ? 'done' : 'required-missing'}">
         <div class="icon">${isDone ? '✓' : '○'}</div>
         <div class="label"><div class="name">${def.name}</div><div class="hint">${def.hint}</div></div>
-        <div class="tag ${isDone ? 'done' : 'required'}">${isDone ? 'erfüllt' : 'pflicht'}</div>
+        <div class="tag ${isDone ? 'done' : 'required'}">${isDone ? tr('tag.done') : tr('tag.required')}</div>
       </div>
     `;
   }
@@ -1060,7 +1118,7 @@ function renderEligibility(elig) {
       <div class="req-row ${isDone ? 'done' : ''}">
         <div class="icon">${isDone ? '✓' : '∘'}</div>
         <div class="label"><div class="name">${def.name}</div><div class="hint">${def.hint}</div></div>
-        <div class="tag ${isDone ? 'done' : 'optional'}">${isDone ? 'erfüllt' : 'optional'}</div>
+        <div class="tag ${isDone ? 'done' : 'optional'}">${isDone ? tr('tag.done') : tr('tag.optional')}</div>
       </div>
     `;
   }
@@ -1071,7 +1129,7 @@ function renderEligibility(elig) {
     emailArea.classList.remove('hidden');
     document.getElementById('email-hint').textContent =
       elig.requirements?.emailDomainHint
-        ? `Diese Rolle verlangt eine spezifische Domain: ${elig.requirements.emailDomainHint}`
+        ? `${tr('js.domainHint')} ${elig.requirements.emailDomainHint}`
         : 'Eine beliebige E-Mail-Adresse, die du kontrollierst.';
   } else {
     emailArea.classList.add('hidden');
@@ -1098,7 +1156,7 @@ function renderEligibility(elig) {
 window.sendVerifyEmail = async function () {
   const email = document.getElementById('email-input').value.trim();
   if (!email || !email.includes('@')) {
-    L.verify('Bitte eine gültige E-Mail eingeben.', 'warn');
+    L.verify(tr('js.validEmail'), 'warn');
     return;
   }
 
@@ -1111,7 +1169,7 @@ window.sendVerifyEmail = async function () {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || d.error);
 
-    L.verify(`✓ Mail an ${email} versandt. Klicke den Link in der Mail und dann hier auf "Verifikation prüfen".`, 'ok');
+    L.verify(`${tr('js.mailSent1')} ${email} ${tr('js.mailSent2')}`, 'ok');
   } catch (err) {
     L.verify(`✗ ${err.message}`, 'err');
   }
@@ -1144,7 +1202,7 @@ window.submitAttribute = async function () {
       // This will fail email validation; the real path requires a backend route.
       // For now, we manually record via a one-off route.
     }
-    L.verify('Im Pilot-Modus akzeptiert. Bei Live-Betrieb gegen offizielle Register geprüft.', 'warn');
+    L.verify(tr('js.pilotAccepted'), 'warn');
     setTimeout(refreshEligibility, 500);
   } catch (err) {
     L.verify(`✗ ${err.message}`, 'err');
@@ -1173,15 +1231,15 @@ window.getTokens = async function () {
     const dirResp = await fetch('/.well-known/private-token-issuer-directory');
     const dir = await dirResp.json();
     const roleKey = dir['token-keys'].find(k => k.role === role);
-    if (!roleKey) throw new Error(`Kein Issuer-Schlüssel für Rolle "${role}"`);
+    if (!roleKey) throw new Error(`${tr('js.noIssuer1')} "${role}"`);
 
     const pubKeyBytes = base64urlDecode(roleKey['token-key']);
     const tokenKeyId  = new Uint8Array(await crypto.subtle.digest('SHA-256', pubKeyBytes));
     const truncKeyId  = tokenKeyId[tokenKeyId.length - 1];
-    L.tokens(`✓ Issuer für "${role}" geladen`, 'ok');
+    L.tokens(`${tr('js.issuerLoaded1')} "${role}" ${tr('js.issuerLoaded2')}`, 'ok');
 
     const N = 10;
-    L.tokens(`Erzeuge ${N} geblindete Token-Anfragen lokal …`, 'info');
+    L.tokens(`${tr('js.genReq1')} ${N} ${tr('js.genReq2')}`, 'info');
     const client = new VOPRFClient(SUITE, pubKeyBytes);
     const tokenInputs = [];
     const requestBufs = [];
@@ -1241,7 +1299,7 @@ window.getTokens = async function () {
       wallet.push({ role, token: b64encode(fullToken), issued_at: Date.now() });
     }
     await walletAdd(wallet);
-    L.tokens(`✓ ${wallet.length} Tokens in der Wallet gespeichert`, 'ok');
+    L.tokens(`${tr('js.tokensStored1')} ${wallet.length} ${tr('js.tokensStored2')}`, 'ok');
 
     await refreshQuota();
     await refreshWallet();
@@ -1256,7 +1314,7 @@ window.refreshWallet = async function () {
   const el = document.getElementById('wallet-content');
   if (all.length === 0) {
     el.className = 'wallet-empty';
-    el.textContent = 'Noch keine Tokens.';
+    el.textContent = tr('wallet.empty');
     return;
   }
   const counts = {};
@@ -1267,15 +1325,15 @@ window.refreshWallet = async function () {
     <div class="wallet-tile">
       <div class="role-name">${ROLE_DEFS[r]?.label || r}</div>
       <div class="count">${c}</div>
-      <div class="lab">anonyme Tokens</div>
+      <div class="lab">${tr('js.lab')}</div>
     </div>
   `).join('');
 };
 
 window.clearWallet = async function () {
-  if (!confirm('Wirklich alle Tokens löschen?')) return;
+  if (!confirm(tr('js.clearConfirm'))) return;
   await walletClear();
-  L.tokens('Wallet geleert.', 'info');
+  L.tokens(tr('js.walletCleared'), 'info');
   refreshWallet();
 };
 
@@ -1287,13 +1345,13 @@ window.redeemDemo = async function () {
   const btn = document.getElementById('btn-redeem');
   const all = await walletAll();
   if (all.length === 0) {
-    L.redeem('Kein Token im Vorrat — hole oben in Schritt 4 erst welche.', 'err');
+    L.redeem(tr('js.noTokenStock'), 'err');
     return;
   }
 
   btn.disabled = true;
   const t = all[0];  // consume the oldest token
-  L.redeem('POST /privacy-pass/redeem — löse einen Token ein …', 'info');
+  L.redeem(tr('js.redeemPost'), 'info');
 
   try {
     const r = await fetch('/privacy-pass/redeem', {
@@ -1306,19 +1364,19 @@ window.redeemDemo = async function () {
       await walletRemove(t.id);
       const remaining = (await walletAll()).length;
       const label = (ROLE_DEFS[d.role]?.label) || d.role;
-      L.redeem(`✓ Als Mensch bestätigt — anonym (Rolle: ${label}).`, 'ok');
-      L.redeem(`  1 Token verbraucht · ${remaining} im Vorrat · unverknüpfbar.`, 'ok');
+      L.redeem(`${tr('js.confirmedAnon1')} ${label}).`, 'ok');
+      L.redeem(`  ${tr('js.confirmedAnon2')} ${remaining} ${tr('js.confirmedAnon3')}`, 'ok');
       await refreshWallet();
     } else if (d.valid && d.reason === 'already_redeemed') {
       // Server says this nonce was already spent — clean it from the wallet.
       await walletRemove(t.id);
-      L.redeem('Dieser Token war bereits verbraucht — aus dem Vorrat entfernt.', 'err');
+      L.redeem(tr('js.alreadySpent'), 'err');
       await refreshWallet();
     } else {
-      L.redeem(`✗ Token ungültig: ${d.reason || d.detail || 'unbekannt'}`, 'err');
+      L.redeem(`${tr('js.tokenInvalid')} ${d.reason || d.detail || tr('js.unknown')}`, 'err');
     }
   } catch (e) {
-    L.redeem('Fehler: ' + e.message, 'err');
+    L.redeem(tr('js.error') + e.message, 'err');
   } finally {
     btn.disabled = false;
   }

@@ -1,53 +1,54 @@
 {
   "manifest_version": 3,
-  "name": "HHTTPS — HumanProof",
+  "name": "__MSG_extName__",
   "version": "1.4.3",
-  "description": "Deine HHTTPS-Identität als Browser-Brieftasche — mit Inline-Signaturen und automatischer Siegel-Erkennung auf jeder Webseite.",
-  "author": "Daniel Hannuschka · HumanProof Initiative",
+  "description": "__MSG_extDescription__",
+  "author": "Daniel Hannuschka · iamhmn Initiative",
   "homepage_url": "https://hhttps.org",
-
   "icons": {
-    "16":  "icons/icon16.png",
-    "32":  "icons/icon32.png",
-    "48":  "icons/icon48.png",
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "16":  "icons/icon16.png",
-      "32":  "icons/icon32.png",
-      "48":  "icons/icon48.png",
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
       "128": "icons/icon128.png"
     },
-    "default_title": "HHTTPS — HumanProof"
+    "default_title": "__MSG_extName__"
   },
-
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
-
   "content_scripts": [
     {
       "matches": [
         "https://hhttps.org/*",
         "https://www.hhttps.org/*"
       ],
-      "js": ["content-issuer.js"],
+      "js": [
+        "content-issuer.js"
+      ],
       "run_at": "document_start",
       "all_frames": false
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content-universal.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content-universal.js"
+      ],
       "run_at": "document_end",
       "all_frames": true,
       "match_about_blank": true
     }
   ],
-
   "permissions": [
     "storage",
     "activeTab",
@@ -55,15 +56,18 @@
     "contextMenus",
     "scripting"
   ],
-
   "host_permissions": [
     "https://hhttps.org/*"
   ],
-
   "web_accessible_resources": [
     {
-      "resources": ["icons/*.png"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "icons/*.png"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
-  ]
+  ],
+  "default_locale": "en"
 }

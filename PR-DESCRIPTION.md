@@ -83,8 +83,6 @@ to hand-roll JWKS verification themselves.
 - `HumanProof` → `iamhmn` (initiative name) across `server.js` headers, footer,
   `/hhttps/info` payload, WebAuthn display name, and both SDK headers.
 - Repo URL `dhannus/HumanProof` → `dhannus/HHTTPS`.
-- Legacy SDK base URL `hhttps.funnysearch.eu` → `hhttps.org`.
-- `RP_ID` default `funnysearch.eu` → `hhttps.org` (see Migration).
 - The `hp-` signature slug prefix is **unchanged** — it is wire-format matched by
   five server regexes, the extension, and `signature-format.md`; the misleading
   "for HumanProof" code comment was corrected to "(HHTTPS signature)".
@@ -93,19 +91,13 @@ to hand-roll JWKS verification themselves.
 
 ## Migration notes
 
-1. **`RP_ID` default changed to `hhttps.org`.** WebAuthn credentials are bound to
-   the RP ID. Production already sets `RP_ID` via environment variable, so this
-   is a no-op there. Anyone relying on the old `funnysearch.eu` default MUST set
-   `RP_ID=funnysearch.eu` explicitly, or existing passkeys will not match. The
-   default now reflects the canonical domain.
-
-2. **Existing tokens keep verifying.** Token-format changes are additive
+1. **Existing tokens keep verifying.** Token-format changes are additive
    (`iat` instead of `ia`; `iss` switches scheme but the OAuth path already used
    `https://`). Tokens already in the wild with `ia`/`hhttps://` will simply
    expire on their normal TTL (≤1 h for access, ≤7 d for refresh). No forced
    invalidation.
 
-3. **Key rotation is opt-in.** Nothing rotates automatically. Call `rotateKeys()`
+2. **Key rotation is opt-in.** Nothing rotates automatically. Call `rotateKeys()`
    when you choose; retired keys remain in the JWKS until you stop publishing
    them via `forgetRetiredKey(kid)` (only after one full token TTL has elapsed).
 

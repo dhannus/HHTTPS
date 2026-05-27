@@ -1,0 +1,224 @@
+{
+  "extName": {
+    "message": "HHTTPS — iamhmn"
+  },
+  "extDescription": {
+    "message": "Your HHTTPS identity as a browser wallet — with inline signatures and automatic seal detection on any website."
+  },
+  "identityStatusLoggedOut": {
+    "message": "Not logged in"
+  },
+  "identityNoIdentity": {
+    "message": "No identity"
+  },
+  "trustScoreLabel": {
+    "message": "Trust Score"
+  },
+  "loginCta": {
+    "message": "Log in at hhttps.org →"
+  },
+  "loginHint": {
+    "message": "Passkey verification in 30 seconds"
+  },
+  "refreshTitle": {
+    "message": "Fetch a fresh token from the server"
+  },
+  "refreshLabel": {
+    "message": "Refresh"
+  },
+  "copyTokenTitle": {
+    "message": "Copy token to clipboard"
+  },
+  "tokenLabel": {
+    "message": "Token"
+  },
+  "logoutTitle": {
+    "message": "Remove identity + revoke token"
+  },
+  "logoutLabel": {
+    "message": "Logout"
+  },
+  "switchIdentity": {
+    "message": "Switch identity"
+  },
+  "identityAsSignature": {
+    "message": "Identity as signature"
+  },
+  "rightClickInField": {
+    "message": "Right-click in a text field"
+  },
+  "signatureMode": {
+    "message": "Signature mode:"
+  },
+  "modeIdentityHead": {
+    "message": "🛡️ Identity"
+  },
+  "modeIdentityDesc": {
+    "message": "Stamp with your role. Text may be edited."
+  },
+  "modeTextBoundHead": {
+    "message": "🔒 Text-bound"
+  },
+  "modeTextBoundDesc": {
+    "message": "Binds the signature to the exact text. Editing breaks it."
+  },
+  "quickAlphaStamp": {
+    "message": "Quick alpha stamp"
+  },
+  "toCopy": {
+    "message": "to copy"
+  },
+  "copyBtn": {
+    "message": "📋 Copy"
+  },
+  "currentPage": {
+    "message": "Current page"
+  },
+  "checking": {
+    "message": "Checking …"
+  },
+  "verifiedStatus": {
+    "message": "✓ Verified"
+  },
+  "loginAtHhttpsLong": {
+    "message": "Log in at hhttps.org"
+  },
+  "tokenExpiredRefreshing": {
+    "message": "Token expired — refreshing …"
+  },
+  "tokenExpiresInMin": {
+    "message": "Token expires in $1 min"
+  },
+  "tokenValidMinLeft": {
+    "message": "Token valid · $1 min left"
+  },
+  "tokenValidHm": {
+    "message": "Token valid · $1h $2min"
+  },
+  "pageHhttpsActive": {
+    "message": "HHTTPS active ($1)"
+  },
+  "verifiedFallback": {
+    "message": "verified"
+  },
+  "pageSupportedNotVerified": {
+    "message": "HHTTPS supported, not verified"
+  },
+  "pageNotSupported": {
+    "message": "Does not support HHTTPS"
+  },
+  "updatedLabel": {
+    "message": "Updated"
+  },
+  "errorLabel": {
+    "message": "Error"
+  },
+  "copiedLabel": {
+    "message": "Copied!"
+  },
+  "copiedCheck": {
+    "message": "✓ Copied!"
+  },
+  "copyToClipboard": {
+    "message": "📋 Copy to clipboard"
+  },
+  "copyBlocked": {
+    "message": "✗ Error — browser blocked clipboard"
+  },
+  "logoutConfirm": {
+    "message": "Remove this identity?\n\nThe token will be revoked at the server and deleted from the browser. You will then need to log in again at hhttps.org."
+  },
+  "logoutFailed": {
+    "message": "Logout failed: $1"
+  },
+  "unknownError": {
+    "message": "unknown"
+  },
+  "roleFallback": {
+    "message": "Verified"
+  },
+  "badgeTitleLoggedOut": {
+    "message": "HHTTPS — Not logged in. Click to verify."
+  },
+  "ctxSignAlpha": {
+    "message": "Sign with HHTTPS (identity)"
+  },
+  "ctxSignBeta": {
+    "message": "Sign with HHTTPS (identity + text)"
+  },
+  "errNoIdentityStored": {
+    "message": "No identity stored"
+  },
+  "errNoTextToSign": {
+    "message": "No text to sign"
+  },
+  "errNoDomain": {
+    "message": "No domain — please sign on a website"
+  },
+  "errNoMarker": {
+    "message": "No marker response from server"
+  },
+  "sealChecking": {
+    "message": "Checking…"
+  },
+  "sealTextChanged": {
+    "message": "Text changed"
+  },
+  "oldFormatWarning": {
+    "message": "This signature uses the old format (before Phase 2.5). For security reasons it is no longer verified. Please sign again."
+  },
+  "detailVerified": {
+    "message": "✓ Verified"
+  },
+  "detailWrongDomainTitle": {
+    "message": "⚠ This signature does not belong here."
+  },
+  "detailIssuedFor": {
+    "message": "Issued for:"
+  },
+  "detailUsedOn": {
+    "message": "Used on:"
+  },
+  "detailTextModified": {
+    "message": "⚠ The text was modified after signing."
+  },
+  "detailRevokedOn": {
+    "message": "✗ Revoked on $1"
+  },
+  "detailClose": {
+    "message": "Close"
+  },
+  "rowSignature": {
+    "message": "Signature"
+  },
+  "rowBoundTo": {
+    "message": "Bound to"
+  },
+  "rowBindingType": {
+    "message": "Binding type"
+  },
+  "rowSignedOn": {
+    "message": "Signed on"
+  },
+  "rowTextExcerpt": {
+    "message": "Text excerpt"
+  },
+  "viewOnHhttps": {
+    "message": "View on hhttps.org →"
+  },
+  "flashInserted": {
+    "message": "HHTTPS signature inserted"
+  },
+  "flashEnterTextFirst": {
+    "message": "Please enter text in the field first"
+  },
+  "flashSigningFailed": {
+    "message": "Signing failed"
+  },
+  "flashClickFieldFirst": {
+    "message": "Click into an input field first"
+  },
+  "identitySaved": {
+    "message": "Identity saved · $1"
+  }
+}

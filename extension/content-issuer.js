@@ -99,7 +99,7 @@
     const icon = identity.roleIcon || '👤';
     const label = identity.roleLabel || identity.role || 'Verified';
     t.innerHTML = `<span style="font-size:18px">${icon}</span>
-      <span>Identität gespeichert · ${label}</span>`;
+      <span>${chrome.i18n.getMessage('identitySaved', [label])}</span>`;
 
     if (!document.getElementById('__hhttps_toast_style')) {
       const s = document.createElement('style');

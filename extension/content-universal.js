@@ -331,7 +331,7 @@
     span.className = SEAL_CLASS;
     span.setAttribute('data-type', type);
     span.setAttribute('data-state', 'pending');
-    span.innerHTML = `<span class="hh-seal-icon">⏳</span><span class="hh-seal-label">Prüfe…</span>`;
+    span.innerHTML = `<span class="hh-seal-icon">⏳</span><span class="hh-seal-label">${chrome.i18n.getMessage('sealChecking')}</span>`;
     return span;
   }
 
@@ -356,14 +356,14 @@
     if (result.status === 'text-modified') {
       sealEl.setAttribute('data-state', 'mismatch');
       const icon = (result.role && result.role.icon) || '👤';
-      sealEl.innerHTML = `<span class="hh-seal-icon">${icon}</span><span class="hh-seal-label">Text geändert</span>`;
+      sealEl.innerHTML = `<span class="hh-seal-icon">${icon}</span><span class="hh-seal-label">${chrome.i18n.getMessage('sealTextChanged')}</span>`;
       attachClickHandler(sealEl, result);
       return;
     }
     // Valid
     const role = result.role || {};
     const icon = role.icon || '👤';
-    const label = role.label || role.id || 'Verifiziert';
+    const label = role.label || role.id || chrome.i18n.getMessage('roleFallback');
     const trust = role.trustScore != null ? role.trustScore : '?';
     sealEl.setAttribute('data-state', 'valid');
     sealEl.setAttribute('data-trust', trust);
@@ -383,7 +383,7 @@
       <span class="hh-seal-label">Legacy ${subtype}</span>
     `;
     sealEl.setAttribute('title',
-      'Diese Signatur nutzt das alte Format (vor Phase 2.5). Aus Sicherheitsgründen wird sie nicht mehr verifiziert. Bitte neu signieren.');
+      chrome.i18n.getMessage('oldFormatWarning'));
   }
 
   function attachClickHandler(sealEl, data) {
@@ -404,15 +404,15 @@
 
     let statusBanner = '';
     if (data.status === 'verified') {
-      statusBanner = `<div class="hh-d-status hh-d-status-ok">✓ Verifiziert</div>`;
+      statusBanner = `<div class="hh-d-status hh-d-status-ok">${chrome.i18n.getMessage('detailVerified')}</div>`;
     } else if (data.status === 'wrong-domain') {
-      statusBanner = `<div class="hh-d-status hh-d-status-warn">⚠ Diese Signatur gehört nicht hierher.
-        Ausgestellt für: <b>${escapeHtml(data.expected || binding.domain || '?')}</b><br>
-        Verwendet auf: <b>${escapeHtml(data.observed || getCurrentDomain() || '?')}</b></div>`;
+      statusBanner = `<div class="hh-d-status hh-d-status-warn">${chrome.i18n.getMessage('detailWrongDomainTitle')}
+        ${chrome.i18n.getMessage('detailIssuedFor')} <b>${escapeHtml(data.expected || binding.domain || '?')}</b><br>
+        ${chrome.i18n.getMessage('detailUsedOn')} <b>${escapeHtml(data.observed || getCurrentDomain() || '?')}</b></div>`;
     } else if (data.status === 'text-modified') {
-      statusBanner = `<div class="hh-d-status hh-d-status-warn">⚠ Der Text wurde nach dem Signieren verändert.</div>`;
+      statusBanner = `<div class="hh-d-status hh-d-status-warn">${chrome.i18n.getMessage('detailTextModified')}</div>`;
     } else if (data.status === 'revoked') {
-      statusBanner = `<div class="hh-d-status hh-d-status-bad">✗ Widerrufen am ${formatDate(data.revokedAt)}</div>`;
+      statusBanner = `<div class="hh-d-status hh-d-status-bad">${chrome.i18n.getMessage('detailRevokedOn', [formatDate(data.revokedAt)])}</div>`;
     }
 
     const issuerHost = 'hhttps.org';
@@ -422,21 +422,21 @@
       <div class="hh-d-head">
         <span class="hh-d-icon">${role.icon || '👤'}</span>
         <div>
-          <div class="hh-d-role">${escapeHtml(role.label || 'Verifiziert')}</div>
+          <div class="hh-d-role">${escapeHtml(role.label || chrome.i18n.getMessage('roleFallback'))}</div>
           <div class="hh-d-sub">Trust ${role.trustScore || '?'}/100${role.levelLabel ? ' · ' + escapeHtml(role.levelLabel) : ''}</div>
         </div>
-        <button class="hh-d-close" aria-label="Schließen">×</button>
+        <button class="hh-d-close" aria-label="${chrome.i18n.getMessage('detailClose')}">×</button>
       </div>
       ${statusBanner}
       <div class="hh-d-rows">
-        <div class="hh-d-row"><span>Signatur</span><b>${escapeHtml(data.id || '?')}</b></div>
-        ${binding.domain ? `<div class="hh-d-row"><span>Gebunden an</span><b>${escapeHtml(binding.domain)}</b></div>` : ''}
-        ${binding.type ? `<div class="hh-d-row"><span>Bindungstyp</span><b>${escapeHtml(binding.type)}</b></div>` : ''}
-        ${data.createdAt ? `<div class="hh-d-row"><span>Signiert am</span><b>${formatDate(data.createdAt)}</b></div>` : ''}
-        ${data.textPreview ? `<div class="hh-d-row hh-d-row-block"><span>Text-Auszug</span><div class="hh-d-preview">${escapeHtml(data.textPreview)}</div></div>` : ''}
+        <div class="hh-d-row"><span>${chrome.i18n.getMessage('rowSignature')}</span><b>${escapeHtml(data.id || '?')}</b></div>
+        ${binding.domain ? `<div class="hh-d-row"><span>${chrome.i18n.getMessage('rowBoundTo')}</span><b>${escapeHtml(binding.domain)}</b></div>` : ''}
+        ${binding.type ? `<div class="hh-d-row"><span>${chrome.i18n.getMessage('rowBindingType')}</span><b>${escapeHtml(binding.type)}</b></div>` : ''}
+        ${data.createdAt ? `<div class="hh-d-row"><span>${chrome.i18n.getMessage('rowSignedOn')}</span><b>${formatDate(data.createdAt)}</b></div>` : ''}
+        ${data.textPreview ? `<div class="hh-d-row hh-d-row-block"><span>${chrome.i18n.getMessage('rowTextExcerpt')}</span><div class="hh-d-preview">${escapeHtml(data.textPreview)}</div></div>` : ''}
       </div>
       <div class="hh-d-foot">
-        <a href="${escapeHtml(slugUrl)}" target="_blank">Auf hhttps.org anzeigen →</a>
+        <a href="${escapeHtml(slugUrl)}" target="_blank">${chrome.i18n.getMessage('viewOnHhttps')}</a>
       </div>
     `;
 
@@ -735,7 +735,7 @@
       const text = getCurrentEditableText();
       const domain = getCurrentDomain();
       if (!text || !text.trim()) {
-        flashError('Bitte zuerst Text in das Feld eingeben');
+        flashError(chrome.i18n.getMessage('flashEnterTextFirst'));
         sendResponse({ ok: false });
         return;
       }
@@ -754,7 +754,7 @@
       return;
     }
     if (msg.type === 'SIGN_ERROR') {
-      flashError(msg.error || 'Signieren fehlgeschlagen');
+      flashError(msg.error || chrome.i18n.getMessage('flashSigningFailed'));
       sendResponse({ ok: true });
       return;
     }
@@ -783,7 +783,7 @@
   function insertIntoFocused(marker) {
     const el = lastFocusedEditable || document.activeElement;
     if (!el) {
-      flashError('Klicke zuerst in ein Eingabefeld');
+      flashError(chrome.i18n.getMessage('flashClickFieldFirst'));
       return;
     }
     if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
@@ -802,7 +802,7 @@
       sel.addRange(range);
       document.execCommand('insertText', false, ' ' + marker);
     }
-    flashSuccess('HHTTPS-Signatur eingefügt');
+    flashSuccess(chrome.i18n.getMessage('flashInserted'));
   }
 
   function flashSuccess(msg) {

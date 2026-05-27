@@ -159,11 +159,11 @@ export async function handleGithubCallback({ code, state, redirectBase }) {
 
   const sessionId = await consumePendingState(state);
   if (!sessionId) {
-    throw new Error('Ungültiger oder abgelaufener State.');
+    throw new Error('Invalid or expired state.');
   }
 
   const session = await db.sessions.get(sessionId);
-  if (!session) throw new Error('Session nicht mehr vorhanden.');
+  if (!session) throw new Error('Session no longer exists.');
 
   // 1. Exchange code for access token
   const tokenRes = await fetch(GITHUB_OAUTH_TOKEN, {
@@ -180,11 +180,11 @@ export async function handleGithubCallback({ code, state, redirectBase }) {
     }),
   });
   if (!tokenRes.ok) {
-    throw new Error(`GitHub Token-Tausch fehlgeschlagen (${tokenRes.status}).`);
+    throw new Error(`GitHub token exchange failed (${tokenRes.status}).`);
   }
   const tokenData = await tokenRes.json();
   if (!tokenData.access_token) {
-    throw new Error('GitHub hat kein access_token zurückgegeben: ' + (tokenData.error_description || tokenData.error || 'unbekannt'));
+    throw new Error('GitHub did not return an access_token: ' + (tokenData.error_description || tokenData.error || 'unknown'));
   }
 
   // 2. Fetch user profile

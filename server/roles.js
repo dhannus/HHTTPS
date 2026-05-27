@@ -1,6 +1,13 @@
 /**
  * HHTTPS Role Definitions — v4.1
- * 14 roles covering professional, public, educational, and basic citizenship
+ * 15 roles covering professional, public, educational, and basic citizenship.
+ *
+ * CANONICAL LANGUAGE: English.
+ * This module is the protocol layer. Every human-readable string here is the
+ * English canonical that the API serves and that is embedded into tokens.
+ * User-facing translations (de, …) live in ./roles.i18n.js and never leak
+ * into the protocol. Dependency direction is one-way: roles.i18n.js imports
+ * from roles.js, never the reverse.
  *
  * Verification levels:
  *   self-declared        → 30 (baseline)
@@ -16,284 +23,285 @@ export const ROLES = {
   // ─── Basic / Universal ─────────────────────────────────────────────────────
 
   citizen: {
-    id: 'citizen', label: 'Bürger', labelEn: 'Citizen', icon: '🧑',
-    description: 'Verifizierter Mensch ohne spezifische Berufsrolle.',
+    id: 'citizen', label: 'Citizen', icon: '🧑',
+    description: 'Verified human with no specific professional role.',
     verificationMethods: ['self-declared', 'webauthn'],
     privileges: [
-      'Teilnahme an öffentlichen Debatten als verifizierter Mensch',
-      'Schutz vor Deepfake-Missbrauch der eigenen Identität',
-      'Recht auf anonyme Kommunikation mit HHTTPS-Kennzeichnung'
+      'Participate in public debate as a verified human',
+      "Protection against deepfake misuse of one's own identity",
+      'Right to anonymous communication carrying an HHTTPS marker'
     ],
-    userStory: 'US-001: Als Bürger möchte ich beweisen können, dass ich ein Mensch bin, ohne meine Identität preiszugeben.'
+    userStory: 'US-001: As a citizen, I want to be able to prove that I am a human without revealing my identity.'
   },
 
   // ─── Media & Public Discourse ──────────────────────────────────────────────
 
   journalist: {
-    id: 'journalist', label: 'Journalist', labelEn: 'Journalist', icon: '📰',
-    description: 'Pressevertreter mit journalistischen Privilegien im digitalen Raum.',
+    id: 'journalist', label: 'Journalist', icon: '📰',
+    description: 'Member of the press with journalistic privileges in the digital sphere.',
     verificationMethods: ['self-declared', 'press-card', 'email-verified'],
     verificationHints: {
-      'press-card':    'Presseausweis-Nummer (DJV, dju, VDZ)',
-      'email-verified': 'Redaktions-E-Mail-Adresse'
+      'press-card':     'Press-card number (DJV, dju, VDZ)',
+      'email-verified': 'Editorial / newsroom email address'
     },
     privileges: [
-      'Zugang zu HHTTPS-geschützten Pressebereichen',
-      'Verifizierte Quellenangabe in digitalen Publikationen',
-      'Schutz vor Identitätsmissbrauch als Journalist durch KI'
+      'Access to HHTTPS-protected press areas',
+      'Verified attribution of sources in digital publications',
+      'Protection against AI impersonation as a journalist'
     ],
-    userStory: 'US-012: Als Journalist möchte ich verifizieren können, dass meine digitale Identität nicht durch KI-Deepfakes kompromittiert wird.'
+    userStory: 'US-012: As a journalist, I want to be able to verify that my digital identity is not compromised by AI deepfakes.'
   },
 
   // ─── Education ─────────────────────────────────────────────────────────────
 
   student: {
-    id: 'student', label: 'Schüler / Student', labelEn: 'Student', icon: '🎓',
-    description: 'Schüler oder Student an einer Bildungseinrichtung.',
+    id: 'student', label: 'Student', icon: '🎓',
+    description: 'Pupil or student at an educational institution.',
     verificationMethods: ['self-declared', 'email-verified', 'student-id'],
     verificationHints: {
-      'email-verified': 'Bildungs-E-Mail (.edu, .ac.de, uni-*, hs-*, fh-*)',
-      'student-id':     'Matrikelnummer + Institution'
+      'email-verified': 'Educational email (.edu, .ac.de, uni-*, hs-*, fh-*)',
+      'student-id':     'Matriculation number + institution'
     },
     privileges: [
-      'Zugang zu HHTTPS-geschützten Bildungsplattformen',
-      'Verifizierte Teilnahme an Online-Prüfungen',
-      'Schutz vor KI-generierten Prüfungsantworten durch Peers'
+      'Access to HHTTPS-protected educational platforms',
+      'Verified participation in online examinations',
+      'Protection against AI-generated exam answers submitted by peers'
     ],
-    userStory: 'US-023: Als Schüler möchte ich, dass meine Online-Prüfungsleistungen eindeutig als von mir stammend gekennzeichnet sind.'
+    userStory: 'US-023: As a student, I want my online exam submissions to be unambiguously marked as originating from me.'
   },
 
   teacher: {
-    id: 'teacher', label: 'Lehrer / Pädagoge', labelEn: 'Teacher', icon: '👨‍🏫',
-    description: 'Lehrkraft an Schule oder pädagogische Fachkraft.',
+    id: 'teacher', label: 'Teacher', icon: '👨‍🏫',
+    description: 'Schoolteacher or pedagogical professional.',
     verificationMethods: ['self-declared', 'school-email', 'teacher-id'],
     verificationHints: {
-      'school-email': 'Schul-E-Mail (.schule.[bundesland].de, *.bbs.*)',
-      'teacher-id':   'Lehrer-ID des Bundeslandes'
+      'school-email': 'School email (.schule.[state].de, *.bbs.*)',
+      'teacher-id':   'State-issued teacher ID'
     },
     privileges: [
-      'Verifizierte Eltern-Lehrer-Kommunikation',
-      'Authentische Bekanntmachungen, Noten, Zeugnisse',
-      'Schutz vor Fake-Lehrer-Identitäten in Schulchats'
+      'Verified parent–teacher communication',
+      'Authentic announcements, grades, and report cards',
+      'Protection against fake teacher identities in school chats'
     ],
-    userStory: 'US-089: Als Lehrer möchte ich, dass Eltern verlässlich erkennen können, dass eine Nachricht tatsächlich von mir stammt — nicht von einer KI im Schulchat.'
+    userStory: 'US-089: As a teacher, I want parents to reliably recognise that a message genuinely comes from me — not from an AI in the school chat.'
   },
 
   // ─── Professionals: Knowledge & Creative ───────────────────────────────────
 
   researcher: {
-    id: 'researcher', label: 'Wissenschaftler', labelEn: 'Researcher', icon: '🔬',
-    description: 'Forscher, Professor oder wissenschaftlicher Mitarbeiter.',
+    id: 'researcher', label: 'Researcher', icon: '🔬',
+    description: 'Researcher, professor, or academic staff member.',
     verificationMethods: ['self-declared', 'email-verified', 'orcid'],
     verificationHints: {
-      'email-verified': 'Universitäts-E-Mail (.uni-*, .tu-*, .lmu.de, etc.)',
-      'orcid':          'ORCID-Kennung (https://orcid.org/...)'
+      'email-verified': 'University email (.uni-*, .tu-*, .lmu.de, etc.)',
+      'orcid':          'ORCID identifier (https://orcid.org/...)'
     },
     privileges: [
-      'Verifizierte Autorenschaft wissenschaftlicher Publikationen',
-      'HHTTPS-Nachweis für Peer-Review-Prozesse',
-      'Schutz wissenschaftlicher Reputation vor KI-Fakes'
+      'Verified authorship of academic publications',
+      'HHTTPS proof for peer-review processes',
+      'Protection of academic reputation against AI fakes'
     ],
-    userStory: 'US-045: Als Forscher möchte ich, dass meine Publikationen eindeutig als von mir verfasst nachweisbar sind.'
+    userStory: 'US-045: As a researcher, I want my publications to be unambiguously provable as authored by me.'
   },
 
   creative: {
-    id: 'creative', label: 'Kreativschaffender', labelEn: 'Creative Professional', icon: '🎭',
-    description: 'Künstler, Synchronsprecher, Autor, Musiker oder anderer Kreativschaffender.',
+    id: 'creative', label: 'Creative Professional', icon: '🎭',
+    description: 'Artist, voice actor, author, musician, or other creative professional.',
     verificationMethods: ['self-declared', 'association-member', 'email-verified'],
     verificationHints: {
-      'association-member': 'Mitgliedsnummer VDS, BFFS, Die Gilde, BSD, GEMA, VG Wort'
+      'association-member': 'Membership number (VDS, BFFS, Die Gilde, BSD, GEMA, VG Wort)'
     },
     privileges: [
-      'Schutz der Stimme und des Gesichts vor unbefugtem KI-Klonen',
-      'Nachweis menschlicher Urheberschaft bei KI-ähnlichen Werken',
-      'Verifizierte Identität in Kreativplattformen'
+      "Protection of one's voice and face against unauthorised AI cloning",
+      'Proof of human authorship for AI-like works',
+      'Verified identity on creative platforms'
     ],
-    userStory: 'US-034: Als Synchronsprecherin möchte ich, dass meine Stimme nicht ohne meine Einwilligung für KI-Training verwendet wird.'
+    userStory: 'US-034: As a voice actor, I want my voice not to be used for AI training without my consent.'
   },
 
   developer: {
-    id: 'developer', label: 'Entwickler', labelEn: 'Developer', icon: '💻',
-    description: 'Software-Entwickler oder technischer Fachmann.',
+    id: 'developer', label: 'Developer', icon: '💻',
+    description: 'Software developer or technical professional.',
     verificationMethods: ['self-declared', 'github-verified', 'email-verified'],
     verificationHints: {
-      'github-verified': 'GitHub-Account mit Commit-History'
+      'github-verified': 'GitHub account with commit history'
     },
     privileges: [
-      'API-Zugang mit erhöhten Rate-Limits',
-      'Zugang zu HHTTPS-Testumgebungen',
-      'Verifizierte Code-Autorenschaft'
+      'API access with raised rate limits',
+      'Access to HHTTPS test environments',
+      'Verified code authorship'
     ],
-    userStory: 'US-056: Als Entwickler möchte ich HHTTPS in meine Anwendung integrieren und meinen Nutzern menschliche Verifikation anbieten.'
+    userStory: 'US-056: As a developer, I want to integrate HHTTPS into my application and offer human verification to my users.'
   },
 
   // ─── Healthcare ────────────────────────────────────────────────────────────
 
   medical_professional: {
-    id: 'medical_professional', label: 'Arzt / Medizinerin', labelEn: 'Medical Professional', icon: '🩺',
-    description: 'Approbierter Arzt oder Ärztin, Zahnarzt, Tierarzt oder Apotheker.',
+    id: 'medical_professional', label: 'Medical Professional', icon: '🩺',
+    description: 'Licensed physician, dentist, veterinarian, or pharmacist.',
     verificationMethods: ['self-declared', 'approbation-id', 'medical-email'],
     verificationHints: {
-      'approbation-id': 'Approbationsnummer (Bundesärztekammer-Eintrag)',
-      'medical-email':  'Praxis- oder Klinik-E-Mail-Adresse'
+      'approbation-id': 'Medical licence number (German Medical Association register)',
+      'medical-email':  'Practice or clinic email address'
     },
     privileges: [
-      'Verifizierte medizinische Auskünfte im Netz',
-      'Schutz vor Fake-Ärzten in Patientenforen und Telemedizin',
-      'Authentische Telemedizin-Kommunikation mit Patienten'
+      'Verified medical information online',
+      'Protection against fake physicians in patient forums and telemedicine',
+      'Authentic telemedicine communication with patients'
     ],
-    userStory: 'US-101: Als Patient möchte ich sicher sein, dass medizinische Auskünfte online tatsächlich von einem approbierten Arzt stammen — nicht von einer KI oder einem Laien.'
+    userStory: 'US-101: As a patient, I want to be sure that medical information online genuinely comes from a licensed physician — not from an AI or a layperson.'
   },
 
   caregiver: {
-    id: 'caregiver', label: 'Pflegekraft', labelEn: 'Care Professional', icon: '🤝',
-    description: 'Examinierte Pflegekraft, Altenpfleger, Krankenpfleger oder therapeutische Fachkraft.',
+    id: 'caregiver', label: 'Care Professional', icon: '🤝',
+    description: 'Certified care professional, geriatric nurse, registered nurse, or therapeutic professional.',
     verificationMethods: ['self-declared', 'care-chamber-id', 'email-verified'],
     verificationHints: {
-      'care-chamber-id': 'Mitgliedsnummer Pflegekammer (NRW, Nds, RLP)',
-      'email-verified':  'Klinik- oder Pflegeeinrichtungs-E-Mail'
+      'care-chamber-id': 'Care-chamber membership number (NRW, Lower Saxony, RLP)',
+      'email-verified':  'Clinic or care-facility email'
     },
     privileges: [
-      'Verifizierte Kommunikation mit Patienten und Angehörigen',
-      'Schutz vor Identitätsmissbrauch in Pflegeplattformen',
-      'Authentische Auskünfte zu Pflegegrad, Leistungen, Therapien'
+      'Verified communication with patients and relatives',
+      'Protection against identity misuse on care platforms',
+      'Authentic information on care levels, benefits, and therapies'
     ],
-    userStory: 'US-102: Als pflegende Angehörige möchte ich verlässlich erkennen können, ob Beratung von echtem Pflegepersonal stammt — gerade bei vulnerablen Patienten.'
+    userStory: 'US-102: As a caring relative, I want to reliably tell whether advice comes from genuine care staff — especially for vulnerable patients.'
   },
 
   // ─── Legal & Public Authority ──────────────────────────────────────────────
 
   lawyer: {
-    id: 'lawyer', label: 'Anwalt / Anwältin', labelEn: 'Attorney', icon: '⚖️',
-    description: 'Zugelassene Rechtsanwältin oder Rechtsanwalt.',
+    id: 'lawyer', label: 'Attorney', icon: '⚖️',
+    description: 'Admitted attorney-at-law.',
     verificationMethods: ['self-declared', 'bar-association-id', 'lawyer-email'],
     verificationHints: {
-      'bar-association-id': 'Eintrag in der Rechtsanwaltskammer',
-      'lawyer-email':       'Kanzlei-E-Mail-Adresse'
+      'bar-association-id': 'Entry in the bar association register',
+      'lawyer-email':       'Law-firm email address'
     },
     privileges: [
-      'Verifizierte Rechtsberatung im digitalen Raum',
-      'Schutz vor KI-generierter Pseudo-Rechtsberatung in eigenem Namen',
-      'Authentische Mandantenkommunikation, anwaltliche Schweigepflicht digital'
+      'Verified legal advice in the digital sphere',
+      "Protection against AI-generated pseudo-legal advice in one's own name",
+      'Authentic client communication, attorney–client privilege made digital'
     ],
-    userStory: 'US-103: Als Mandant möchte ich sicher sein, dass eine Rechtsauskunft online von einer zugelassenen Anwältin stammt — bei lebensverändernden Rechtsfragen.'
+    userStory: 'US-103: As a client, I want to be sure that legal advice online comes from an admitted attorney — for life-changing legal questions.'
   },
 
   notary: {
-    id: 'notary', label: 'Notar', labelEn: 'Notary', icon: '📜',
-    description: 'Bestellter Notar als Träger eines öffentlichen Amtes.',
+    id: 'notary', label: 'Notary', icon: '📜',
+    description: 'Appointed notary holding a public office.',
     verificationMethods: ['self-declared', 'notary-chamber-id'],
     verificationHints: {
-      'notary-chamber-id': 'Eintrag in der Notarkammer'
+      'notary-chamber-id': 'Entry in the notary chamber register'
     },
     privileges: [
-      'Verifizierte notarielle Auskünfte',
-      'HHTTPS-Authentifizierung bei digitaler Beurkundung',
-      'Höchste Vertrauensstufe in vermögensrechtlichen Angelegenheiten'
+      'Verified notarial information',
+      'HHTTPS authentication for digital notarisation',
+      'Highest trust level in matters of property law'
     ],
-    userStory: 'US-104: Als Bürger möchte ich bei Online-Beurkundungen sicher sein, dass der Notar tatsächlich bestellt und im Amt ist.'
+    userStory: 'US-104: As a citizen, I want to be sure during online notarisation that the notary is genuinely appointed and in office.'
   },
 
   civil_servant: {
-    id: 'civil_servant', label: 'Beamte / Behörde', labelEn: 'Civil Servant', icon: '🏛️',
-    description: 'Beamtin oder Beamter, Verwaltungsmitarbeiter oder Hoheitsträger (Polizei, Finanzamt, Sozialamt etc.).',
+    id: 'civil_servant', label: 'Civil Servant', icon: '🏛️',
+    description: 'Civil servant, administrative staff member, or public authority (police, tax office, social services, etc.).',
     verificationMethods: ['self-declared', 'official-email', 'service-id'],
     verificationHints: {
-      'official-email': 'Behörden-E-Mail (.bund.de, [bundesland].de)',
-      'service-id':     'Dienstausweisnummer'
+      'official-email': 'Government email (.bund.de, [state].de)',
+      'service-id':     'Service-ID number'
     },
     privileges: [
-      'Verifizierte Behördenkommunikation gegen Phishing',
-      'Authentische Bescheide, Anschreiben, Auskünfte',
-      'Schutz vor KI-generierten Falschbescheiden im Namen einer Behörde'
+      'Verified authority communication against phishing',
+      'Authentic notices, letters, and information',
+      "Protection against AI-generated false notices in an authority's name"
     ],
-    userStory: 'US-105: Als Bürger möchte ich erkennen können, ob eine E-Mail wirklich vom Finanzamt oder Sozialamt stammt — nicht von einem Phishing-Bot mit täuschend echtem Layout.'
+    userStory: 'US-105: As a citizen, I want to recognise whether an email genuinely comes from the tax office or social services — not from a phishing bot with a deceptively real layout.'
   },
 
   politician: {
-    id: 'politician', label: 'Politiker / Mandatsträger', labelEn: 'Politician', icon: '🗳️',
-    description: 'Gewählter Mandatsträger oder politischer Amtsinhaber.',
+    id: 'politician', label: 'Politician', icon: '🗳️',
+    description: 'Elected representative or political office holder.',
     verificationMethods: ['self-declared', 'official-email', 'bundestag-verified'],
     verificationHints: {
-      'official-email':     'Offizielle E-Mail (@bundestag.de, @landtag.*, @bundesregierung.de)',
-      'bundestag-verified': 'Abgeordneten-ID (Bundestag.de-Profil)'
+      'official-email':     'Official email (@bundestag.de, @landtag.*, @bundesregierung.de)',
+      'bundestag-verified': 'Member-of-parliament ID (Bundestag.de profile)'
     },
     privileges: [
-      'Verifizierte politische Kommunikation — kein Deepfake möglich',
-      'Schutz vor KI-generierten Falschaussagen in eigenem Namen',
-      'Höchste Vertrauensstufe in politischen Diskussionsplattformen'
+      'Verified political communication — no deepfake possible',
+      "Protection against AI-generated false statements in one's own name",
+      'Highest trust level on political discussion platforms'
     ],
-    userStory: 'US-067: Als Bundestagsabgeordnete möchte ich, dass Aussagen in meinem Namen eindeutig als authentisch oder als Fälschung erkennbar sind.'
+    userStory: 'US-067: As a member of parliament, I want statements in my name to be unambiguously recognisable as authentic or as forgery.'
   },
 
   // ─── Business & Trades ─────────────────────────────────────────────────────
 
   business: {
-    id: 'business', label: 'Unternehmen', labelEn: 'Business', icon: '🏢',
-    description: 'Unternehmensvertreter oder juristische Person mit menschlichem Ansprechpartner.',
+    id: 'business', label: 'Business', icon: '🏢',
+    description: 'Company representative or legal entity with a human point of contact.',
     verificationMethods: ['self-declared', 'domain-verified', 'handelsregister'],
     verificationHints: {
-      'domain-verified':  'Firmen-Domain-Inhaberschaft',
-      'handelsregister':  'Handelsregisternummer (HRB/HRA)'
+      'domain-verified': 'Company domain ownership',
+      'handelsregister': 'Commercial-register number (HRB/HRA)'
     },
     privileges: [
-      'Verifizierte Unternehmenskommunikation',
-      'HHTTPS-Zertifikat für Websites ("Echter menschlicher Ansprechpartner")',
-      'Schutz vor KI-Phishing in Unternehmensnamen'
+      'Verified corporate communication',
+      'HHTTPS certificate for websites ("genuine human point of contact")',
+      "Protection against AI phishing in a company's name"
     ],
-    userStory: 'US-078: Als Unternehmen möchte ich meinen Kunden gegenüber nachweisen, dass Kommunikation von echten Mitarbeitern stammt.'
+    userStory: 'US-078: As a business, I want to prove to my customers that communication comes from genuine employees.'
   },
 
   craftsman: {
-    id: 'craftsman', label: 'Handwerker / Meister', labelEn: 'Skilled Tradesperson', icon: '🔧',
-    description: 'Handwerksmeister, Geselle oder Handwerksbetrieb.',
+    id: 'craftsman', label: 'Skilled Tradesperson', icon: '🔧',
+    description: 'Master craftsperson, journeyman, or trade business.',
     verificationMethods: ['self-declared', 'craft-chamber-id', 'master-certificate'],
     verificationHints: {
-      'craft-chamber-id':    'Eintrag in der Handwerksrolle (Handwerkskammer)',
-      'master-certificate':  'Meisterbrief-Nummer'
+      'craft-chamber-id':   'Entry in the trade register (chamber of skilled crafts)',
+      'master-certificate': 'Master-craftsman certificate number'
     },
     privileges: [
-      'Verifizierte Handwerker-Identität in Vergleichsportalen',
-      'Schutz vor Fake-Bewertungen und Identitätsdiebstahl',
-      'Authentische Angebote und Rechnungen'
+      'Verified tradesperson identity on comparison portals',
+      'Protection against fake reviews and identity theft',
+      'Authentic quotes and invoices'
     ],
-    userStory: 'US-106: Als Kunde möchte ich auf Handwerker-Plattformen erkennen können, ob ein Anbieter wirklich ein eingetragener Meister ist — nicht ein Fake-Profil mit gestohlenen Bildern.'
+    userStory: 'US-106: As a customer, I want to tell on tradesperson platforms whether a provider is genuinely a registered master craftsperson — not a fake profile with stolen images.'
   }
 };
 
-// Verification level definitions with trust scores
+// Verification level definitions with trust scores.
+// `label` is the English canonical; German lives in roles.i18n.js.
 export const VERIFICATION_LEVELS = {
-  'self-declared':         { level: 1, label: 'Selbstdeklariert',         trustScore: 30 },
-  'webauthn':              { level: 2, label: 'WebAuthn verifiziert',     trustScore: 60 },
-  'email-verified':        { level: 3, label: 'E-Mail verifiziert',       trustScore: 70 },
-  'github-verified':       { level: 3, label: 'GitHub verifiziert',       trustScore: 70 },
-  'school-email':          { level: 3, label: 'Schul-E-Mail',             trustScore: 75 },
-  'medical-email':         { level: 3, label: 'Klinik-/Praxis-E-Mail',    trustScore: 78 },
-  'lawyer-email':          { level: 3, label: 'Kanzlei-E-Mail',           trustScore: 78 },
-  'press-card':            { level: 4, label: 'Presseausweis',            trustScore: 85 },
-  'student-id':            { level: 4, label: 'Matrikelnummer',           trustScore: 85 },
-  'teacher-id':            { level: 4, label: 'Lehrer-ID',                trustScore: 86 },
-  'association-member':    { level: 4, label: 'Verbandsmitglied',         trustScore: 85 },
-  'orcid':                 { level: 4, label: 'ORCID verifiziert',        trustScore: 88 },
-  'craft-chamber-id':      { level: 4, label: 'Handwerksrolle',           trustScore: 86 },
-  'master-certificate':    { level: 5, label: 'Meisterbrief',             trustScore: 90 },
-  'care-chamber-id':       { level: 5, label: 'Pflegekammer',             trustScore: 90 },
-  'bar-association-id':    { level: 5, label: 'Rechtsanwaltskammer',      trustScore: 92 },
-  'notary-chamber-id':     { level: 5, label: 'Notarkammer',              trustScore: 95 },
-  'approbation-id':        { level: 5, label: 'Approbationsnummer',       trustScore: 93 },
-  'service-id':            { level: 5, label: 'Dienstausweis',            trustScore: 90 },
-  'official-email':        { level: 5, label: 'Offizielle E-Mail',        trustScore: 90 },
-  'domain-verified':       { level: 4, label: 'Domain verifiziert',       trustScore: 82 },
-  'handelsregister':       { level: 5, label: 'Handelsregister',          trustScore: 92 },
-  'bundestag-verified':    { level: 6, label: 'Bundestag verifiziert',    trustScore: 98 },
-  'institution-verified':  { level: 5, label: 'Institution verifiziert',  trustScore: 93 },
+  'self-declared':         { level: 1, label: 'Self-declared',              trustScore: 30 },
+  'webauthn':              { level: 2, label: 'WebAuthn verified',          trustScore: 60 },
+  'email-verified':        { level: 3, label: 'Email verified',             trustScore: 70 },
+  'github-verified':       { level: 3, label: 'GitHub verified',            trustScore: 70 },
+  'school-email':          { level: 3, label: 'School email',               trustScore: 75 },
+  'medical-email':         { level: 3, label: 'Clinic/practice email',      trustScore: 78 },
+  'lawyer-email':          { level: 3, label: 'Law-firm email',             trustScore: 78 },
+  'press-card':            { level: 4, label: 'Press card',                 trustScore: 85 },
+  'student-id':            { level: 4, label: 'Matriculation number',       trustScore: 85 },
+  'teacher-id':            { level: 4, label: 'Teacher ID',                 trustScore: 86 },
+  'association-member':    { level: 4, label: 'Association member',         trustScore: 85 },
+  'orcid':                 { level: 4, label: 'ORCID verified',             trustScore: 88 },
+  'craft-chamber-id':      { level: 4, label: 'Trade register',             trustScore: 86 },
+  'master-certificate':    { level: 5, label: 'Master-craftsman certificate', trustScore: 90 },
+  'care-chamber-id':       { level: 5, label: 'Care chamber',               trustScore: 90 },
+  'bar-association-id':    { level: 5, label: 'Bar association',            trustScore: 92 },
+  'notary-chamber-id':     { level: 5, label: 'Notary chamber',             trustScore: 95 },
+  'approbation-id':        { level: 5, label: 'Medical licence number',     trustScore: 93 },
+  'service-id':            { level: 5, label: 'Service ID',                 trustScore: 90 },
+  'official-email':        { level: 5, label: 'Official email',             trustScore: 90 },
+  'domain-verified':       { level: 4, label: 'Domain verified',            trustScore: 82 },
+  'handelsregister':       { level: 5, label: 'Commercial register',        trustScore: 92 },
+  'bundestag-verified':    { level: 6, label: 'Bundestag verified',         trustScore: 98 },
+  'institution-verified':  { level: 5, label: 'Institution verified',       trustScore: 93 },
 };
 
 // ─── Verification check registry (honesty gate) ───────────────────────────────
 //
 // A method only grants its trustScore if it is BACKED BY A REAL, AUTOMATED CHECK.
 // Methods that today are merely a typed-in number with NO verification against an
-// authority MUST NOT raise trust — entering "any" approbation number cannot be
+// authority MUST NOT raise trust — entering "any" medical-licence number cannot be
 // worth more than a plain self-declaration. Until the real check exists, such a
 // method is downgraded to self-declared (trust stays 30); the number is still
 // recorded so we can verify it later, and the token marks it as 'claimed'.
@@ -305,36 +313,37 @@ export const VERIFICATION_LEVELS = {
 //                        the score it WILL grant once the check is built.
 //
 // `status` mirrors this in the token: 'verified' | 'claimed' | 'planned'.
+// `note` is the English canonical; German lives in roles.i18n.js.
 export const VERIFICATION_CHECKS = {
   // ── Really verified today (automated) ──
   'github-verified': { implemented: true,  status: 'verified', note: 'GitHub OAuth (api.github.com).' },
-  'email-verified':  { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
-  'school-email':    { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
-  'medical-email':   { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
-  'lawyer-email':    { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
-  'official-email':  { implemented: true,  status: 'verified', note: 'E-Mail-Link + Domain-Klassifizierung.' },
-  'domain-verified': { implemented: true,  status: 'verified', note: 'Domain-Klassifizierung.' },
+  'email-verified':  { implemented: true,  status: 'verified', note: 'Email link + domain classification.' },
+  'school-email':    { implemented: true,  status: 'verified', note: 'Email link + domain classification.' },
+  'medical-email':   { implemented: true,  status: 'verified', note: 'Email link + domain classification.' },
+  'lawyer-email':    { implemented: true,  status: 'verified', note: 'Email link + domain classification.' },
+  'official-email':  { implemented: true,  status: 'verified', note: 'Email link + domain classification.' },
+  'domain-verified': { implemented: true,  status: 'verified', note: 'Domain classification.' },
   // ORCID: a real syntactic format gate runs (checksum-shaped regex). We treat
   // the format gate as a (weak) implemented check, but cap its trust low and
   // mark it 'claimed' because the ID is not confirmed against orcid.org.
-  'orcid':           { implemented: true,  status: 'claimed',  cap: 55, note: 'Nur Format geprüft, nicht gegen orcid.org.' },
+  'orcid':           { implemented: true,  status: 'claimed',  cap: 55, note: 'Format only, not confirmed against orcid.org.' },
 
   // ── NOT verified today — typed-in only → BREAK (trust stays self-declared) ──
   // targetTrust = the score each will grant ONCE its real check is built.
-  'press-card':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'DJV/dju/VDZ-Prüfung noch nicht angebunden.' },
-  'student-id':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'Hochschul-Prüfung noch nicht angebunden.' },
-  'teacher-id':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'Schulbehörden-Prüfung noch nicht angebunden.' },
-  'association-member': { implemented: false, status: 'claimed', targetTrust: 60, note: 'Verbands-Prüfung noch nicht angebunden.' },
-  'craft-chamber-id':   { implemented: false, status: 'claimed', targetTrust: 62, note: 'Handwerkskammer-Prüfung noch nicht angebunden.' },
-  'master-certificate': { implemented: false, status: 'claimed', targetTrust: 62, note: 'Meisterbrief-Prüfung noch nicht angebunden.' },
-  'care-chamber-id':    { implemented: false, status: 'claimed', targetTrust: 63, note: 'Pflegekammer-Prüfung noch nicht angebunden.' },
-  'bar-association-id': { implemented: false, status: 'claimed', targetTrust: 65, note: 'RAK-Prüfung noch nicht angebunden.' },
-  'notary-chamber-id':  { implemented: false, status: 'claimed', targetTrust: 65, note: 'Notarkammer-Prüfung noch nicht angebunden.' },
-  'approbation-id':     { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bundesärztekammer-Prüfung noch nicht angebunden.' },
-  'service-id':         { implemented: false, status: 'claimed', targetTrust: 63, note: 'Dienstausweis-Prüfung noch nicht angebunden.' },
-  'handelsregister':    { implemented: false, status: 'claimed', targetTrust: 65, note: 'Handelsregister-Prüfung noch nicht angebunden.' },
-  'institution-verified':{ implemented: false, status: 'claimed', targetTrust: 63, note: 'Institutions-Prüfung noch nicht angebunden.' },
-  'bundestag-verified': { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bundestags-Prüfung noch nicht angebunden.' },
+  'press-card':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'DJV/dju/VDZ check not yet connected.' },
+  'student-id':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'University check not yet connected.' },
+  'teacher-id':         { implemented: false, status: 'claimed', targetTrust: 60, note: 'Education-authority check not yet connected.' },
+  'association-member': { implemented: false, status: 'claimed', targetTrust: 60, note: 'Association check not yet connected.' },
+  'craft-chamber-id':   { implemented: false, status: 'claimed', targetTrust: 62, note: 'Chamber-of-crafts check not yet connected.' },
+  'master-certificate': { implemented: false, status: 'claimed', targetTrust: 62, note: 'Master-certificate check not yet connected.' },
+  'care-chamber-id':    { implemented: false, status: 'claimed', targetTrust: 63, note: 'Care-chamber check not yet connected.' },
+  'bar-association-id': { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bar-association check not yet connected.' },
+  'notary-chamber-id':  { implemented: false, status: 'claimed', targetTrust: 65, note: 'Notary-chamber check not yet connected.' },
+  'approbation-id':     { implemented: false, status: 'claimed', targetTrust: 65, note: 'Medical-association check not yet connected.' },
+  'service-id':         { implemented: false, status: 'claimed', targetTrust: 63, note: 'Service-ID check not yet connected.' },
+  'handelsregister':    { implemented: false, status: 'claimed', targetTrust: 65, note: 'Commercial-register check not yet connected.' },
+  'institution-verified':{ implemented: false, status: 'claimed', targetTrust: 63, note: 'Institution check not yet connected.' },
+  'bundestag-verified': { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bundestag check not yet connected.' },
 };
 
 // Helper: resolve the effective verification given a requested method.
@@ -372,52 +381,56 @@ export function resolveVerification(requestedMethod, baseTrust = 30) {
 // only needs to flip the verification method + trust — no schema change.
 //
 // The four groups map to German legal thresholds:
-//   minor_under_14  — JuSchG "Kind"
-//   minor_14_to_15  — strafmündig (§19 StGB), JuSchG "Jugendlicher"
-//   minor_16_to_17  — DSGVO-einwilligungsfähig (Art. 8), eingeschränkt geschäftsfähig
-//   adult_18_plus   — volljährig (§2 BGB)
+//   minor_under_14  — JuSchG "child"
+//   minor_14_to_15  — criminally responsible (§19 StGB), JuSchG "youth"
+//   minor_16_to_17  — GDPR-consent-capable (Art. 8), limited legal capacity
+//   adult_18_plus   — of full age (§2 BGB)
+//
+// `label`/`note` are the English canonical; German lives in roles.i18n.js.
 export const AGE_GROUPS = {
   minor_under_14: {
-    id: 'minor_under_14', label: 'Kind (unter 14)', labelEn: 'Child (under 14)',
+    id: 'minor_under_14', label: 'Child (under 14)',
     icon: '🧒', minAge: 0, maxAge: 13,
     // EUDI age_over_NN booleans that characterise this group (all false here)
     eudiClaims: { age_over_14: false, age_over_16: false, age_over_18: false },
-    note: 'JuSchG: Kind. Besonderer Schutz.'
+    note: 'JuSchG: child. Special protection.'
   },
   minor_14_to_15: {
-    id: 'minor_14_to_15', label: 'Jugendlich (14–15)', labelEn: 'Youth (14–15)',
+    id: 'minor_14_to_15', label: 'Youth (14–15)',
     icon: '🧑', minAge: 14, maxAge: 15,
     eudiClaims: { age_over_14: true, age_over_16: false, age_over_18: false },
-    note: 'Strafmündig (§19 StGB), JuSchG: Jugendlicher.'
+    note: 'Criminally responsible (§19 StGB), JuSchG: youth.'
   },
   minor_16_to_17: {
-    id: 'minor_16_to_17', label: 'Jugendlich (16–17)', labelEn: 'Youth (16–17)',
+    id: 'minor_16_to_17', label: 'Youth (16–17)',
     icon: '🧑', minAge: 16, maxAge: 17,
     eudiClaims: { age_over_14: true, age_over_16: true, age_over_18: false },
-    note: 'DSGVO Art. 8 einwilligungsfähig, eingeschränkt geschäftsfähig.'
+    note: 'GDPR Art. 8 consent-capable, limited legal capacity.'
   },
   adult_18_plus: {
-    id: 'adult_18_plus', label: 'Volljährig (18+)', labelEn: 'Adult (18+)',
+    id: 'adult_18_plus', label: 'Adult (18+)',
     icon: '🧑', minAge: 18, maxAge: null,
     eudiClaims: { age_over_14: true, age_over_16: true, age_over_18: true },
-    note: 'Volljährig (§2 BGB).'
+    note: 'Of full age (§2 BGB).'
   },
 };
 
 // How an age_group was established. Phase 1 ships only self-declared (honest,
 // low trust). Phase 3 adds eudi-wallet once the OpenID4VP verifier is wired up.
-//   self-declared → age_verified:false, trust 30 (Eigenangabe)
+//   self-declared → age_verified:false, trust 30 (self-declared)
 //   eudi-wallet   → age_verified:true,  trust 99 (PID selective disclosure)  [planned]
+//
+// `label`/`note` are the English canonical; German lives in roles.i18n.js.
 export const AGE_VERIFICATION_METHODS = {
   'self-declared': {
-    id: 'self-declared', label: 'Eigenangabe', labelEn: 'Self-declared',
+    id: 'self-declared', label: 'Self-declared',
     verified: false, trustScore: 30, available: true,
-    note: 'Selbst angegeben, noch nicht kryptografisch verifiziert.'
+    note: 'Self-declared, not yet cryptographically verified.'
   },
   'eudi-wallet': {
-    id: 'eudi-wallet', label: 'EUDI Wallet (PID)', labelEn: 'EUDI Wallet (PID)',
+    id: 'eudi-wallet', label: 'EUDI Wallet (PID)',
     verified: true, trustScore: 99, available: false,  // Phase 3
-    note: 'Altersnachweis per EUDI-Wallet (age_over_NN, Selective Disclosure). Geplant.'
+    note: 'Age proof via EUDI Wallet (age_over_NN, selective disclosure). Planned.'
   },
 };
 

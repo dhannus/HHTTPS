@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,30..100,0..1&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
+<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
 <style>
 :root {
   /* Dark teal/pastel-blue palette, derived from #06768d */
@@ -629,6 +630,10 @@ footer a{color:var(--cyan);text-decoration:none;}
   .tk-claims{grid-template-columns:repeat(2,1fr);}
   .api-tabs{overflow-x:auto;}
 }
+.lang-toggle{display:inline-flex;gap:2px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:100px;padding:2px;margin-left:6px;vertical-align:middle;}
+.lang-toggle button{border:none;background:transparent;color:var(--muted,#7a8aa0);font:600 11px/1 'JetBrains Mono',monospace;letter-spacing:.5px;padding:5px 9px;border-radius:100px;cursor:pointer;transition:all .15s;}
+.lang-toggle button:hover{color:var(--text,#e0ecff);}
+.lang-toggle button.active{background:rgba(0,229,255,.15);color:var(--cyan,#00e5ff);}
 </style>
 </head>
 <body>
@@ -642,17 +647,21 @@ footer a{color:var(--cyan);text-decoration:none;}
   </div>
   <div class="links">
     <a href="/hhttps/info" target="_blank">API Info</a>
-    <a href="/hhttps/roles" target="_blank">Alle Rollen</a>
+    <a href="/hhttps/roles" target="_blank" data-i18n="nav.roles">Alle Rollen</a>
     <a href="/spec" target="_blank">Spec</a>
     <a href="https://iamhmn.org" target="_blank">iamhmn.org</a>
-    <a href="https://github.com/dhannus/HumanProof" target="_blank">GitHub</a>
+    <a href="https://github.com/dhannus/HHTTPS" target="_blank">GitHub</a>
+    <span class="lang-toggle" role="group" aria-label="Language">
+      <button type="button" data-lang="de" class="active">DE</button>
+      <button type="button" data-lang="en">EN</button>
+    </span>
   </div>
 </div>
 
 <!-- Hero -->
 <div class="hero">
-  <h1>Mensch oder Maschine?<br><span>Und welche Rolle?</span></h1>
-  <p>HHTTPS v4.1 beantwortet nicht nur <em>„Ist das ein Mensch?"</em>, sondern auch <em>„Welche gesellschaftliche Rolle hat dieser Mensch?"</em> — kryptografisch verifiziert, Zero-Knowledge, offen.</p>
+  <h1><span data-i18n="hero.h1a">Mensch oder Maschine?</span><br><span data-i18n="hero.h1b">Und welche Rolle?</span></h1>
+  <p><span data-i18n="hero.p1">HHTTPS v4.1 beantwortet nicht nur</span> <em data-i18n="hero.q1">„Ist das ein Mensch?"</em><span data-i18n="hero.p2">, sondern auch</span> <em data-i18n="hero.q2">„Welche gesellschaftliche Rolle hat dieser Mensch?"</em> <span data-i18n="hero.p3">— kryptografisch verifiziert, Zero-Knowledge, offen.</span></p>
   <div class="caps">
     <div class="cap hi">human: true/false</div>
     <div class="cap hi">role: journalist | student | creative | ...</div>
@@ -696,31 +705,28 @@ footer a{color:var(--cyan);text-decoration:none;}
 <div class="teaser teaser-pp">
   <div class="teaser-ico">🕶️</div>
   <div class="teaser-body">
-    <span class="teaser-badge">NEU · ANONYM</span>
-    <h3>Anonym verifizieren — ganz ohne Profil</h3>
+    <span class="teaser-badge" data-i18n="pp.badge">NEU · ANONYM</span>
+    <h3 data-i18n="pp.h3">Anonym verifizieren — ganz ohne Profil</h3>
     <p>
-      Du willst beweisen, dass du ein Mensch bist, aber <strong>keine Identität preisgeben</strong>?
-      Mit Privacy Pass holst du dir kryptografische Tokens, die deine Menschlichkeit bestätigen —
-      <em>vollständig unverknüpfbar</em>. Niemand, auch wir nicht, kann deine Tokens
-      zu dir zurückverfolgen. Basiert auf den IETF-Standards RFC&nbsp;9576–9578 (VOPRF).
+      <span data-i18n="pp.p1">Du willst beweisen, dass du ein Mensch bist, aber</span> <strong data-i18n="pp.pStrong">keine Identität preisgeben</strong><span data-i18n="pp.p2">? Mit Privacy Pass holst du dir kryptografische Tokens, die deine Menschlichkeit bestätigen —</span> <em data-i18n="pp.pEm">vollständig unverknüpfbar</em><span data-i18n="pp.p3">. Niemand, auch wir nicht, kann deine Tokens zu dir zurückverfolgen. Basiert auf den IETF-Standards RFC&nbsp;9576–9578 (VOPRF).</span>
     </p>
-    <a href="/privacy-pass/" class="btn btn-p">🕶️ Anonym verifizieren →</a>
+    <a href="/privacy-pass/" class="btn btn-p" data-i18n="pp.cta">🕶️ Anonym verifizieren →</a>
   </div>
 </div>
 
 <!-- Main flow -->
 <div class="flow">
   <div class="flow-head">
-    <span class="flow-title">IDENTITÄTS-FLOW — INTERAKTIV</span>
-    <div class="live"><div class="ldot" id="ldot"></div><span id="llabel">bereit</span></div>
+    <span class="flow-title" data-i18n="flow.title">IDENTITÄTS-FLOW — INTERAKTIV</span>
+    <div class="live"><div class="ldot" id="ldot"></div><span id="llabel" data-i18n="flow.ready">bereit</span></div>
   </div>
   <div class="flow-body">
 
     <div class="stepper">
       <div class="st active" id="st1"><div class="n">1</div><span class="l">Passkey</span></div>
-      <div class="st"        id="st2"><div class="n">2</div><span class="l">Verifizieren</span></div>
-      <div class="st"        id="st3"><div class="n">3</div><span class="l">Rolle wählen</span></div>
-      <div class="st"        id="st3e"><div class="n">✉</div><span class="l">E-Mail</span></div>
+      <div class="st"        id="st2"><div class="n">2</div><span class="l" data-i18n="step.verify">Verifizieren</span></div>
+      <div class="st"        id="st3"><div class="n">3</div><span class="l" data-i18n="step.role">Rolle wählen</span></div>
+      <div class="st"        id="st3e"><div class="n">✉</div><span class="l" data-i18n="step.email">E-Mail</span></div>
       <div class="st"        id="st4"><div class="n">4</div><span class="l">Token</span></div>
     </div>
 
@@ -729,89 +735,85 @@ footer a{color:var(--cyan);text-decoration:none;}
     <!-- Phase 1: Register -->
     <div class="phase show" id="p1">
       <div class="desc">
-        <strong>Schritt 1 — Passkey anlegen (WebAuthn)</strong><br>
-        Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.
+        <strong data-i18n="p1.strong">Schritt 1 — Passkey anlegen (WebAuthn)</strong><br>
+        <span data-i18n="p1.body">Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.</span>
       </div>
       <div class="fp"><div class="fpr" id="fp1">🫆</div></div>
-      <button class="btn btn-p" id="btnReg" onclick="doRegister()">Passkey anlegen →</button>
+      <button class="btn btn-p" id="btnReg" onclick="doRegister()" data-i18n="btn.reg">Passkey anlegen →</button>
       &nbsp;
-      <button class="btn btn-c" id="btnSkip" onclick="skipToAuth()" title="Wenn du schon einen Passkey hast">Bereits registriert →</button>
+      <button class="btn btn-c" id="btnSkip" onclick="skipToAuth()" data-i18n-title="btn.skipTitle" title="Wenn du schon einen Passkey hast" data-i18n="btn.skip">Bereits registriert →</button>
     </div>
 
     <!-- Phase 2: Auth -->
     <div class="phase" id="p2">
       <div class="desc">
-        <strong>Schritt 2 — Menschsein beweisen</strong><br>
-        Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur — <strong>kein biometrisches Datum verlässt das Gerät.</strong>
+        <strong data-i18n="p2.strong">Schritt 2 — Menschsein beweisen</strong><br>
+        <span data-i18n="p2.body1">Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —</span> <strong data-i18n="p2.bodyStrong">kein biometrisches Datum verlässt das Gerät.</strong>
       </div>
       <div class="fp"><div class="fpr" id="fp2">🔐</div></div>
-      <button class="btn btn-p" id="btnAuth" onclick="doAuth()">Fingerabdruck / PIN bestätigen →</button>
+      <button class="btn btn-p" id="btnAuth" onclick="doAuth()" data-i18n="btn.auth">Fingerabdruck / PIN bestätigen →</button>
     </div>
 
     <!-- Phase 3: Role -->
     <div class="phase" id="p3">
       <div class="desc">
-        <strong>Schritt 3 — Rolle deklarieren</strong><br>
-        Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.
+        <strong data-i18n="p3.strong">Schritt 3 — Rolle deklarieren</strong><br>
+        <span data-i18n="p3.body">Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.</span>
       </div>
 
       <div class="role-grid" id="roleGrid"></div>
 
       <div class="trust-meter">
-        <div class="trust-label"><span>Trust Score</span><span id="trustVal">60 / 100</span></div>
+        <div class="trust-label"><span data-i18n="trust.label">Trust Score</span><span id="trustVal">60 / 100</span></div>
         <div class="trust-bar"><div class="trust-fill" id="trustFill" style="width:60%"></div></div>
       </div>
 
       <div class="veri-box show" id="veriBox">
-        <h4 id="veriBoxHeader">// OPTIONALE VERIFIKATION</h4>
+        <h4 id="veriBoxHeader" data-i18n="veri.optional">// OPTIONALE VERIFIKATION</h4>
         <p class="veri-intro" id="veriIntro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
-          Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.
+          <span data-i18n="veri.intro">Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.</span>
         </p>
-        <div class="veri-opts" id="veriOpts" role="tablist" aria-label="Verifikationsmethode wählen"></div>
+        <div class="veri-opts" id="veriOpts" role="tablist" data-i18n-aria="aria.veriMethod" aria-label="Verifikationsmethode wählen"></div>
 
         <!-- Dynamic content area for the chosen method. Filled by JS based on tab selection. -->
         <div id="veriSlot" style="margin-top:14px;"></div>
 
         <!-- Status badges (success states, shown after verification completes) -->
-        <div id="emailVerifiedBadge" class="verify-badge-row" style="display:none;">
-          ✓ E-Mail verifiziert — Trust Score erhöht!
-        </div>
+        <div id="emailVerifiedBadge" class="verify-badge-row" style="display:none;" data-i18n="email.verifiedBadge">✓ E-Mail verifiziert — Trust Score erhöht!</div>
         <div id="githubVerifiedBadge" class="verify-badge-row verify-badge-github" style="display:none;">
-          ✓ GitHub verifiziert — Trust Score <span id="githubTrustValue">—</span>
+          <span data-i18n="badge.github">✓ GitHub verifiziert — Trust Score</span> <span id="githubTrustValue">—</span>
         </div>
       </div>
 
       <!-- Optional age group (orthogonal to role). Phase 1: self-declared. -->
       <div class="veri-box show" id="ageBox" style="margin-top:14px;">
-        <h4>// ALTERSGRUPPE (OPTIONAL)</h4>
+        <h4 data-i18n="age.h4">// ALTERSGRUPPE (OPTIONAL)</h4>
         <p class="veri-intro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:6px;line-height:1.65;">
-          Grobe Altersgruppe statt Geburtsdatum — z. B. für Jugendschutz oder „18+"-Bereiche.
-          Aktuell <strong>Eigenangabe</strong> (Trust niedrig). Später per EUDI-Wallet kryptografisch verifizierbar.
+          <span data-i18n="age.intro1">Grobe Altersgruppe statt Geburtsdatum — z. B. für Jugendschutz oder „18+"-Bereiche.</span>
+          <span data-i18n="age.intro2a">Aktuell</span> <strong data-i18n="age.strong">Eigenangabe</strong> <span data-i18n="age.intro2b">(Trust niedrig). Später per EUDI-Wallet kryptografisch verifizierbar.</span>
         </p>
-        <div class="veri-opts" id="ageOpts" role="radiogroup" aria-label="Altersgruppe wählen">
-          <button type="button" class="veri-opt" data-age="" onclick="selectAge('')" aria-pressed="true">Keine Angabe</button>
-          <button type="button" class="veri-opt" data-age="minor_under_14" onclick="selectAge('minor_under_14')" aria-pressed="false">Unter 14</button>
+        <div class="veri-opts" id="ageOpts" role="radiogroup" data-i18n-aria="aria.ageGroup" aria-label="Altersgruppe wählen">
+          <button type="button" class="veri-opt" data-age="" onclick="selectAge('')" aria-pressed="true" data-i18n="age.none">Keine Angabe</button>
+          <button type="button" class="veri-opt" data-age="minor_under_14" onclick="selectAge('minor_under_14')" aria-pressed="false" data-i18n="age.under14">Unter 14</button>
           <button type="button" class="veri-opt" data-age="minor_14_to_15" onclick="selectAge('minor_14_to_15')" aria-pressed="false">14–15</button>
           <button type="button" class="veri-opt" data-age="minor_16_to_17" onclick="selectAge('minor_16_to_17')" aria-pressed="false">16–17</button>
           <button type="button" class="veri-opt" data-age="adult_18_plus" onclick="selectAge('adult_18_plus')" aria-pressed="false">18+</button>
         </div>
       </div>
 
-      <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled>
-        Rolle bestätigen + Token ausstellen →
-      </button>
+      <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled data-i18n="btn.declare">Rolle bestätigen + Token ausstellen →</button>
     </div>
 
     <!-- Phase 4: Token -->
     <div class="phase" id="p4">
       <div class="token-display show" id="tokenDisplay">
         <div class="tk-badge">
-          <div class="tk-b" id="tkBadge">✓ HHTTPS-Token ausgestellt</div>
+          <div class="tk-b" id="tkBadge" data-i18n="tk.badge">✓ HHTTPS-Token ausgestellt</div>
           <button type="button" id="btnLogout" onclick="doLogout()" class="btn-logout"
             style="margin-left:auto;font-size:12px;padding:6px 12px;background:transparent;
                    border:1px solid var(--b2);color:var(--text-muted-strong);
                    border-radius:6px;cursor:pointer;min-height:36px;"
-            aria-label="Abmelden und alle gespeicherten Token löschen">
+            data-i18n="logout.btn" data-i18n-aria="logout.title" aria-label="Abmelden und alle gespeicherten Token löschen">
             Abmelden
           </button>
         </div>
@@ -825,9 +827,32 @@ footer a{color:var(--cyan);text-decoration:none;}
         </div>
         <div id="tokenExpiryHint" style="margin-top:10px;font-size:12px;color:var(--text-muted-strong);min-height:18px;"></div>
       </div>
-      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled>
-        /hhttps/check aufrufen — Live-Test →
-      </button>
+      <!-- EUDI age verification (Phase 3 — cryptographic age upgrade via EUDI Wallet) -->
+      <div class="eudi-age" id="eudiAge" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--b2);">
+        <h4 data-i18n="eudi.h4" style="font-size:11px;letter-spacing:1.5px;color:var(--muted);margin:0 0 6px;">// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)</h4>
+        <p style="font-size:13px;color:var(--text-muted-strong);margin:0 0 10px;line-height:1.6;">
+          <span data-i18n="eudi.p1">Beweise eine Altersschwelle über deine EUDI-Wallet —</span> <strong data-i18n="eudi.p1Strong1">ohne Geburtsdatum</strong><span data-i18n="eudi.p2">. Selective Disclosure: es wird nur „über N Jahre: ja/nein" geteilt. Hebt die Altersgruppe von</span> <em data-i18n="eudi.pEm">Eigenangabe</em> <span data-i18n="eudi.p3">auf</span> <strong data-i18n="eudi.p1Strong2">verifiziert</strong> <span data-i18n="eudi.p4">(Trust 99).</span>
+        </p>
+        <div class="veri-opts" id="eudiThresholds" role="group" data-i18n-aria="eudi.ariaThresholds" aria-label="Altersschwelle wählen">
+          <button type="button" class="veri-opt" onclick="startEudiAge(14)" data-i18n="eudi.btn14">14+ nachweisen</button>
+          <button type="button" class="veri-opt" onclick="startEudiAge(16)" data-i18n="eudi.btn16">16+ nachweisen</button>
+          <button type="button" class="veri-opt" onclick="startEudiAge(18)" data-i18n="eudi.btn18">18+ nachweisen</button>
+        </div>
+        <div id="eudiQrBox" style="display:none;margin-top:14px;text-align:center;">
+          <img id="eudiQr" data-i18n-alt="eudi.qrAlt" alt="EUDI-Wallet QR-Code" width="180" height="180"
+               style="border-radius:10px;background:#fff;padding:8px;image-rendering:pixelated;" />
+          <div style="margin-top:10px;">
+            <a id="eudiDeepLink" href="#" rel="noopener"
+               style="font-size:13px;color:var(--accent,#6ee7c7);text-decoration:underline;"
+               data-i18n="eudi.deeplink">
+              Auf diesem Gerät mit Wallet öffnen →
+            </a>
+          </div>
+          <div id="eudiStatus" style="margin-top:10px;font-size:13px;min-height:20px;color:var(--text-muted-strong);"></div>
+        </div>
+      </div>
+
+      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled data-i18n="btn.check">/hhttps/check aufrufen — Live-Test →</button>
     </div>
 
   </div>
@@ -842,19 +867,19 @@ footer a{color:var(--cyan);text-decoration:none;}
     <div class="atab" onclick="showTab('response')">Response</div>
   </div>
   <div class="api-pane show" id="tab-curl">
-    <pre class="codeblock"><span class="cc"># HHTTPS-Token im Header senden → Antwort: Mensch + Rolle</span>
-<span class="cm">curl</span> -X POST https://hhttps.funnysearch.eu/hhttps/check \
-  -H <span class="cv">"HHTTPS-Token: &lt;dein-token&gt;"</span> \
+    <pre class="codeblock"><span class="cc"># Send the HHTTPS token in the header → response: human + role</span>
+<span class="cm">curl</span> -X POST https://hhttps.org/hhttps/check \
+  -H <span class="cv">"HHTTPS-Token: &lt;your-token&gt;"</span> \
   -H <span class="cv">"Content-Type: application/json"</span>
 
-<span class="cc"># Ohne Token → actorType: "unknown"</span>
-<span class="cm">curl</span> -X POST https://hhttps.funnysearch.eu/hhttps/check
+<span class="cc"># Without a token → actorType: "unknown"</span>
+<span class="cm">curl</span> -X POST https://hhttps.org/hhttps/check
 
-<span class="cc"># Alle verfügbaren Rollen</span>
-<span class="cm">curl</span> https://hhttps.funnysearch.eu/hhttps/roles | jq</pre>
+<span class="cc"># All available roles</span>
+<span class="cm">curl</span> https://hhttps.org/hhttps/roles | jq</pre>
   </div>
   <div class="api-pane" id="tab-js">
-    <pre class="codeblock"><span class="cc">// Integration in deine App</span>
+    <pre class="codeblock"><span class="cc">// Integrate into your app</span>
 <span class="ck">async function</span> <span class="co">checkHuman</span>(hhttpsToken) {
   <span class="ck">const</span> res = <span class="ck">await</span> fetch(<span class="cv">'/hhttps/check'</span>, {
     method: <span class="cv">'POST'</span>,
@@ -864,30 +889,30 @@ footer a{color:var(--cyan);text-decoration:none;}
   <span class="ck">const</span> data = <span class="ck">await</span> res.json();
 
   <span class="ck">if</span> (data.hhttps.human) {
-    console.log(<span class="cv">`Mensch ✓ · Rolle: ${data.role.label}`</span>);
+    console.log(<span class="cv">`Human ✓ · role: ${data.role.label}`</span>);
     console.log(<span class="cv">`Trust Score: ${data.role.trustScore}/100`</span>);
-    console.log(<span class="cv">`Privilegien:`, data.role.privileges</span>);
+    console.log(<span class="cv">`Privileges:`, data.role.privileges</span>);
   } <span class="ck">else</span> {
-    console.log(<span class="cv">'Bot oder unbekannter Akteur'</span>);
+    console.log(<span class="cv">'Bot or unknown actor'</span>);
   }
 }
 
-<span class="cc">// Response-Header direkt prüfen</span>
+<span class="cc">// Check response headers directly</span>
 <span class="ck">const</span> isHuman = res.headers.get(<span class="cv">'HHTTPS-Human'</span>) === <span class="cv">'true'</span>;
-<span class="ck">const</span> role    = res.headers.get(<span class="cv">'HHTTPS-Role'</span>);    <span class="cc">// z.B. "journalist"</span>
-<span class="ck">const</span> score   = res.headers.get(<span class="cv">'HHTTPS-Trust-Score'</span>); <span class="cc">// z.B. "85"</span></pre>
+<span class="ck">const</span> role    = res.headers.get(<span class="cv">'HHTTPS-Role'</span>);    <span class="cc">// e.g. "journalist"</span>
+<span class="ck">const</span> score   = res.headers.get(<span class="cv">'HHTTPS-Trust-Score'</span>); <span class="cc">// e.g. "85"</span></pre>
   </div>
   <div class="api-pane" id="tab-python">
     <pre class="codeblock"><span class="ck">import</span> requests
 
 <span class="ck">def</span> <span class="co">check_human</span>(hhttps_token: str) -> dict:
     res = requests.post(
-        <span class="cv">"https://hhttps.funnysearch.eu/hhttps/check"</span>,
+        <span class="cv">"https://hhttps.org/hhttps/check"</span>,
         headers={<span class="cv">"HHTTPS-Token"</span>: hhttps_token}
     )
     data = res.json()
 
-    <span class="cc"># Header-basierte Prüfung (schnell)</span>
+    <span class="cc"># Header-based check (fast)</span>
     is_human    = res.headers.get(<span class="cv">"HHTTPS-Human"</span>) == <span class="cv">"true"</span>
     role        = res.headers.get(<span class="cv">"HHTTPS-Role"</span>)
     trust_score = <span class="ck">int</span>(res.headers.get(<span class="cv">"HHTTPS-Trust-Score"</span>, <span class="cv">0</span>))
@@ -914,14 +939,14 @@ footer a{color:var(--cyan);text-decoration:none;}
     <span class="ck">"label"</span>:       <span class="cv">"Journalist"</span>,
     <span class="ck">"icon"</span>:        <span class="cv">"📰"</span>,
     <span class="ck">"level"</span>:       <span class="cv">"press-card"</span>,
-    <span class="ck">"levelLabel"</span>:  <span class="cv">"Presseausweis"</span>,
+    <span class="ck">"levelLabel"</span>:  <span class="cv">"Press card"</span>,
     <span class="ck">"trustScore"</span>:  <span class="cv">85</span>,
     <span class="ck">"privileges"</span>: [
-      <span class="cv">"Zugang zu HHTTPS-geschützten Pressebereichen"</span>,
-      <span class="cv">"Verifizierte Quellenangabe in digitalen Publikationen"</span>,
-      <span class="cv">"Schutz vor Identitätsmissbrauch als Journalist durch KI"</span>
+      <span class="cv">"Access to HHTTPS-protected press areas"</span>,
+      <span class="cv">"Verified attribution of sources in digital publications"</span>,
+      <span class="cv">"Protection against AI impersonation as a journalist"</span>
     ],
-    <span class="ck">"userStory"</span>: <span class="cv">"US-012: Als Journalist..."</span>
+    <span class="ck">"userStory"</span>: <span class="cv">"US-012: As a journalist..."</span>
   }
 }</pre>
   </div>
@@ -930,26 +955,22 @@ footer a{color:var(--cyan);text-decoration:none;}
 <!-- Token Verify — Public Service -->
 <div class="verify-section">
   <div class="verify-head">
-    <span class="verify-title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
+    <span class="verify-title" data-i18n="verify.title">TOKEN PRÜFEN — ÖFFENTLICHER SERVICE</span>
     <span class="verify-badge">🔍 Anyone can verify</span>
   </div>
   <div class="verify-body">
     <p class="verify-lead">
-      Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat?
-      Füg ihn hier ein und sieh sofort, ob er <em>kryptografisch gültig</em> ist und von welcher Rolle er stammt.
-      Keine Anmeldung nötig.
+      <span data-i18n="verify.lead1">Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er</span> <em data-i18n="verify.leadEm">kryptografisch gültig</em> <span data-i18n="verify.lead2">ist und von welcher Rolle er stammt. Keine Anmeldung nötig.</span>
     </p>
 
     <div class="verify-input-row">
       <input type="text"
              id="verifyTokenInput"
              class="verify-input"
-             placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
+             data-i18n-ph="verify.inputPh" placeholder="HHTTPS-Token einfügen (eyJhbGc...)"
              autocomplete="off"
              spellcheck="false" />
-      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()">
-        Prüfen →
-      </button>
+      <button class="verify-btn" id="verifyTokenBtn" onclick="verifyPastedToken()" data-i18n="verify.btn">Prüfen →</button>
     </div>
 
     <div class="verify-result" id="verifyResult">
@@ -960,7 +981,7 @@ footer a{color:var(--cyan);text-decoration:none;}
 
 <!-- Role table -->
 <div style="margin-bottom:32px;">
-  <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;margin-bottom:12px;">// VERFÜGBARE ROLLEN</div>
+  <div style="font-size:10px;color:var(--muted);letter-spacing:1.5px;margin-bottom:12px;">// AVAILABLE ROLES</div>
   <table class="role-table" id="roleTableFull"></table>
 </div>
 
@@ -987,7 +1008,7 @@ footer a{color:var(--cyan);text-decoration:none;}
 
   <div class="platforms-cta-row">
     <span>Run a platform?</span>
-    <a href="https://github.com/dhannus/HumanProof/blob/main/docs/oauth-integration.md">OAuth integration docs →</a>
+    <a href="https://github.com/dhannus/HHTTPS/blob/main/docs/oauth-integration.md">OAuth integration docs →</a>
     <a href="https://hhttps.org/.well-known/openid-configuration">OIDC discovery →</a>
   </div>
 </div>
@@ -995,7 +1016,7 @@ footer a{color:var(--cyan);text-decoration:none;}
 <!-- "Login mit HHTTPS"-Button für Plattformen + Maschinen-Hinweis -->
 <div class="usp-section">
   <div class="usp-head">
-    <span class="usp-title">FÜR ENTWICKLER & BOT-BETREIBER</span>
+    <span class="usp-title" data-i18n="usp.title">FÜR ENTWICKLER & BOT-BETREIBER</span>
     <span class="usp-badge">⚡ Integration</span>
   </div>
   <div class="usp-body">
@@ -1003,32 +1024,30 @@ footer a{color:var(--cyan);text-decoration:none;}
       <!-- Für Plattformen: Login mit HHTTPS -->
       <div class="usp-card">
         <div class="usp-icon">🔐</div>
-        <h3>"Mit HHTTPS bestätigen"-Button</h3>
-        <p>
+        <h3 data-i18n="usp.oauthH3">"Mit HHTTPS bestätigen"-Button</h3>
+        <p data-i18n="usp.oauthP">
           Baue auf deiner Plattform einen Button ein, mit dem sich verifizierte Menschen
           mit Rolle und Vertrauensstufe anmelden — ohne Passwörter, ohne deine Daten zu
           teilen. Pairwise-Subjects, PKCE, OpenID Connect.
         </p>
         <pre class="usp-code">&lt;a href="https://hhttps.org/hhttps/oauth/authorize
    ?response_type=code
-   &amp;client_id=DEIN_CLIENT
-   &amp;redirect_uri=https://deine-site.de/cb
+   &amp;client_id=YOUR_CLIENT
+   &amp;redirect_uri=https://your-site.com/cb
    &amp;scope=openid+role+verification_method
    &amp;code_challenge=...
    &amp;code_challenge_method=S256"&gt;
-  Mit HHTTPS bestätigen
+  Verify with HHTTPS
 &lt;/a&gt;</pre>
-        <a href="/spec#oauth" class="usp-link">Volle Integrations-Anleitung →</a>
+        <a href="/spec#oauth" class="usp-link" data-i18n="usp.oauthLink">Volle Integrations-Anleitung →</a>
       </div>
 
       <!-- Für Bots: Maschinen-Token -->
       <div class="usp-card usp-card-bot">
         <div class="usp-icon">🤖</div>
-        <h3>Auch Maschinen können hier teilnehmen</h3>
+        <h3 data-i18n="usp.botH3">Auch Maschinen können hier teilnehmen</h3>
         <p>
-          Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren,
-          eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet
-          (<code>actorType: bot</code>). So bleiben Plattformen ehrlich.
+          <span data-i18n="usp.botP1">Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren, eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet (</span><code>actorType: bot</code><span data-i18n="usp.botP2">). So bleiben Plattformen ehrlich.</span>
         </p>
         <pre class="usp-code">curl -X POST https://hhttps.org/hhttps/machine/register \
   -H "Content-Type: application/json" \
@@ -1038,7 +1057,7 @@ footer a{color:var(--cyan);text-decoration:none;}
     "role": "developer",
     "contactEmail": "ops@meinbot.de"
   }'</pre>
-        <a href="/spec#machine" class="usp-link">Maschinen-Token-Doku →</a>
+        <a href="/spec#machine" class="usp-link" data-i18n="usp.botLink">Maschinen-Token-Doku →</a>
       </div>
     </div>
   </div>
@@ -1048,15 +1067,12 @@ footer a{color:var(--cyan);text-decoration:none;}
 <div class="teaser teaser-wl">
   <div class="teaser-ico">⚙️</div>
   <div class="teaser-body">
-    <span class="teaser-badge">NEU · CI/CD</span>
-    <h3>Workload Identity — CI-Pipelines ohne gespeicherte Secrets</h3>
+    <span class="teaser-badge" data-i18n="wl.badge">NEU · CI/CD</span>
+    <h3 data-i18n="wl.h3">Workload Identity — CI-Pipelines ohne gespeicherte Secrets</h3>
     <p>
-      GitHub Actions, GitLab CI oder Buildkite tauschen ihr kurzlebiges OIDC-Token
-      gegen ein HHTTPS-Maschinen-Token — <strong>ganz ohne API-Key in der CI</strong>.
-      Das ausgestellte Token trägt nachvollziehbar, aus welchem Repository, Workflow
-      und Commit es stammt. Repos binden und verwalten kannst du im Workload-Bereich.
+      <span data-i18n="wl.p1">GitHub Actions, GitLab CI oder Buildkite tauschen ihr kurzlebiges OIDC-Token gegen ein HHTTPS-Maschinen-Token —</span> <strong data-i18n="wl.pStrong">ganz ohne API-Key in der CI</strong><span data-i18n="wl.p2">. Das ausgestellte Token trägt nachvollziehbar, aus welchem Repository, Workflow und Commit es stammt. Repos binden und verwalten kannst du im Workload-Bereich.</span>
     </p>
-    <a href="/workload.html" class="btn btn-p">⚙️ Workload Identity verwalten →</a>
+    <a href="/workload.html" class="btn btn-p" data-i18n="wl.cta">⚙️ Workload Identity verwalten →</a>
   </div>
 </div>
 
@@ -1136,7 +1152,7 @@ GET https://hhttps.org/hhttps/oauth/authorize?
   <div>
     <strong>Daniel Hannuschka</strong> · Initiative HumanProof ·
     <a href="mailto:daniel.hannuschka@tweakz.de">daniel.hannuschka@tweakz.de</a> ·
-    <a href="https://github.com/dhannus/HumanProof">GitHub</a> ·
+    <a href="https://github.com/dhannus/HHTTPS">GitHub</a> ·
     <a href="https://iamhmn.org">iamhmn.org</a>
   </div>
   <div>🔐 HHTTPS v0.4.1 · EUPL-1.2 · Made in Europe</div>
@@ -1167,48 +1183,262 @@ function selectAge(group) {
   });
 }
 
+// ── EUDI age verification (Phase 3 — drives the eudi-verifier orchestrator) ───
+// Starts a real OpenID4VP age presentation against the EU verifier backend,
+// shows a QR (cross-device) + deep-link (same-device), polls for the result,
+// and on success adopts the upgraded token (verified age, trust 99).
+let eudiPoll = null;
+async function startEudiAge(minAge) {
+  if (!sessionId) { msg(tr('eudi.msgNeedStep2'),'e'); return; }
+  if (eudiPoll) { clearInterval(eudiPoll); eudiPoll = null; }
+  const box = document.getElementById('eudiQrBox');
+  const statusEl = document.getElementById('eudiStatus');
+  try {
+    const r = await fetch('/eudi/age/request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hhttpsSession: sessionId, minAge })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.deepLink) { msg(d.error || tr('eudi.errRequest'),'e'); return; }
+
+    // Render the openid4vp:// link as a QR (cross-device) from the deep-link.
+    const qr = qrcode(0, 'L'); qr.addData(d.deepLink); qr.make();
+    document.getElementById('eudiQr').src = qr.createDataURL(4, 8);
+    // Same URL as a tappable deep-link (same-device on the phone itself).
+    document.getElementById('eudiDeepLink').href = d.deepLink;
+
+    box.style.display = '';
+    statusEl.textContent = `${tr('eudi.waitingPre')} ${minAge}+)`;
+    statusEl.style.color = 'var(--text-muted-strong)';
+    eudiPoll = setInterval(() => pollEudiStatus(d.requestId), 2000);
+  } catch (e) {
+    msg(tr('eudi.errBackend') + ' ' + e.message, 'e');
+  }
+}
+
+async function pollEudiStatus(requestId) {
+  let d;
+  try {
+    const r = await fetch('/eudi/age/status/' + encodeURIComponent(requestId));
+    d = await r.json();
+  } catch (e) { return; } // transient network hiccup — keep polling
+  const statusEl = document.getElementById('eudiStatus');
+  if (d.status === 'pending') return; // keep polling
+
+  if (eudiPoll) { clearInterval(eudiPoll); eudiPoll = null; }
+
+  if (d.status === 'verified') {
+    statusEl.textContent = tr('eudi.statusVerifiedPre') + ' ' + (d.ageGroup?.label || '') + ' ' + tr('eudi.statusSuffix');
+    statusEl.style.color = 'var(--ok,#34d399)';
+    msg(tr('eudi.msgVerified'),'s');
+
+    // Adopt the upgraded token (verified age, trust 99) and persist it so the
+    // browser extension and other tabs see the verified identity.
+    if (d.hhttps && d.hhttps.token) {
+      hhttpsToken = d.hhttps.token;
+      try {
+        const raw = localStorage.getItem('hhttps_identity');
+        if (raw) {
+          const id = JSON.parse(raw);
+          id.token = d.hhttps.token;
+          id.ageGroup = d.ageGroup || id.ageGroup;
+          localStorage.setItem('hhttps_identity', JSON.stringify(id));
+          window.postMessage({ source:'hhttps-org', type:'identity-issued', payload:id },
+                             window.location.origin);
+        }
+      } catch (e) {}
+    }
+    // Update the AGE GROUP field in the token card to the verified value.
+    if (d.ageGroup && d.ageGroup.id) {
+      document.getElementById('tcAge').textContent = d.ageGroup.label + ' ✓';
+      document.getElementById('tcAgeWrap').style.display = '';
+    }
+  } else if (d.status === 'expired') {
+    statusEl.textContent = tr('eudi.expired');
+    statusEl.style.color = 'var(--err,#f87171)';
+  } else if (d.status === 'failed') {
+    statusEl.textContent = tr('eudi.noAge');
+    statusEl.style.color = 'var(--err,#f87171)';
+  } else {
+    statusEl.textContent = tr('eudi.errVerify');
+    statusEl.style.color = 'var(--err,#f87171)';
+  }
+}
+
 const ROLES_LOCAL = {
-  citizen:              { icon:'🧑',   label:'Bürger',                 methods:['self-declared'] },
-  journalist:           { icon:'📰',   label:'Journalist',             methods:['self-declared','press-card','email-verified'] },
-  student:              { icon:'🎓',   label:'Schüler / Student',      methods:['self-declared','email-verified','student-id'] },
-  teacher:              { icon:'👨‍🏫', label:'Lehrer / Pädagoge',     methods:['self-declared','school-email','teacher-id'] },
-  researcher:           { icon:'🔬',   label:'Wissenschaftler',        methods:['self-declared','email-verified','orcid'] },
-  creative:             { icon:'🎭',   label:'Kreativschaffender',     methods:['self-declared','association-member','email-verified'] },
-  developer:            { icon:'💻',   label:'Entwickler',             methods:['self-declared','email-verified','github-verified'] },
-  medical_professional: { icon:'🩺',   label:'Arzt / Medizinerin',     methods:['self-declared','approbation-id','medical-email'] },
-  caregiver:            { icon:'🤝',   label:'Pflegekraft',            methods:['self-declared','care-chamber-id','email-verified'] },
-  lawyer:               { icon:'⚖️',  label:'Anwalt / Anwältin',      methods:['self-declared','bar-association-id','lawyer-email'] },
-  notary:               { icon:'📜',   label:'Notar',                  methods:['self-declared','notary-chamber-id'] },
-  civil_servant:        { icon:'🏛️',  label:'Beamte / Behörde',       methods:['self-declared','official-email','service-id'] },
-  politician:           { icon:'🗳️',  label:'Politiker',              methods:['self-declared','official-email','bundestag-verified'] },
-  business:             { icon:'🏢',   label:'Unternehmen',            methods:['self-declared','domain-verified','handelsregister'] },
-  craftsman:            { icon:'🔧',   label:'Handwerker / Meister',   methods:['self-declared','craft-chamber-id','master-certificate'] }
+  citizen:              { icon:'🧑',   label:'Bürger',               de:'Bürger',               en:'Citizen',              methods:['self-declared'] },
+  journalist:           { icon:'📰',   label:'Journalist',           de:'Journalist',           en:'Journalist',           methods:['self-declared','press-card','email-verified'] },
+  student:              { icon:'🎓',   label:'Schüler / Student',    de:'Schüler / Student',    en:'Student',              methods:['self-declared','email-verified','student-id'] },
+  teacher:              { icon:'👨‍🏫', label:'Lehrer / Pädagoge',   de:'Lehrer / Pädagoge',    en:'Teacher',              methods:['self-declared','school-email','teacher-id'] },
+  researcher:           { icon:'🔬',   label:'Wissenschaftler',      de:'Wissenschaftler',      en:'Researcher',           methods:['self-declared','email-verified','orcid'] },
+  creative:             { icon:'🎭',   label:'Kreativschaffender',   de:'Kreativschaffender',   en:'Creative',             methods:['self-declared','association-member','email-verified'] },
+  developer:            { icon:'💻',   label:'Entwickler',           de:'Entwickler',           en:'Developer',            methods:['self-declared','email-verified','github-verified'] },
+  medical_professional: { icon:'🩺',   label:'Arzt / Medizinerin',   de:'Arzt / Medizinerin',   en:'Medical Professional', methods:['self-declared','approbation-id','medical-email'] },
+  caregiver:            { icon:'🤝',   label:'Pflegekraft',          de:'Pflegekraft',          en:'Caregiver',            methods:['self-declared','care-chamber-id','email-verified'] },
+  lawyer:               { icon:'⚖️',  label:'Anwalt / Anwältin',    de:'Anwalt / Anwältin',    en:'Lawyer',               methods:['self-declared','bar-association-id','lawyer-email'] },
+  notary:               { icon:'📜',   label:'Notar',                de:'Notar',                en:'Notary',               methods:['self-declared','notary-chamber-id'] },
+  civil_servant:        { icon:'🏛️',  label:'Beamte / Behörde',     de:'Beamte / Behörde',     en:'Civil Servant',        methods:['self-declared','official-email','service-id'] },
+  politician:           { icon:'🗳️',  label:'Politiker',            de:'Politiker',            en:'Politician',           methods:['self-declared','official-email','bundestag-verified'] },
+  business:             { icon:'🏢',   label:'Unternehmen',          de:'Unternehmen',          en:'Business',             methods:['self-declared','domain-verified','handelsregister'] },
+  craftsman:            { icon:'🔧',   label:'Handwerker / Meister', de:'Handwerker / Meister', en:'Craftsperson',         methods:['self-declared','craft-chamber-id','master-certificate'] }
 };
 
 const VMETHOD_LABELS = {
-  'self-declared':       { l:'Selbstdeklariert',   score:30, field:null },
-  'email-verified':      { l:'E-Mail verifiziert', score:70, field:{p:'E-Mail-Adresse', key:'email'} },
-  'github-verified':     { l:'GitHub verifiziert', score:70, field:null },
-  'school-email':        { l:'Schul-E-Mail',       score:75, field:{p:'@*.schule.[bundesland].de', key:'email'} },
-  'medical-email':       { l:'Klinik-E-Mail',      score:78, field:{p:'Praxis-/Klinik-E-Mail', key:'email'} },
-  'lawyer-email':        { l:'Kanzlei-E-Mail',     score:78, field:{p:'Kanzlei-E-Mail', key:'email'} },
-  'domain-verified':     { l:'Domain verifiziert', score:82, field:{p:'Firmen-Domain', key:'domain'} },
-  'press-card':          { l:'Presseausweis',      score:85, field:{p:'Presseausweis-Nr.', key:'pressCardId'} },
-  'student-id':          { l:'Matrikelnummer',     score:85, field:{p:'Matrikelnummer + Uni', key:'studentId'} },
-  'association-member':  { l:'Verbandsmitglied',   score:85, field:{p:'Mitgliedsnr. (VDS/BFFS/...)', key:'memberId'} },
-  'teacher-id':          { l:'Lehrer-ID',          score:86, field:{p:'Lehrer-ID des Bundeslandes', key:'teacherId'} },
-  'craft-chamber-id':    { l:'Handwerksrolle',     score:86, field:{p:'Eintrag in der Handwerkskammer', key:'craftId'} },
-  'orcid':               { l:'ORCID',              score:88, field:{p:'ORCID (0000-0000-0000-0000)', key:'orcid'} },
-  'master-certificate':  { l:'Meisterbrief',       score:90, field:{p:'Meisterbrief-Nummer', key:'masterCertId'} },
-  'care-chamber-id':     { l:'Pflegekammer',       score:90, field:{p:'Pflegekammer-Mitgliedsnr.', key:'careId'} },
-  'service-id':          { l:'Dienstausweis',      score:90, field:{p:'Dienstausweis-Nummer', key:'serviceId'} },
-  'official-email':      { l:'Offizielle E-Mail',  score:90, field:{p:'@bundestag.de / @*.bund.de', key:'email'} },
-  'bar-association-id':  { l:'RAK-Eintrag',        score:92, field:{p:'Rechtsanwaltskammer-Eintrag', key:'barId'} },
-  'handelsregister':     { l:'Handelsregister',    score:92, field:{p:'HRB/HRA-Nummer', key:'hrNumber'} },
-  'approbation-id':      { l:'Approbation',        score:93, field:{p:'Approbationsnummer', key:'approbationId'} },
-  'notary-chamber-id':   { l:'Notarkammer',        score:95, field:{p:'Notarkammer-Eintrag', key:'notaryId'} },
-  'bundestag-verified':  { l:'Bundestag-ID',       score:98, field:{p:'Abgeordneten-ID (bundestag.de)', key:'bundestagId'} },
+  'self-declared':       { l:'Selbstdeklariert',   de:'Selbstdeklariert',   en:'Self-declared',        score:30, field:null },
+  'email-verified':      { l:'E-Mail verifiziert', de:'E-Mail verifiziert', en:'Email verified',       score:70, field:{p:'E-Mail-Adresse', pDe:'E-Mail-Adresse', pEn:'Email address', key:'email'} },
+  'github-verified':     { l:'GitHub verifiziert', de:'GitHub verifiziert', en:'GitHub verified',      score:70, field:null },
+  'school-email':        { l:'Schul-E-Mail',       de:'Schul-E-Mail',       en:'School email',         score:75, field:{p:'@*.schule.[bundesland].de', pDe:'@*.schule.[bundesland].de', pEn:'School email address', key:'email'} },
+  'medical-email':       { l:'Klinik-E-Mail',      de:'Klinik-E-Mail',      en:'Clinic email',         score:78, field:{p:'Praxis-/Klinik-E-Mail', pDe:'Praxis-/Klinik-E-Mail', pEn:'Practice/clinic email', key:'email'} },
+  'lawyer-email':        { l:'Kanzlei-E-Mail',     de:'Kanzlei-E-Mail',     en:'Law-firm email',       score:78, field:{p:'Kanzlei-E-Mail', pDe:'Kanzlei-E-Mail', pEn:'Law-firm email', key:'email'} },
+  'domain-verified':     { l:'Domain verifiziert', de:'Domain verifiziert', en:'Domain verified',      score:82, field:{p:'Firmen-Domain', pDe:'Firmen-Domain', pEn:'Company domain', key:'domain'} },
+  'press-card':          { l:'Presseausweis',      de:'Presseausweis',      en:'Press card',           score:85, field:{p:'Presseausweis-Nr.', pDe:'Presseausweis-Nr.', pEn:'Press card no.', key:'pressCardId'} },
+  'student-id':          { l:'Matrikelnummer',     de:'Matrikelnummer',     en:'Student ID',           score:85, field:{p:'Matrikelnummer + Uni', pDe:'Matrikelnummer + Uni', pEn:'Student ID + university', key:'studentId'} },
+  'association-member':  { l:'Verbandsmitglied',   de:'Verbandsmitglied',   en:'Association member',   score:85, field:{p:'Mitgliedsnr. (VDS/BFFS/...)', pDe:'Mitgliedsnr. (VDS/BFFS/...)', pEn:'Member no. (VDS/BFFS/...)', key:'memberId'} },
+  'teacher-id':          { l:'Lehrer-ID',          de:'Lehrer-ID',          en:'Teacher ID',           score:86, field:{p:'Lehrer-ID des Bundeslandes', pDe:'Lehrer-ID des Bundeslandes', pEn:'State teacher ID', key:'teacherId'} },
+  'craft-chamber-id':    { l:'Handwerksrolle',     de:'Handwerksrolle',     en:'Chamber of Crafts',    score:86, field:{p:'Eintrag in der Handwerkskammer', pDe:'Eintrag in der Handwerkskammer', pEn:'Chamber of Crafts entry', key:'craftId'} },
+  'orcid':               { l:'ORCID',              de:'ORCID',              en:'ORCID',                score:88, field:{p:'ORCID (0000-0000-0000-0000)', pDe:'ORCID (0000-0000-0000-0000)', pEn:'ORCID (0000-0000-0000-0000)', key:'orcid'} },
+  'master-certificate':  { l:'Meisterbrief',       de:'Meisterbrief',       en:'Master certificate',   score:90, field:{p:'Meisterbrief-Nummer', pDe:'Meisterbrief-Nummer', pEn:'Master certificate number', key:'masterCertId'} },
+  'care-chamber-id':     { l:'Pflegekammer',       de:'Pflegekammer',       en:'Nursing chamber',      score:90, field:{p:'Pflegekammer-Mitgliedsnr.', pDe:'Pflegekammer-Mitgliedsnr.', pEn:'Nursing chamber member no.', key:'careId'} },
+  'service-id':          { l:'Dienstausweis',      de:'Dienstausweis',      en:'Service ID',           score:90, field:{p:'Dienstausweis-Nummer', pDe:'Dienstausweis-Nummer', pEn:'Service ID number', key:'serviceId'} },
+  'official-email':      { l:'Offizielle E-Mail',  de:'Offizielle E-Mail',  en:'Official email',       score:90, field:{p:'@bundestag.de / @*.bund.de', pDe:'@bundestag.de / @*.bund.de', pEn:'@bundestag.de / @*.bund.de', key:'email'} },
+  'bar-association-id':  { l:'RAK-Eintrag',        de:'RAK-Eintrag',        en:'Bar association',      score:92, field:{p:'Rechtsanwaltskammer-Eintrag', pDe:'Rechtsanwaltskammer-Eintrag', pEn:'Bar association entry', key:'barId'} },
+  'handelsregister':     { l:'Handelsregister',    de:'Handelsregister',    en:'Commercial register',  score:92, field:{p:'HRB/HRA-Nummer', pDe:'HRB/HRA-Nummer', pEn:'HRB/HRA number', key:'hrNumber'} },
+  'approbation-id':      { l:'Approbation',        de:'Approbation',        en:'Medical licence',      score:93, field:{p:'Approbationsnummer', pDe:'Approbationsnummer', pEn:'Medical licence number', key:'approbationId'} },
+  'notary-chamber-id':   { l:'Notarkammer',        de:'Notarkammer',        en:'Notary chamber',       score:95, field:{p:'Notarkammer-Eintrag', pDe:'Notarkammer-Eintrag', pEn:'Notary chamber entry', key:'notaryId'} },
+  'bundestag-verified':  { l:'Bundestag-ID',       de:'Bundestag-ID',       en:'Bundestag ID',         score:98, field:{p:'Abgeordneten-ID (bundestag.de)', pDe:'Abgeordneten-ID (bundestag.de)', pEn:'MP ID (bundestag.de)', key:'bundestagId'} },
 };
+
+// ── i18n runtime (DE/EN toggle, shared storage key 'iamhmn-lang') ───────────
+const T = {
+  de: {
+    "nav.roles":"Alle Rollen",
+    "hero.h1a":"Mensch oder Maschine?","hero.h1b":"Und welche Rolle?",
+    "hero.p1":"HHTTPS v4.1 beantwortet nicht nur","hero.q1":"„Ist das ein Mensch?\"","hero.p2":", sondern auch","hero.q2":"„Welche gesellschaftliche Rolle hat dieser Mensch?\"","hero.p3":"— kryptografisch verifiziert, Zero-Knowledge, offen.",
+    "verify.title":"TOKEN PRÜFEN — ÖFFENTLICHER SERVICE",
+    "verify.lead1":"Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er","verify.leadEm":"kryptografisch gültig","verify.lead2":"ist und von welcher Rolle er stammt. Keine Anmeldung nötig.",
+    "verify.inputPh":"HHTTPS-Token einfügen (eyJhbGc...)","verify.btn":"Prüfen →",
+    "flow.title":"IDENTITÄTS-FLOW — INTERAKTIV","flow.ready":"bereit",
+    "step.verify":"Verifizieren","step.role":"Rolle wählen","step.email":"E-Mail",
+    "p1.strong":"Schritt 1 — Passkey anlegen (WebAuthn)","p1.body":"Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.",
+    "btn.reg":"Passkey anlegen →","btn.skip":"Bereits registriert →","btn.skipTitle":"Wenn du schon einen Passkey hast",
+    "p2.strong":"Schritt 2 — Menschsein beweisen","p2.body1":"Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —","p2.bodyStrong":"kein biometrisches Datum verlässt das Gerät.",
+    "btn.auth":"Fingerabdruck / PIN bestätigen →",
+    "p3.strong":"Schritt 3 — Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
+    "trust.label":"Trust Score","veri.optional":"// OPTIONALE VERIFIKATION","veri.intro":"Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.",
+    "email.p2":"), offizielle Behörden (","email.p3":") und Verbände werden automatisch erkannt. ","email.strong":"Die Adresse wird nicht gespeichert.",
+    "email.inputPh":"deine@email.de","btn.sendEmail":"✉ Link senden","email.verifiedBadge":"✓ E-Mail verifiziert — Trust Score erhöht!","badge.github":"✓ GitHub verifiziert — Trust Score",
+    "btn.declare":"Rolle bestätigen + Token ausstellen →","tk.badge":"✓ HHTTPS-Token ausgestellt","btn.check":"/hhttps/check aufrufen — Live-Test →",
+    "roletable.role":"Rolle","roletable.methods":"Verifikationsmethoden",
+    "btn.checking":"Prüfe…","vh.loading":"Token wird kryptografisch geprüft …",
+    "vh.noTokenStatus":"Kein Token angegeben","vh.noTokenSub":"Bitte füge einen HHTTPS-Token ein.",
+    "vh.invalidStatus":"Token ungültig","vh.invalidSub":"Signatur oder Token nicht gültig.",
+    "vh.machineStatus":"Maschine verifiziert","vh.machineSub":"Dieser Token wurde von einem Maschinen-Operator ausgestellt (kein Mensch).",
+    "vh.humanStatus":"Mensch verifiziert","vh.errorStatus":"Verbindungsfehler","vh.errorSub":"Server nicht erreichbar.",
+    "role.fallback":"Bürger","banner.wants":"möchte deine HHTTPS-Identität verifizieren.","banner.login":"Bitte logge dich unten ein — du wirst danach automatisch zurückgeleitet.",
+    "msg.confirmBio":"Bitte Fingerabdruck / Face ID / PIN bestätigen…","msg.passkeyReg":"✓ Passkey registriert!","msg.humanProven":"✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.",
+    "msg.doWebauthn":"Bitte erst WebAuthn durchführen.","msg.validEmail":"Bitte gültige E-Mail eingeben.","msg.emailConfirmed":"✓ E-Mail bestätigt! Bitte Rolle wählen und Token ausstellen.",
+    "msg.webauthnUnsupported":"⚠ WebAuthn wird von diesem Browser nicht unterstützt.","msg.passkeyFound":"Passkey gefunden — direkt zu Schritt 2.",
+    "btn.declareEmail":"Rolle + verifizierte E-Mail → Token ausstellen →","err.prefix":"Fehler: ","veri.header":"// OPTIONALE VERIFIKATION",
+    "msg.emailSent1":"✓ E-Mail gesendet! Bitte prüfe dein Postfach","msg.emailSent2":"Link gültig","msg.verified":"verifiziert","msg.domainVerifiedPre":"✓ E-Mail-Domain","msg.verifiedExcl":"verifiziert!",
+    "live.registering":"registrierung…","live.passkeyOk":"passkey ok","live.error":"fehler","live.signing":"signiere…","live.verified":"verifiziert ✓","live.issuing":"ausstellen…","live.tokenActive":"token aktiv ✓",
+    "hint.parliament":"🏛️ Offizielle Parlaments-E-Mail","hint.authority":"🏛️ Offizielle Behörden-E-Mail","hint.edu":"🎓 Bildungs-Domain erkannt","hint.media":"📰 Medien-Domain erkannt","hint.assoc":"🎭 Verbands-Domain erkannt","hint.standard":"✉ Standard E-Mail",
+    "pp.badge":"NEU · ANONYM","pp.h3":"Anonym verifizieren — ganz ohne Profil",
+    "pp.p1":"Du willst beweisen, dass du ein Mensch bist, aber","pp.pStrong":"keine Identität preisgeben","pp.p2":"? Mit Privacy Pass holst du dir kryptografische Tokens, die deine Menschlichkeit bestätigen —","pp.pEm":"vollständig unverknüpfbar","pp.p3":". Niemand, auch wir nicht, kann deine Tokens zu dir zurückverfolgen. Basiert auf den IETF-Standards RFC 9576–9578 (VOPRF).","pp.cta":"🕶️ Anonym verifizieren →",
+    "usp.title":"FÜR ENTWICKLER & BOT-BETREIBER","usp.oauthH3":"\"Mit HHTTPS bestätigen\"-Button","usp.oauthP":"Baue auf deiner Plattform einen Button ein, mit dem sich verifizierte Menschen mit Rolle und Vertrauensstufe anmelden — ohne Passwörter, ohne deine Daten zu teilen. Pairwise-Subjects, PKCE, OpenID Connect.","usp.oauthLink":"Volle Integrations-Anleitung →",
+    "usp.botH3":"Auch Maschinen können hier teilnehmen","usp.botP1":"Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren, eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet (","usp.botP2":"). So bleiben Plattformen ehrlich.","usp.botLink":"Maschinen-Token-Doku →",
+    "wl.badge":"NEU · CI/CD","wl.h3":"Workload Identity — CI-Pipelines ohne gespeicherte Secrets","wl.p1":"GitHub Actions, GitLab CI oder Buildkite tauschen ihr kurzlebiges OIDC-Token gegen ein HHTTPS-Maschinen-Token —","wl.pStrong":"ganz ohne API-Key in der CI","wl.p2":". Das ausgestellte Token trägt nachvollziehbar, aus welchem Repository, Workflow und Commit es stammt. Repos binden und verwalten kannst du im Workload-Bereich.","wl.cta":"⚙️ Workload Identity verwalten →",
+    "age.h4":"// ALTERSGRUPPE (OPTIONAL)","age.intro1":"Grobe Altersgruppe statt Geburtsdatum — z. B. für Jugendschutz oder „18+\"-Bereiche.","age.intro2a":"Aktuell","age.strong":"Eigenangabe","age.intro2b":"(Trust niedrig). Später per EUDI-Wallet kryptografisch verifizierbar.","age.none":"Keine Angabe","age.under14":"Unter 14","aria.veriMethod":"Verifikationsmethode wählen","aria.ageGroup":"Altersgruppe wählen",
+    "logout.btn":"Abmelden","logout.title":"Abmelden und alle gespeicherten Token löschen",
+    "slot.self1":"Du gibst deine Rolle selbst an, ohne weitere Verifikation. Trust Score:","slot.self2":". Du kannst deinen Score erhöhen, indem du oben einen anderen Tab wählst.",
+    "slot.email1":"Gib deine E-Mail-Adresse ein, um deine Rolle per Domain-Klassifikation zu bestätigen. Bildungs-Domains (",
+    "slot.ghAlready1":"✓ GitHub bereits verifiziert — Trust Score","slot.ghAlready2":"Auf diesem Gerät erkannt. Keine erneute GitHub-Anmeldung nötig.",
+    "slot.ghConnect1":"Verbinde dein GitHub-Konto, um deine Entwickler-Rolle zu bestätigen.","slot.ghConnectStrong":"Wir speichern keinen Benutzernamen und keine Konto-Daten","slot.ghConnect2":"— nur einen einseitig gehashten Anker, aus dem nichts rückrechenbar ist. Account-Alter, Repo-Anzahl und Follower fließen einmalig in einen Trust-Score (60–85) ein und werden danach verworfen.","slot.ghBtn":"🔐 Mit GitHub bestätigen",
+    "slot.genericField":"Trage deine Kennung ein. Die Eingabe wird nicht dauerhaft gespeichert, sondern nur einmalig im Token-Claim referenziert.",
+    "btn.issuing":"Token ausstellen…","msg.loginGithub1":"✓ Angemeldet — deine GitHub-Verifikation (Trust ","msg.loginGithub2":") wurde erkannt.",
+    "msg.emailTabInactive":"E-Mail-Eingabe nicht aktiv. Bitte den Tab \"E-Mail verifiziert\" wählen.","confirm.logout":"Wirklich abmelden? Das löscht den lokalen Token aus diesem Browser.",
+    "tok.validPre":"Token gültig — läuft ab in","tok.minute":"Minute","tok.minutes":"Minuten","tok.soon":"⚠ Token läuft in unter 1 Minute ab.","tok.expired":"✗ Token ist abgelaufen.",
+    "alert.sessionExpired":"Deine Sitzung ist abgelaufen. Du wirst abgemeldet.","confirm.refresh":"Dein HHTTPS-Token ist abgelaufen. Möchtest du eingeloggt bleiben?\n\n[OK] = Token erneuern\n[Abbrechen] = Abmelden","alert.noRefresh":"Kein Refresh-Token verfügbar — bitte neu anmelden.","alert.refreshFailed":"Token-Refresh fehlgeschlagen — bitte neu anmelden.","msg.tokenRenewed":"✓ Token erneuert.",
+    "msg.ghDone":"✓ GitHub-Verifikation abgeschlossen. Falls dein Login nicht mehr sichtbar ist, melde dich bitte erneut an.","msg.ghNeedPasskey":"Bitte erst per Passkey anmelden, bevor du GitHub verifizierst.","gh.newTab":"Ein neuer Tab wurde geöffnet. Bestätige dort mit GitHub und kehre dann hierher zurück.","gh.timeout":"Zeitüberschreitung. Bitte erneut versuchen.","gh.confirmedPre":"✓ GitHub bestätigt! Trust Score:",
+    "eudi.h4":"// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)","eudi.p1":"Beweise eine Altersschwelle über deine EUDI-Wallet —","eudi.p1Strong1":"ohne Geburtsdatum","eudi.p2":". Selective Disclosure: es wird nur „über N Jahre: ja/nein\" geteilt. Hebt die Altersgruppe von","eudi.pEm":"Eigenangabe","eudi.p3":"auf","eudi.p1Strong2":"verifiziert","eudi.p4":"(Trust 99).","eudi.ariaThresholds":"Altersschwelle wählen","eudi.btn14":"14+ nachweisen","eudi.btn16":"16+ nachweisen","eudi.btn18":"18+ nachweisen","eudi.qrAlt":"EUDI-Wallet QR-Code","eudi.deeplink":"Auf diesem Gerät mit Wallet öffnen →","eudi.msgNeedStep2":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen.","eudi.errRequest":"EUDI-Anfrage fehlgeschlagen.","eudi.waitingPre":"Warte auf Wallet… (Schwelle","eudi.errBackend":"EUDI-Backend nicht erreichbar:","eudi.statusVerifiedPre":"✓ Alter verifiziert:","eudi.statusSuffix":"(EUDI-Wallet)","eudi.msgVerified":"Alter kryptografisch verifiziert ✓","eudi.expired":"Sitzung abgelaufen — bitte erneut starten.","eudi.noAge":"Keine Altersangabe von der Wallet erhalten.","eudi.errVerify":"Fehler bei der Verifikation."
+  },
+  en: {
+    "nav.roles":"All roles",
+    "hero.h1a":"Human or machine?","hero.h1b":"And which role?",
+    "hero.p1":"HHTTPS v4.1 answers not only","hero.q1":"\u201cIs this a human?\u201d","hero.p2":", but also","hero.q2":"\u201cWhat societal role does this human have?\u201d","hero.p3":"\u2014 cryptographically verified, zero-knowledge, open.",
+    "verify.title":"VERIFY TOKEN — PUBLIC SERVICE",
+    "verify.lead1":"You received an HHTTPS token — from an email, a forum, a chat? Paste it here and instantly see whether it is","verify.leadEm":"cryptographically valid","verify.lead2":"and which role it comes from. No login required.",
+    "verify.inputPh":"Paste HHTTPS token (eyJhbGc...)","verify.btn":"Verify →",
+    "flow.title":"IDENTITY FLOW — INTERACTIVE","flow.ready":"ready",
+    "step.verify":"Verify","step.role":"Choose role","step.email":"Email",
+    "p1.strong":"Step 1 — Create passkey (WebAuthn)","p1.body":"Your device creates a cryptographic key pair in the secure chip. The private key never leaves your device. After registration you can verify yourself as a human and declare a role.",
+    "btn.reg":"Create passkey →","btn.skip":"Already registered →","btn.skipTitle":"If you already have a passkey",
+    "p2.strong":"Step 2 — Prove you're human","p2.body1":"Your device signs a server challenge locally with your private key. The server verifies the signature —","p2.bodyStrong":"no biometric data leaves the device.",
+    "btn.auth":"Confirm fingerprint / PIN →",
+    "p3.strong":"Step 3 — Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
+    "trust.label":"Trust Score","veri.optional":"// OPTIONAL VERIFICATION","veri.intro":"Choose a verification method to increase your trust score.",
+    "email.p2":"), official authorities (","email.p3":") and associations are detected automatically. ","email.strong":"The address is not stored.",
+    "email.inputPh":"you@email.com","btn.sendEmail":"✉ Send link","email.verifiedBadge":"✓ Email verified — trust score increased!","badge.github":"✓ GitHub verified — trust score",
+    "btn.declare":"Confirm role + issue token →","tk.badge":"✓ HHTTPS token issued","btn.check":"Call /hhttps/check — live test →",
+    "roletable.role":"Role","roletable.methods":"Verification methods",
+    "btn.checking":"Checking…","vh.loading":"Verifying token cryptographically …",
+    "vh.noTokenStatus":"No token provided","vh.noTokenSub":"Please paste an HHTTPS token.",
+    "vh.invalidStatus":"Token invalid","vh.invalidSub":"Signature or token not valid.",
+    "vh.machineStatus":"Machine verified","vh.machineSub":"This token was issued by a machine operator (not a human).",
+    "vh.humanStatus":"Human verified","vh.errorStatus":"Connection error","vh.errorSub":"Server not reachable.",
+    "role.fallback":"Citizen","banner.wants":"wants to verify your HHTTPS identity.","banner.login":"Please log in below — you'll be redirected automatically afterwards.",
+    "msg.confirmBio":"Please confirm fingerprint / Face ID / PIN…","msg.passkeyReg":"✓ Passkey registered!","msg.humanProven":"✓ Humanity proven cryptographically! Please choose a role.",
+    "msg.doWebauthn":"Please complete WebAuthn first.","msg.validEmail":"Please enter a valid email.","msg.emailConfirmed":"✓ Email confirmed! Please choose a role and issue the token.",
+    "msg.webauthnUnsupported":"⚠ WebAuthn is not supported by this browser.","msg.passkeyFound":"Passkey found — straight to step 2.",
+    "btn.declareEmail":"Role + verified email → issue token →","err.prefix":"Error: ","veri.header":"// OPTIONAL VERIFICATION",
+    "msg.emailSent1":"✓ Email sent! Please check your inbox","msg.emailSent2":"Link valid","msg.verified":"verified","msg.domainVerifiedPre":"✓ Email domain","msg.verifiedExcl":"verified!",
+    "live.registering":"registering…","live.passkeyOk":"passkey ok","live.error":"error","live.signing":"signing…","live.verified":"verified ✓","live.issuing":"issuing…","live.tokenActive":"token active ✓",
+    "hint.parliament":"🏛️ Official parliament email","hint.authority":"🏛️ Official authority email","hint.edu":"🎓 Education domain detected","hint.media":"📰 Media domain detected","hint.assoc":"🎭 Association domain detected","hint.standard":"✉ Standard email",
+    "pp.badge":"NEW · ANONYMOUS","pp.h3":"Verify anonymously — with no profile at all",
+    "pp.p1":"You want to prove you're human, but","pp.pStrong":"reveal no identity","pp.p2":"? With Privacy Pass you get cryptographic tokens that confirm your humanity —","pp.pEm":"fully unlinkable","pp.p3":". Nobody, not even us, can trace your tokens back to you. Based on the IETF standards RFC 9576–9578 (VOPRF).","pp.cta":"🕶️ Verify anonymously →",
+    "usp.title":"FOR DEVELOPERS & BOT OPERATORS","usp.oauthH3":"\"Verify with HHTTPS\" button","usp.oauthP":"Add a button to your platform that lets verified humans sign in with their role and trust level — without passwords, without sharing your data. Pairwise subjects, PKCE, OpenID Connect.","usp.oauthLink":"Full integration guide →",
+    "usp.botH3":"Machines can take part here too","usp.botP1":"Bots, AIs and automated services can register as machines, choose a role and get a machine token — transparently labelled (","usp.botP2":"). That keeps platforms honest.","usp.botLink":"Machine-token docs →",
+    "wl.badge":"NEW · CI/CD","wl.h3":"Workload Identity — CI pipelines without stored secrets","wl.p1":"GitHub Actions, GitLab CI or Buildkite exchange their short-lived OIDC token for an HHTTPS machine token —","wl.pStrong":"with no API key in the CI at all","wl.p2":". The issued token traceably carries which repository, workflow and commit it originates from. You can bind and manage repos in the workload area.","wl.cta":"⚙️ Manage Workload Identity →",
+    "age.h4":"// AGE GROUP (OPTIONAL)","age.intro1":"Rough age group instead of date of birth — e.g. for youth protection or \"18+\" areas.","age.intro2a":"Currently","age.strong":"self-declared","age.intro2b":"(low trust). Later cryptographically verifiable via EUDI wallet.","age.none":"No answer","age.under14":"Under 14","aria.veriMethod":"Choose verification method","aria.ageGroup":"Choose age group",
+    "logout.btn":"Log out","logout.title":"Log out and delete all stored tokens",
+    "slot.self1":"You declare your role yourself, without further verification. Trust score:","slot.self2":". You can raise your score by choosing a different tab above.",
+    "slot.email1":"Enter your email address to confirm your role via domain classification. Education domains (",
+    "slot.ghAlready1":"✓ GitHub already verified — trust score","slot.ghAlready2":"Detected on this device. No need to sign in with GitHub again.",
+    "slot.ghConnect1":"Connect your GitHub account to confirm your developer role.","slot.ghConnectStrong":"We store no username and no account data","slot.ghConnect2":"— only a one-way hashed anchor from which nothing can be reconstructed. Account age, repo count and followers flow once into a trust score (60–85) and are then discarded.","slot.ghBtn":"🔐 Verify with GitHub",
+    "slot.genericField":"Enter your identifier. The input is not stored permanently, only referenced once in the token claim.",
+    "btn.issuing":"Issuing token…","msg.loginGithub1":"✓ Signed in — your GitHub verification (trust ","msg.loginGithub2":") was detected.",
+    "msg.emailTabInactive":"Email input not active. Please choose the \"Email verified\" tab.","confirm.logout":"Really log out? This deletes the local token from this browser.",
+    "tok.validPre":"Token valid — expires in","tok.minute":"minute","tok.minutes":"minutes","tok.soon":"⚠ Token expires in under 1 minute.","tok.expired":"✗ Token has expired.",
+    "alert.sessionExpired":"Your session has expired. You will be logged out.","confirm.refresh":"Your HHTTPS token has expired. Do you want to stay logged in?\n\n[OK] = Refresh token\n[Cancel] = Log out","alert.noRefresh":"No refresh token available — please sign in again.","alert.refreshFailed":"Token refresh failed — please sign in again.","msg.tokenRenewed":"✓ Token renewed.",
+    "msg.ghDone":"✓ GitHub verification complete. If your login is no longer visible, please sign in again.","msg.ghNeedPasskey":"Please sign in with a passkey before verifying GitHub.","gh.newTab":"A new tab has opened. Confirm with GitHub there and then return here.","gh.timeout":"Timed out. Please try again.","gh.confirmedPre":"✓ GitHub verified! Trust score:",
+    "eudi.h4":"// VERIFY AGE CRYPTOGRAPHICALLY (EUDI WALLET)","eudi.p1":"Prove an age threshold via your EUDI wallet —","eudi.p1Strong1":"without your date of birth","eudi.p2":". Selective disclosure: only \"over N years: yes/no\" is shared. Lifts the age group from","eudi.pEm":"self-declared","eudi.p3":"to","eudi.p1Strong2":"verified","eudi.p4":"(trust 99).","eudi.ariaThresholds":"Choose age threshold","eudi.btn14":"Prove 14+","eudi.btn16":"Prove 16+","eudi.btn18":"Prove 18+","eudi.qrAlt":"EUDI wallet QR code","eudi.deeplink":"Open with wallet on this device →","eudi.msgNeedStep2":"Please complete step 2 (prove humanity) first.","eudi.errRequest":"EUDI request failed.","eudi.waitingPre":"Waiting for wallet… (threshold","eudi.errBackend":"EUDI backend not reachable:","eudi.statusVerifiedPre":"✓ Age verified:","eudi.statusSuffix":"(EUDI wallet)","eudi.msgVerified":"Age cryptographically verified ✓","eudi.expired":"Session expired — please start again.","eudi.noAge":"No age info received from the wallet.","eudi.errVerify":"Verification error."
+  }
+};
+let LANG = 'de';
+function tr(k){ return (T[LANG]||T.de)[k] ?? (T.de[k] ?? k); }
+function setLanguage(lang){
+  LANG = T[lang] ? lang : 'de';
+  document.documentElement.lang = LANG;
+  Object.values(ROLES_LOCAL).forEach(r => { r.label = (LANG==='en') ? r.en : r.de; });
+  Object.values(VMETHOD_LABELS).forEach(m => { m.l = (LANG==='en') ? m.en : m.de; if (m.field) m.field.p = (LANG==='en') ? m.field.pEn : m.field.pDe; });
+  document.querySelectorAll('[data-i18n]').forEach(e => { const v = tr(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
+  document.querySelectorAll('[data-i18n-ph]').forEach(e => { const v = tr(e.getAttribute('data-i18n-ph')); if (v != null) e.placeholder = v; });
+  document.querySelectorAll('[data-i18n-title]').forEach(e => { const v = tr(e.getAttribute('data-i18n-title')); if (v != null) e.title = v; });
+  document.querySelectorAll('[data-i18n-aria]').forEach(e => { const v = tr(e.getAttribute('data-i18n-aria')); if (v != null) e.setAttribute('aria-label', v); });
+  document.querySelectorAll('[data-i18n-alt]').forEach(e => { const v = tr(e.getAttribute('data-i18n-alt')); if (v != null) e.setAttribute('alt', v); });
+  try { buildRoleGrid(); } catch(e){}
+  try { buildRoleTable(); } catch(e){}
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.classList.toggle('active', b.dataset.lang === LANG));
+  try { localStorage.setItem('iamhmn-lang', LANG); } catch(e){}
+}
+function detectLang(){
+  try { const sv = localStorage.getItem('iamhmn-lang'); if (sv && T[sv]) return sv; } catch(e){}
+  const n = (navigator.language || 'de').slice(0,2).toLowerCase();
+  return T[n] ? n : 'de';
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.lang-toggle button').forEach(b => b.addEventListener('click', () => setLanguage(b.dataset.lang)));
+  setLanguage(detectLang());
+});
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
 function msg(t, type='i') {
@@ -1232,14 +1462,14 @@ async function verifyPastedToken() {
 
   if (!tok) {
     out.className = 'verify-result show';
-    out.innerHTML = renderVerifyHero('invalid', '🤔', 'Kein Token angegeben', 'Bitte füge einen HHTTPS-Token ein.', null, null);
+    out.innerHTML = renderVerifyHero('invalid', '🤔', tr('vh.noTokenStatus'), tr('vh.noTokenSub'), null, null);
     return;
   }
 
   btn.disabled = true;
-  btn.textContent = 'Prüfe…';
+  btn.textContent = tr('btn.checking');
   out.className = 'verify-result show';
-  out.innerHTML = '<div class="vr-hero"><div class="vr-icon">⏳</div><div class="vr-status" style="color:var(--muted)">Token wird kryptografisch geprüft …</div></div>';
+  out.innerHTML = '<div class="vr-hero"><div class="vr-icon">⏳</div><div class="vr-status" style="color:var(--muted)">'+tr('vh.loading')+'</div></div>';
 
   try {
     const res = await fetch('/hhttps/check', {
@@ -1250,8 +1480,8 @@ async function verifyPastedToken() {
     const data = await res.json();
 
     if (!res.ok) {
-      out.innerHTML = renderVerifyHero('invalid', '❌', 'Token ungültig',
-        data.error || 'Signatur oder Token nicht gültig.',
+      out.innerHTML = renderVerifyHero('invalid', '❌', tr('vh.invalidStatus'),
+        data.error || tr('vh.invalidSub'),
         null, null) +
         renderVerifyDetails({
           status: data.hhttps?.status || 'invalid',
@@ -1262,8 +1492,8 @@ async function verifyPastedToken() {
 
     // Machine token
     if (data.hhttps?.actorType === 'bot' || data.machine) {
-      out.innerHTML = renderVerifyHero('machine', '🤖', 'Maschine verifiziert',
-        'Dieser Token wurde von einem Maschinen-Operator ausgestellt (kein Mensch).',
+      out.innerHTML = renderVerifyHero('machine', '🤖', tr('vh.machineStatus'),
+        tr('vh.machineSub'),
         null, null) +
         renderVerifyDetails({
           status:      data.hhttps?.status,
@@ -1281,11 +1511,11 @@ async function verifyPastedToken() {
     const role  = data.role || {};
     const hh    = data.hhttps || {};
     const icon  = role.icon || '🧑';
-    const label = role.label || role.id || 'Bürger';
+    const label = role.label || role.id || tr('role.fallback');
     const score = role.trustScore || hh.trustScore || 0;
 
     out.innerHTML = renderVerifyHero('valid', icon,
-      'Mensch verifiziert',
+      tr('vh.humanStatus'),
       label,
       score,
       role.levelLabel || role.level) +
@@ -1306,12 +1536,12 @@ async function verifyPastedToken() {
       });
 
   } catch (e) {
-    out.innerHTML = renderVerifyHero('invalid', '⚠️', 'Verbindungsfehler',
-      e.message || 'Server nicht erreichbar.',
+    out.innerHTML = renderVerifyHero('invalid', '⚠️', tr('vh.errorStatus'),
+      e.message || tr('vh.errorSub'),
       null, null);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Prüfen →';
+    btn.textContent = tr('verify.btn');
   }
 }
 
@@ -1409,8 +1639,8 @@ function showOAuthReturnBanner() {
     `;
     banner.innerHTML = `
       <span style="font-size: 18px;">🔐</span>
-      <span><strong>${target.host}</strong> möchte deine HHTTPS-Identität verifizieren.</span>
-      <span>Bitte logge dich unten ein — du wirst danach automatisch zurückgeleitet.</span>
+      <span><strong>${target.host}</strong> ${tr('banner.wants')}</span>
+      <span>${tr('banner.login')}</span>
     `;
     document.body.insertBefore(banner, document.body.firstChild);
 
@@ -1493,7 +1723,7 @@ function buildRoleGrid() {
 // Build role table
 function buildRoleTable() {
   const t = document.getElementById('roleTableFull');
-  t.innerHTML = `<tr><th>Rolle</th><th>ID</th><th>Verifikationsmethoden</th></tr>` +
+  t.innerHTML = `<tr><th>${tr('roletable.role')}</th><th>ID</th><th>${tr('roletable.methods')}</th></tr>` +
     Object.entries(ROLES_LOCAL).map(([id, r]) => `
       <tr>
         <td>${r.icon} ${r.label}</td>
@@ -1511,7 +1741,7 @@ function selectRole(id) {
 
   // Update header to show the chosen role
   const header = document.getElementById('veriBoxHeader');
-  if (header) header.textContent = `// OPTIONALE VERIFIKATION — ${ROLES_LOCAL[id].label.toUpperCase()}`;
+  if (header) header.textContent = `${tr('veri.header')} — ${ROLES_LOCAL[id].label.toUpperCase()}`;
 
   // Build tab options for this role. github-verified appears only for developer.
   let methods = (ROLES_LOCAL[id]?.methods || ['self-declared']).slice();
@@ -1557,18 +1787,12 @@ function selectVMethod(roleId, method, evt) {
   if (method === 'self-declared') {
     slot.innerHTML = `
       <p style="font-size:13px;color:var(--text-muted-strong);line-height:1.65;">
-        Du gibst deine Rolle selbst an, ohne weitere Verifikation.
-        Trust Score: <strong style="color:var(--text)">60/100</strong>.
-        Du kannst deinen Score erhöhen, indem du oben einen anderen Tab wählst.
+        ${tr('slot.self1')} <strong style="color:var(--text)">60/100</strong>${tr('slot.self2')}
       </p>`;
   } else if (method === 'email-verified' || method === 'school-email' || method === 'medical-email' || method === 'lawyer-email' || method === 'official-email') {
     slot.innerHTML = `
       <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:12px;line-height:1.65;">
-        Gib deine E-Mail-Adresse ein, um deine Rolle per Domain-Klassifikation zu bestätigen.
-        Bildungs-Domains (<code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code>),
-        offizielle Behörden (<code style="color:var(--cyan)">bundestag.de</code>) und
-        Verbände werden automatisch erkannt.
-        <strong style="color:var(--text)">Die Adresse wird nicht gespeichert.</strong>
+        ${tr('slot.email1')}<code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code>${tr('email.p2')}<code style="color:var(--cyan)">bundestag.de</code>${tr('email.p3')}<strong style="color:var(--text)">${tr('email.strong')}</strong>
       </p>
       <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
         <input class="vfield" id="emailInput" type="email"
@@ -1587,24 +1811,21 @@ function selectVMethod(roleId, method, evt) {
       // Re-login: already verified, show confirmation instead of the button
       slot.innerHTML = `
         <div class="verify-badge-row verify-badge-github" style="display:block;">
-          ✓ GitHub bereits verifiziert — Trust Score ${__githubAlreadyVerified}/100.
+          ${tr('slot.ghAlready1')} ${__githubAlreadyVerified}/100.
           <span style="display:block;margin-top:6px;color:var(--text-muted-strong);font-size:12px;">
-            Auf diesem Gerät erkannt. Keine erneute GitHub-Anmeldung nötig.
+            ${tr('slot.ghAlready2')}
           </span>
         </div>`;
       setTrust(Math.max(60, __githubAlreadyVerified));
     } else {
       slot.innerHTML = `
         <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
-          Verbinde dein GitHub-Konto, um deine Entwickler-Rolle zu bestätigen.
-          <strong style="color:var(--text)">Wir speichern keinen Benutzernamen und keine Konto-Daten</strong> —
-          nur einen einseitig gehashten Anker, aus dem nichts rückrechenbar ist.
-          Account-Alter, Repo-Anzahl und Follower fließen einmalig in einen
-          Trust-Score (60–85) ein und werden danach verworfen.
+          ${tr('slot.ghConnect1')}
+          <strong style="color:var(--text)">${tr('slot.ghConnectStrong')}</strong> ${tr('slot.ghConnect2')}
         </p>
         <button class="btn btn-c" id="btnGithubVerify" type="button" onclick="startGithubVerify()"
           style="background:linear-gradient(135deg,#B5A8D9,#9A8BC2);border-color:#B5A8D9;">
-          🔐 Mit GitHub bestätigen
+          ${tr('slot.ghBtn')}
         </button>
         <div class="msg" id="githubMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
     }
@@ -1612,8 +1833,7 @@ function selectVMethod(roleId, method, evt) {
     // Generic field-based verification (press-card, student-id, association-member, etc.)
     slot.innerHTML = `
       <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:12px;line-height:1.65;">
-        Trage deine Kennung ein. Die Eingabe wird nicht dauerhaft gespeichert,
-        sondern nur einmalig im Token-Claim referenziert.
+        ${tr('slot.genericField')}
       </p>
       <input class="vfield" id="vfInput"
         placeholder="${vm.field.p}"
@@ -1628,7 +1848,7 @@ function selectVMethod(roleId, method, evt) {
 async function doRegister() {
   const btn = document.getElementById('btnReg');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
-  setFp(1,'scanning'); live('pend','registrierung…');
+  setFp(1,'scanning'); live('pend',tr('live.registering'));
   try {
     userId = userId || null;
     const r1 = await fetch('/hhttps/webauthn/register/start', {
@@ -1638,7 +1858,7 @@ async function doRegister() {
     const { userId: uid, options } = await r1.json();
     userId = uid; localStorage.setItem('hhttps_uid', userId);
 
-    msg('Bitte Fingerabdruck / Face ID / PIN bestätigen…','i');
+    msg(tr('msg.confirmBio'),'i');
     const attResp = await startRegistration(options);
 
     const r2 = await fetch('/hhttps/webauthn/register/finish', {
@@ -1648,11 +1868,11 @@ async function doRegister() {
     const d2 = await r2.json();
     if (!r2.ok) throw new Error(d2.error);
 
-    setFp(1,'success'); live('on','passkey ok');
-    msg('✓ Passkey registriert!','s');
+    setFp(1,'success'); live('on',tr('live.passkeyOk'));
+    msg(tr('msg.passkeyReg'),'s');
     setTimeout(() => setStep(2), 700);
   } catch(e) {
-    setFp(1,'error'); live('err','fehler');
+    setFp(1,'error'); live('err',tr('live.error'));
     msg('Fehler: '+e.message,'e');
     btn.disabled = false; btn.innerHTML = 'Passkey anlegen →';
   }
@@ -1664,7 +1884,7 @@ function skipToAuth() { setStep(2); }
 async function doAuth() {
   const btn = document.getElementById('btnAuth');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
-  setFp(2,'scanning'); live('pend','signiere…');
+  setFp(2,'scanning'); live('pend',tr('live.signing'));
   try {
     const r1 = await fetch('/hhttps/webauthn/auth/start', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1672,7 +1892,7 @@ async function doAuth() {
     });
     const { sessionId: sid, options } = await r1.json();
 
-    msg('Bitte Fingerabdruck / Face ID / PIN bestätigen…','i');
+    msg(tr('msg.confirmBio'),'i');
     const assertResp = await startAuthentication(options);
 
     const r2 = await fetch('/hhttps/webauthn/auth/finish', {
@@ -1689,16 +1909,16 @@ async function doAuth() {
     if (d2.githubVerified && d2.githubTrustScore) {
       __githubAlreadyVerified = d2.githubTrustScore;
     }
-    setFp(2,'success'); live('on','verifiziert ✓');
-    let loginMsg = '✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.';
-    if (d2.githubVerified) loginMsg = '✓ Angemeldet — deine GitHub-Verifikation (Trust ' + d2.githubTrustScore + ') wurde erkannt.';
+    setFp(2,'success'); live('on',tr('live.verified'));
+    let loginMsg = tr('msg.humanProven');
+    if (d2.githubVerified) loginMsg = tr('msg.loginGithub1') + d2.githubTrustScore + tr('msg.loginGithub2');
     msg(loginMsg,'s');
     buildRoleGrid();
     setTimeout(() => setStep(3), 600);
   } catch(e) {
-    setFp(2,'error'); live('err','fehler');
+    setFp(2,'error'); live('err',tr('live.error'));
     msg('Fehler: '+e.message,'e');
-    btn.disabled = false; btn.innerHTML = 'Fingerabdruck / PIN bestätigen →';
+    btn.disabled = false; btn.innerHTML = tr('btn.auth');
   }
 }
 
@@ -1706,8 +1926,8 @@ async function doAuth() {
 async function doDeclarRole() {
   if (!selRole || !sessionId) return;
   const btn = document.getElementById('btnDeclare');
-  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
-  live('pend','ausstellen…');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> ' + tr('btn.issuing');
+  live('pend',tr('live.issuing'));
 
   // Gather vData from input if present
   const inp = document.getElementById('vfInput');
@@ -1772,14 +1992,14 @@ async function doDeclarRole() {
 
     updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;
-    live('on','token aktiv ✓');
+    live('on',tr('live.tokenActive'));
     msg('✓ '+d.message,'s');
     setStep(4);
   } catch(e) {
     msg('Fehler: '+e.message,'e');
     btn.disabled = false;
-    btn.innerHTML = 'Rolle bestätigen + Token ausstellen →';
-    live('err','fehler');
+    btn.innerHTML = tr('btn.declare');
+    live('err',tr('live.error'));
   }
 }
 
@@ -1897,7 +2117,7 @@ async function doCheck() {
         .replace(/: (true|false)/g, ': <span class="cv">$1</span>')
         .replace(/: (\d+)/g, ': <span class="cv">$1</span>');
 
-    msg('✓ /hhttps/check: Mensch='+d.hhttps.human+', Rolle='+d.role?.label,'s');
+    msg('✓ /hhttps/check: human='+d.hhttps.human+', role='+d.role?.label,'s');
     showTab('response');
   } catch(e) {
     msg('Fehler: '+e.message,'e');
@@ -1909,19 +2129,19 @@ async function doCheck() {
 
 // ── Email verification ─────────────────────────────────────────────────────
 const DOMAIN_HINTS = {
-  'bundestag.de': {l:'official-email',s:90,t:'🏛️ Offizielle Parlaments-E-Mail'},
-  'bmi.bund.de':  {l:'official-email',s:90,t:'🏛️ Offizielle Behörden-E-Mail'},
+  'bundestag.de': {l:'official-email',s:90,t:'hint.parliament'},
+  'bmi.bund.de':  {l:'official-email',s:90,t:'hint.authority'},
 };
 function getDomainHint(email) {
   const domain = email.split('@')[1]?.toLowerCase() || '';
   if (DOMAIN_HINTS[domain]) return DOMAIN_HINTS[domain];
   if (['.uni-','.tu-','.lmu.','.rwth','.tum.de','.fau.de','.fu-berlin','.kit.edu','.hs-','.fh-'].some(d=>domain.includes(d)))
-    return {l:'email-verified',s:75,t:'🎓 Bildungs-Domain erkannt'};
+    return {l:'email-verified',s:75,t:'hint.edu'};
   if (['spiegel.de','zeit.de','sueddeutsche.de','faz.net','dpa.com','ard.de','zdf.de'].some(d=>domain.endsWith(d)))
-    return {l:'email-verified',s:72,t:'📰 Medien-Domain erkannt'};
+    return {l:'email-verified',s:72,t:'hint.media'};
   if (['sprecherverband.de','bffs.de','synchronverband.de','bsd-synchron.de'].some(d=>domain.endsWith(d)))
-    return {l:'email-verified',s:78,t:'🎭 Verbands-Domain erkannt'};
-  return {l:'email-verified',s:65,t:'✉ Standard E-Mail'};
+    return {l:'email-verified',s:78,t:'hint.assoc'};
+  return {l:'email-verified',s:65,t:'hint.standard'};
 }
 
 function previewEmailDomain(email) {
@@ -1929,16 +2149,16 @@ function previewEmailDomain(email) {
   if (!el) return;
   if (!email.includes('@')) { el.textContent=''; return; }
   const h = getDomainHint(email);
-  el.innerHTML = `<span style="color:var(--amber)">${h.t}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
+  el.innerHTML = `<span style="color:var(--amber)">${tr(h.t)}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
   if (selRole) setTrust(Math.max(60, h.s));
 }
 
 async function doSendEmail() {
-  if (!sessionId) { msg('Bitte erst WebAuthn durchführen.','e'); return; }
+  if (!sessionId) { msg(tr('msg.doWebauthn'),'e'); return; }
   const input = document.getElementById('emailInput');
-  if (!input) { msg('E-Mail-Eingabe nicht aktiv. Bitte den Tab "E-Mail verifiziert" wählen.','e'); return; }
+  if (!input) { msg(tr('msg.emailTabInactive'),'e'); return; }
   const email = input.value.trim();
-  if (!email || !email.includes('@')) { msgEmail('Bitte gültige E-Mail eingeben.','e'); return; }
+  if (!email || !email.includes('@')) { msgEmail(tr('msg.validEmail'),'e'); return; }
 
   const btn = document.getElementById('btnSendEmail');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
@@ -1956,11 +2176,11 @@ async function doSendEmail() {
       msgEmail('📧 DEV MODE: Verifiziere automatisch (kein SMTP konfiguriert)…','i');
       setTimeout(() => autoVerifyDev(d.devToken), 800);
     } else {
-      msgEmail(`✓ E-Mail gesendet! Bitte prüfe dein Postfach (${d.domain}). Link gültig: ${d.expiresIn}.`,'s');
+      msgEmail(`${tr('msg.emailSent1')} (${d.domain}). ${tr('msg.emailSent2')}: ${d.expiresIn}.`,'s');
     }
   } catch(e) {
     msgEmail('Fehler: '+e.message,'e');
-    if (btn) { btn.disabled = false; btn.innerHTML = '✉ Link senden'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = tr('btn.sendEmail'); }
   }
 }
 
@@ -1988,7 +2208,7 @@ async function checkEmailStatus() {
     setTrust(Math.max(60, d.trustBonus || 65));
     msgEmail(`✓ E-Mail-Domain "${d.emailDomain}" verifiziert! Trust Score: ${d.trustBonus}/100`,'s');
     const btn = document.getElementById('btnDeclare');
-    if (btn) btn.innerHTML = 'Rolle + verifizierte E-Mail → Token ausstellen →';
+    if (btn) btn.innerHTML = tr('btn.declareEmail');
   }
 }
 
@@ -2012,7 +2232,7 @@ const HHTTPS_STORAGE_KEYS = ['hhttps_identity', 'hhttps_token', 'hhttps_refresh'
 // without re-registering a new credential.
 
 function doLogout() {
-  if (!confirm('Wirklich abmelden? Das löscht den lokalen Token aus diesem Browser.')) return;
+  if (!confirm(tr('confirm.logout'))) return;
   performLogout();
 }
 
@@ -2093,16 +2313,16 @@ function updateTokenExpiryHint() {
   if (s.state === 'none') { el.textContent = ''; return; }
   if (s.state === 'valid') {
     const mins = Math.floor(s.ttlSec / 60);
-    el.textContent = `Token gültig — läuft ab in ${mins} Minute${mins===1?'':'n'}.`;
+    el.textContent = `${tr('tok.validPre')} ${mins} ${mins===1?tr('tok.minute'):tr('tok.minutes')}.`;
     el.style.color = 'var(--text-muted-strong)';
     return;
   }
   if (s.state === 'expiring') {
-    el.textContent = `⚠ Token läuft in unter 1 Minute ab.`;
+    el.textContent = tr('tok.soon');
     el.style.color = 'var(--amber)';
     return;
   }
-  el.textContent = `✗ Token ist abgelaufen.`;
+  el.textContent = tr('tok.expired');
   el.style.color = 'var(--red)';
 }
 
@@ -2121,12 +2341,12 @@ async function promptForRefresh() {
   __hhttpsRefreshDialogOpen = true;
   try {
     if (!s.refreshValid) {
-      alert('Deine Sitzung ist abgelaufen. Du wirst abgemeldet.');
+      alert(tr('alert.sessionExpired'));
       performLogout();
       return;
     }
 
-    const keepLoggedIn = confirm('Dein HHTTPS-Token ist abgelaufen. Möchtest du eingeloggt bleiben?\n\n[OK] = Token erneuern\n[Abbrechen] = Abmelden');
+    const keepLoggedIn = confirm(tr('confirm.refresh'));
     if (!keepLoggedIn) {
       performLogout();
       return;
@@ -2136,7 +2356,7 @@ async function promptForRefresh() {
     const id = getStoredIdentity();
     const refreshTok = id && id.refreshToken;  // older identities may not store refresh; in that case logout
     if (!refreshTok) {
-      alert('Kein Refresh-Token verfügbar — bitte neu anmelden.');
+      alert(tr('alert.noRefresh'));
       performLogout();
       return;
     }
@@ -2146,7 +2366,7 @@ async function promptForRefresh() {
       body: JSON.stringify({ refreshToken: refreshTok })
     });
     if (!r.ok) {
-      alert('Token-Refresh fehlgeschlagen — bitte neu anmelden.');
+      alert(tr('alert.refreshFailed'));
       performLogout();
       return;
     }
@@ -2156,7 +2376,7 @@ async function promptForRefresh() {
     try { localStorage.setItem('hhttps_identity', JSON.stringify(updated)); } catch (e) {}
     hhttpsToken = d.token;
     updateTokenExpiryHint();
-    msg('✓ Token erneuert.', 's');
+    msg(tr('msg.tokenRenewed'), 's');
   } finally {
     __hhttpsRefreshDialogOpen = false;
   }
@@ -2192,7 +2412,7 @@ window.addEventListener('load', () => {
     setTrust(Math.max(60, score));
     buildRoleGrid();
     setStep(3);
-    msg('✓ E-Mail bestätigt! Bitte Rolle wählen und Token ausstellen.','s');
+    msg(tr('msg.emailConfirmed'),'s');
     history.replaceState({}, '', '/');
   }
   if (p.get('email_verify') === 'success') {
@@ -2205,7 +2425,7 @@ window.addEventListener('load', () => {
   // redirect the main tab — but we keep a graceful fallback in case someone
   // lands here with the old-style param (e.g. a bookmarked callback).
   if (p.get('github_verify') === 'success') {
-    msg('✓ GitHub-Verifikation abgeschlossen. Falls dein Login nicht mehr sichtbar ist, melde dich bitte erneut an.', 's');
+    msg(tr('msg.ghDone'), 's');
     history.replaceState({}, '', '/');
   }
   if (p.get('github_verify') === 'error') {
@@ -2222,7 +2442,7 @@ let __ghPollTimer = null;
 
 function startGithubVerify() {
   if (!sessionId) {
-    msg('Bitte erst per Passkey anmelden, bevor du GitHub verifizierst.', 'e');
+    msg(tr('msg.ghNeedPasskey'), 'e');
     return;
   }
 
@@ -2233,7 +2453,7 @@ function startGithubVerify() {
   const btn = document.getElementById('btnGithubVerify');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Warte auf GitHub …'; }
   const ghMsg = document.getElementById('githubMsg');
-  if (ghMsg) { ghMsg.className = 'msg show i'; ghMsg.textContent = 'Ein neuer Tab wurde geöffnet. Bestätige dort mit GitHub und kehre dann hierher zurück.'; }
+  if (ghMsg) { ghMsg.className = 'msg show i'; ghMsg.textContent = tr('gh.newTab'); }
 
   // Begin polling the status endpoint
   if (__ghPollTimer) clearInterval(__ghPollTimer);
@@ -2255,8 +2475,8 @@ function startGithubVerify() {
     // Stop polling after 5 minutes to avoid a runaway timer
     if (elapsed > 300) {
       clearInterval(__ghPollTimer); __ghPollTimer = null;
-      if (btn) { btn.disabled = false; btn.textContent = '🔐 Mit GitHub bestätigen'; }
-      if (ghMsg) { ghMsg.className = 'msg show e'; ghMsg.textContent = 'Zeitüberschreitung. Bitte erneut versuchen.'; }
+      if (btn) { btn.disabled = false; btn.textContent = tr('slot.ghBtn'); }
+      if (ghMsg) { ghMsg.className = 'msg show e'; ghMsg.textContent = tr('gh.timeout'); }
     }
   }, 3000);
 }
@@ -2271,9 +2491,9 @@ function onGithubVerified(score) {
   const btn = document.getElementById('btnGithubVerify');
   if (btn) { btn.disabled = true; btn.textContent = '✓ GitHub verifiziert'; }
   const ghMsg = document.getElementById('githubMsg');
-  if (ghMsg) { ghMsg.className = 'msg show s'; ghMsg.textContent = '✓ GitHub bestätigt! Trust Score: ' + score + '/100.'; }
+  if (ghMsg) { ghMsg.className = 'msg show s'; ghMsg.textContent = tr('gh.confirmedPre') + ' ' + score + '/100.'; }
   setTrust(Math.max(60, score));
-  msg('✓ GitHub bestätigt! Trust Score: ' + score + '/100.', 's');
+  msg(tr('gh.confirmedPre') + ' ' + score + '/100.', 's');
 }
 
 // Poll for email verification every 5 seconds when on step 3
@@ -2293,8 +2513,8 @@ window.setStep = function(n) {
 const origDeclare = doDeclarRole;
 window.doDeclarRole = async function() {
   const btn = document.getElementById('btnDeclare');
-  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
-  live('pend','ausstellen…');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> ' + tr('btn.issuing');
+  live('pend',tr('live.issuing'));
   const inp = document.getElementById('vfInput');
   if (inp) {
     const vm = VMETHOD_LABELS[selVMethod];
@@ -2350,25 +2570,25 @@ window.doDeclarRole = async function() {
 
     updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;
-    live('on','token aktiv ✓');
+    live('on',tr('live.tokenActive'));
     msg('✓ '+d.message,'s');
     setStep(4);
   } catch(e) {
     msg('Fehler: '+e.message,'e');
     btn.disabled = false;
-    btn.innerHTML = 'Rolle bestätigen + Token ausstellen →';
-    live('err','fehler');
+    btn.innerHTML = tr('btn.declare');
+    live('err',tr('live.error'));
   }
 };
 
 // ── Init ───────────────────────────────────────────────────────────────────
 buildRoleTable();
 if (!window.PublicKeyCredential) {
-  msg('⚠ WebAuthn wird von diesem Browser nicht unterstützt.','e');
+  msg(tr('msg.webauthnUnsupported'),'e');
   document.getElementById('btnReg').disabled = true;
 }
 if (userId) {
-  msg('Passkey gefunden — direkt zu Schritt 2.','i');
+  msg(tr('msg.passkeyFound'),'i');
   setTimeout(() => setStep(2), 300);
 }
 

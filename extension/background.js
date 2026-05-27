@@ -262,7 +262,7 @@ async function updateBadge(tabId) {
   } else {
     text  = '';
     color = '#7A6F62';
-    title = 'HHTTPS — Nicht eingeloggt. Klick zum Verifizieren.';
+    title = chrome.i18n.getMessage('badgeTitleLoggedOut');
   }
 
   try {
@@ -309,12 +309,12 @@ function setupContextMenu() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'hhttps-sign-alpha',
-      title: 'Mit HHTTPS signieren (Identität)',
+      title: chrome.i18n.getMessage('ctxSignAlpha'),
       contexts: ['editable']
     });
     chrome.contextMenus.create({
       id: 'hhttps-sign-beta',
-      title: 'Mit HHTTPS signieren (Identität + Text)',
+      title: chrome.i18n.getMessage('ctxSignBeta'),
       contexts: ['editable']
     });
   });
@@ -372,9 +372,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // loose text hash for tamper-warning).
 async function createSignatureSlug(text, domain, mode) {
   const ident = await getActiveIdentity();
-  if (!ident) throw new Error('Keine Identität gespeichert');
-  if (!text || !text.trim()) throw new Error('Kein Text zum Signieren');
-  if (!domain) throw new Error('Keine Domain — bitte auf einer Webseite signieren');
+  if (!ident) throw new Error(chrome.i18n.getMessage('errNoIdentityStored'));
+  if (!text || !text.trim()) throw new Error(chrome.i18n.getMessage('errNoTextToSign'));
+  if (!domain) throw new Error(chrome.i18n.getMessage('errNoDomain'));
 
   const bindingType = mode === 'beta' ? 'document' : 'web';
 
@@ -398,7 +398,7 @@ async function createSignatureSlug(text, domain, mode) {
     throw new Error(j.error || `Server ${r.status}`);
   }
   const data = await r.json();
-  if (!data.marker) throw new Error('Keine Marker-Antwort vom Server');
+  if (!data.marker) throw new Error(chrome.i18n.getMessage('errNoMarker'));
   return data.marker;
 }
 
