@@ -90,8 +90,19 @@ export async function pollWalletResponse(transactionId, responseCode) {
 
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
 
-  // Not ready yet — backend has no wallet response for this transaction.
+  // EU backend state machine: GET /ui/presentations/{id} only returns the wallet
+  // response once the presentation reaches the `Submitted` state (wallet has
+  // posted vp_token). While still in `Requested` or `RequestObjectRetrieved`
+  // (wallet hasn't scanned/answered yet), the backend responds with HTTP 400
+  // and an empty body — this is its convention for "still pending", NOT a real
+  // error. We therefore treat 404 AND 400-with-empty-body as pending. A 400
+  // WITH content remains a real error so genuine backend problems still surface.
   if (r.status === 404) return { status: 'pending' };
+  if (r.status === 400) {
+    const text = await r.text().catch(() => '');
+    if (!text || text.trim().length === 0) return { status: 'pending' };
+    throw new Error(`EU backend rejected poll (400): ${text.slice(0, 200)}`);
+  }
   if (!r.ok) {
     const text = await r.text().catch(() => '');
     throw new Error(`EU backend poll failed (${r.status}): ${text.slice(0, 200)}`);
