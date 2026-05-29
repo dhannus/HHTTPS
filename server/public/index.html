@@ -770,16 +770,10 @@ footer a{color:var(--cyan);text-decoration:none;}
           </button>
         </div>
       </div>
-      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--b1);">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:8px;" data-i18n="p1.passkeyAlt">
-          Stattdessen mit Passkey (Fingerabdruck / Face ID / Gerätesperre):
-        </div>
-        <div style="display:flex;flex-direction:column;gap:12px;">
-          <button class="btn btn-c btn-full" id="btnReg" onclick="doRegister()" data-i18n="btn.reg">🔑 Passkey anlegen →</button>
-          <button class="btn btn-c btn-full" id="btnSkip" onclick="skipToAuth()" data-i18n-title="btn.skipTitle"
-            title="Wenn du schon einen Passkey hast" data-i18n="btn.skip">Bereits registriert →</button>
-        </div>
-      </div>
+      <!-- Passkey-Buttons entfernt: Email ist primäre Methode, Passkey optional in Phase 3 -->
+      <!-- btnReg + btnSkip bleiben als versteckte Elemente für JS-Kompatibilität -->
+      <button id="btnReg" style="display:none;" onclick="doRegister()"></button>
+      <button id="btnSkip" style="display:none;" onclick="skipToAuth()"></button>
     </div>
 
     <!-- Phase 2: Pseudonym + Altersgruppe -->
@@ -1464,14 +1458,7 @@ const VMETHOD_LABELS = {
 // ── i18n runtime (DE/EN toggle, shared storage key 'iamhmn-lang') ───────────
 const T = {
   de: {
-    "step.extras":"Name + Alter",
-    "p1.strong":"Schritt 1 — E-Mail verifizieren (Trust 30)",
-    "p1.body":"Gib deine E-Mail-Adresse ein. Du bekommst einen Bestätigungs-Code — kein Passwort, kein Konto. Dein Token wird danach sofort ausgestellt. Passkey ist optional.",
-    "p1.passkeyAlt":"Stattdessen mit Passkey (Fingerabdruck / Face ID / Gerätesperre):",
-    "p2.strong":"Schritt 2 — Pseudonym & Altersgruppe (optional)",
-    "p2.body1":"Beide Felder sind freiwillig. Das Pseudonym erscheint lesbar in deiner Token-Kennung.",
-    "p3ef.strong":"Schritt 3 — Passkey hinzufügen (optional, Trust 50→60)",
-    "p3ef.body":"Fingerabdruck, Face ID oder Gerätesperre — kein Hardware-Schlüssel nötig.",
+    /* de-flow-keys moved to main T.de block */
     "goal.badge":"UNSER ZIEL","goal.h3":"Ein offener Internetstandard — wir suchen Verbündete",
     "goal.p1":"HHTTPS ist jung und hat große Ambitionen: ein Protokoll, das ähnlich wie HTTPS zum Standard wird.",
     "goal.pStrong":" Wir sind offen für Anforderungen, Kritik und Mitgestaltung.",
@@ -1485,9 +1472,9 @@ const T = {
     "verify.inputPh":"HHTTPS-Token einfügen (eyJhbGc...)","verify.btn":"Prüfen →",
     "flow.title":"IDENTITÄTS-FLOW — INTERAKTIV","flow.ready":"bereit",
     "step.verify":"Verifizieren","step.role":"Rolle wählen","step.email":"E-Mail",
-    "p1.strong":"Schritt 1 — Passkey anlegen (WebAuthn)","p1.body":"Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.",
+    "p1.strong":"Schritt 1 — E-Mail verifizieren (Trust 30)","p1.body":"Gib deine E-Mail-Adresse ein. Du bekommst einen Bestätigungs-Code — kein Passwort, kein Konto. Dein Token wird danach sofort ausgestellt. Passkey ist optional und erhöht den Trust Score.",
     "btn.reg":"Passkey anlegen →","btn.skip":"Bereits registriert →","btn.skipTitle":"Wenn du schon einen Passkey hast",
-    "p2.strong":"Schritt 2 — Menschsein beweisen","p2.body1":"Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —","p2.bodyStrong":"kein biometrisches Datum verlässt das Gerät.",
+    "p2.strong":"Schritt 2 — Pseudonym (optional)","p2.body1":"Ein lesbares Pseudonym erscheint in deiner Token-Kennung — vollständig anonym, kein Klarname nötig.",
     "btn.auth":"Fingerabdruck / PIN bestätigen →",
     "p3.strong":"Schritt 3 — Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
     "trust.label":"Trust Score","veri.optional":"// OPTIONALE VERIFIKATION","veri.intro":"Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.",
@@ -1528,9 +1515,7 @@ const T = {
     "eudi.h4":"// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)","eudi.p1":"Beweise eine Altersschwelle über deine EUDI-Wallet —","eudi.p1Strong1":"ohne Geburtsdatum","eudi.p2":". Selective Disclosure: es wird nur „über N Jahre: ja/nein\" geteilt. Hebt die Altersgruppe von","eudi.pEm":"Eigenangabe","eudi.p3":"auf","eudi.p1Strong2":"verifiziert","eudi.p4":"(Trust 99).","eudi.ariaThresholds":"Altersschwelle wählen","eudi.btn14":"14+ nachweisen","eudi.btn16":"16+ nachweisen","eudi.btn18":"18+ nachweisen","eudi.qrAlt":"EUDI-Wallet QR-Code","eudi.deeplink":"Auf diesem Gerät mit Wallet öffnen →","eudi.msgNeedStep2":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen.","eudi.errRequest":"EUDI-Anfrage fehlgeschlagen.","eudi.waitingPre":"Warte auf Wallet… (Schwelle","eudi.errBackend":"EUDI-Backend nicht erreichbar:","eudi.statusVerifiedPre":"✓ Alter verifiziert:","eudi.statusSuffix":"(EUDI-Wallet)","eudi.msgVerified":"Alter kryptografisch verifiziert ✓","eudi.expired":"Sitzung abgelaufen — bitte erneut starten.","eudi.noAge":"Keine Altersangabe von der Wallet erhalten.","eudi.errVerify":"Fehler bei der Verifikation."
   },
   en: {
-    "step.extras":"Name + Age",
-    "p1.strong":"Step 1 — Email verification (Trust 30)",
-    "p1.body":"Enter your email address. You will receive a confirmation code — no password, no account. Your token is issued immediately. Passkey is optional.",
+    /* en-flow-keys moved to main T.en block */
     "p1.passkeyAlt":"Or use a passkey instead (fingerprint / Face ID / device unlock):",
     "p2.strong":"Step 2 — Pseudonym & age group (optional)",
     "p2.body1":"Both fields are optional. The pseudonym appears in your token identifier.",
@@ -1549,9 +1534,9 @@ const T = {
     "verify.inputPh":"Paste HHTTPS token (eyJhbGc...)","verify.btn":"Verify →",
     "flow.title":"IDENTITY FLOW — INTERACTIVE","flow.ready":"ready",
     "step.verify":"Verify","step.role":"Choose role","step.email":"Email",
-    "p1.strong":"Step 1 — Create passkey (WebAuthn)","p1.body":"Your device creates a cryptographic key pair in the secure chip. The private key never leaves your device. After registration you can verify yourself as a human and declare a role.",
+    "p1.strong":"Step 1 — Email verification (Trust 30)","p1.body":"Enter your email. You will receive a confirmation code — no password, no account. Your token is issued immediately. Passkey is optional." a cryptographic key pair in the secure chip. The private key never leaves your device. After registration you can verify yourself as a human and declare a role.",
     "btn.reg":"Create passkey →","btn.skip":"Already registered →","btn.skipTitle":"If you already have a passkey",
-    "p2.strong":"Step 2 — Prove you're human","p2.body1":"Your device signs a server challenge locally with your private key. The server verifies the signature —","p2.bodyStrong":"no biometric data leaves the device.",
+    "p2.strong.old":"","p2.body1.old":"ith your private key. The server verifies the signature —","p2.bodyStrong":"no biometric data leaves the device.",
     "btn.auth":"Confirm fingerprint / PIN →",
     "p3.strong":"Step 3 — Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
     "trust.label":"Trust Score","veri.optional":"// OPTIONAL VERIFICATION","veri.intro":"Choose a verification method to increase your trust score.",
