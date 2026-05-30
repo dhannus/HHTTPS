@@ -1951,7 +1951,11 @@ app.post('/hhttps/webauthn/auth/start', limit.webauthn, async (req, res) => {
 });
 
 app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
-  const { sessionId, response } = req.body;
+  // emailSessionId (optional): when present, an existing email-verified session
+  // is merged into the new passkey session. Email-flow continues uninterrupted,
+  // and the final session carries BOTH the passkey credential and the email
+  // verification info, so /role/declare sees the full picture.
+  const { sessionId, response, emailSessionId } = req.body;
   const stored = await db.challenges.get(sessionId);
   if (!stored) return res.status(400).json({ error: 'Session expired.' });
 
@@ -1975,7 +1979,27 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     await db.credentials.updateCounter(cred.credentialId, v.authenticationInfo.newCounter);
     await db.challenges.delete(sessionId);
 
-    // Create verified session (role declaration follows)
+    // ── Merge in the email-first session, if the client passed one. ─────────
+    // We pull emailVerified / emailDomain / emailLevel / emailTrustBonus from
+    // the old session, then delete it so the user has exactly ONE active
+    // session afterwards.
+    let emailMerge = {};
+    if (emailSessionId) {
+      const prior = await db.sessions.get(emailSessionId);
+      if (prior && prior.userId === (stored.userId || cred.userId)) {
+        emailMerge = {
+          emailVerified:    prior.emailVerified    || false,
+          emailDomain:      prior.emailDomain      || null,
+          emailLevel:       prior.emailLevel       || null,
+          emailTrustBonus:  prior.emailTrustBonus  || 0,
+          pseudonym:        prior.pseudonym        || null,
+        };
+        try { await db.sessions.delete(emailSessionId); } catch (e) {}
+      }
+    }
+
+    // Create the (merged) verified session. TTL 30 min — long enough for the
+    // user to think about pseudonym / role selection / age group.
     const sid = uuid();
     await db.sessions.create(sid, {
       userId:       stored.userId || cred.userId,
@@ -1983,11 +2007,21 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       deviceType:   cred.deviceType,
       backedUp:     cred.backedUp,
       verified:     true,
-      trustScore:   60
-    }, 600_000);
+      hasPasskey:   true,
+      // Initial trust placeholder. The final trust is computed in /role/declare
+      // (base 30 + emailDomainBonus + passkey 30, capped 100). We seed with 60
+      // so that callers without /role/declare still see a sane number.
+      trustScore:   60,
+      ...emailMerge,
+    }, 1800_000); // 30 min
     await db.stats.increment('verifications');
 
-    res.json({ verified: true, sessionId: sid, message: 'WebAuthn OK. Please declare a role.' });
+    res.json({
+      verified:  true,
+      sessionId: sid,
+      merged:    !!emailMerge.emailVerified,
+      message:   'WebAuthn OK. Please declare a role.'
+    });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -2243,11 +2277,29 @@ app.post('/hhttps/role/declare', async (req, res) => {
   }
 
   let vMethod    = verificationMethod || 'self-declared';
-  let trustScore = 60;
   let note       = null;
   let vClaimStatus = 'self-declared';  // 'verified' | 'claimed' | 'self-declared'
   let vClaimedAs   = null;             // the method the user asserted but we couldn't verify
   let vTargetTrust = null;             // trust that method will grant once a real check exists
+
+  // ─── Additive account trust (Phase 3 model) ─────────────────────────────────
+  // Trust is built out of independent components that ADD UP, capped at 100:
+  //   • emailBase  : 30 when the user verified an email (always the same — no
+  //                  domain magic), 0 otherwise.
+  //   • domainBonus: +0 / +15 / +40 depending on email-domain category
+  //                  (see classifyDomain in email.js).
+  //   • passkeyBonus: +30 when the user added a passkey (hasPasskey or
+  //                   credentialId on the session).
+  //
+  // The resulting `accountTrust` is the FLOOR for this token. A role-specific
+  // verification method (orcid, github, eudi-wallet-role, …) may grant an
+  // even higher trust — the final score is max(accountTrust, methodTrust).
+  const emailBase    = session.emailVerified ? 30 : 0;
+  const domainBonus  = session.emailTrustBonus || 0;
+  const passkeyBonus = (session.hasPasskey || session.credentialId) ? 30 : 0;
+  const accountTrust = Math.min(100, emailBase + domainBonus + passkeyBonus);
+
+  let trustScore = accountTrust;
 
   // GitHub takes precedence for developer if both are set, since it's a
   // stronger pseudonymous signal than mere email-domain classification.
@@ -2256,10 +2308,17 @@ app.post('/hhttps/role/declare', async (req, res) => {
     trustScore = Math.max(trustScore, session.githubTrustBonus);
     note       = `GitHub account verified (trust ${session.githubTrustBonus}).`;
     vClaimStatus = 'verified';
-  } else if (session.emailVerified && session.emailTrustBonus) {
-    vMethod    = session.emailLevel || 'email-verified';
-    trustScore = Math.max(trustScore, session.emailTrustBonus);
-    note = `Email domain "${session.emailDomain}" verified automatically.`;
+  } else if (session.emailVerified && session.emailLevel && session.emailLevel !== 'email-verified') {
+    // Domain-classified email (school-email / official-email …) is a stronger
+    // signal than plain email-verified; record the specific level on the token.
+    vMethod    = session.emailLevel;
+    note       = `Email domain "${session.emailDomain}" verified — category bonus +${domainBonus}.`;
+    vClaimStatus = 'verified';
+  } else if (session.emailVerified) {
+    vMethod    = 'email-verified';
+    note       = session.emailDomain
+      ? `Email domain "${session.emailDomain}" verified.`
+      : `Email verified.`;
     vClaimStatus = 'verified';
   } else {
     // Honesty gate (Phase 2): a method only grants its trust if a REAL automated
@@ -2281,7 +2340,9 @@ app.post('/hhttps/role/declare', async (req, res) => {
         verificationData?.notaryId    || verificationData?.hrbId      ||
         verificationData?.serviceId   || null;
       vMethod    = 'self-declared';
-      trustScore = resolved.trustScore;        // stays 30
+      // Method downgraded (typed-in id without real check) — no method bonus,
+      // but keep the additive accountTrust floor (email + passkey).
+      trustScore = Math.max(trustScore, resolved.trustScore);
       note = submitted
         ? `Self-declared "${submitted}" for ${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} recorded — not yet automatically checked, no trust bonus.`
         : `${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} recorded as self-declared — not yet automatically checked, no trust bonus.`;
@@ -2292,7 +2353,9 @@ app.post('/hhttps/role/declare', async (req, res) => {
       if (resolved.method === 'orcid' && verificationData?.orcid) {
         const ok = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(verificationData.orcid);
         if (!ok) {
-          vMethod = 'self-declared'; trustScore = 30; vClaimStatus = 'self-declared';
+          vMethod = 'self-declared';
+          trustScore = Math.max(trustScore, 30);  // keep accountTrust floor
+          vClaimStatus = 'self-declared';
           note = 'ORCID format invalid — no verification.';
         } else {
           note = `ORCID ${verificationData.orcid} (format checked, not confirmed against orcid.org).`;

@@ -62,22 +62,35 @@ const DOMAIN_RULES = {
   ]
 };
 
+// Classify the user's email domain. The returned `trustBonus` is the **bonus
+// added on top** of the email-verified baseline (30), NOT an absolute score.
+//
+// Final account trust is computed in /role/declare:
+//   base 30 + domainBonus + (passkey ? 30 : 0), capped at 100.
+//
+// Bonus values:
+//   generic     → +0   (free webmail like gmail, gmx)
+//   university  → +15  (.uni-*, .edu, hochschule-*)
+//   press       → +15  (verlage, redaktionen)
+//   creative    → +15  (associations like VDS, GEMA, BFFS)
+//   official    → +40  (bund.de, bundestag.de, official authorities)
+//
 export function classifyDomain(email) {
   const domain = email.split('@')[1]?.toLowerCase() || '';
 
   if (DOMAIN_RULES.official.some(d => domain.endsWith(d))) {
-    return { level: 'official-email', trustBonus: 90, category: 'official', domain };
+    return { level: 'official-email', trustBonus: 40, category: 'official', domain };
   }
   if (DOMAIN_RULES.university.some(d => domain.includes(d))) {
-    return { level: 'email-verified', trustBonus: 75, category: 'university', domain };
+    return { level: 'school-email', trustBonus: 15, category: 'university', domain };
   }
   if (DOMAIN_RULES.press.some(d => domain.endsWith(d))) {
-    return { level: 'email-verified', trustBonus: 72, category: 'press', domain };
+    return { level: 'email-verified', trustBonus: 15, category: 'press', domain };
   }
   if (DOMAIN_RULES.creative.some(d => domain.endsWith(d))) {
-    return { level: 'email-verified', trustBonus: 78, category: 'creative', domain };
+    return { level: 'email-verified', trustBonus: 15, category: 'creative', domain };
   }
-  return { level: 'email-verified', trustBonus: 65, category: 'generic', domain };
+  return { level: 'email-verified', trustBonus: 0, category: 'generic', domain };
 }
 
 // ─── Bilingual helpers ──────────────────────────────────────────────────────

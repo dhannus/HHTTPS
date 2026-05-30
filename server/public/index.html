@@ -817,7 +817,7 @@ footer a{color:var(--cyan);text-decoration:none;}
     <!-- Phase 4 (früher Phase 3): Rolle -->
     <div class="phase" id="p4">
       <div class="desc">
-        <strong data-i18n="p3.strong">Schritt 3 — Rolle deklarieren</strong><br>
+        <strong data-i18n="p3.strong">Rolle deklarieren</strong><br>
         <span data-i18n="p3.body">Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.</span>
       </div>
 
@@ -1476,7 +1476,7 @@ const T = {
     "btn.reg":"Passkey anlegen →","btn.skip":"Bereits registriert →","btn.skipTitle":"Wenn du schon einen Passkey hast",
     "step.extras":"Pseudonym","p2.strong":"Schritt 2 — Pseudonym (optional)","p2.body1":"Ein lesbares Pseudonym erscheint in deiner Token-Kennung — vollständig anonym, kein Klarname nötig.","p3ef.strong":"Schritt 3 — Passkey hinzufügen (optional, Trust 50→60)","p3ef.body":"Fingerabdruck, Face ID oder Gerätesperre — kein Hardware-Schlüssel nötig. Erhöht den Trust Score auf 50 (Passkey allein) oder 60 (E-Mail + Passkey).",
     "btn.auth":"Fingerabdruck / PIN bestätigen →",
-    "p3.strong":"Schritt 3 — Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
+    "p3.strong":"Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
     "trust.label":"Trust Score","veri.optional":"// OPTIONALE VERIFIKATION","veri.intro":"Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.",
     "email.p2":"), offizielle Behörden (","email.p3":") und Verbände werden automatisch erkannt. ","email.strong":"Die Adresse wird nicht gespeichert.",
     "email.inputPh":"deine@email.de","btn.sendEmail":"✉ Link senden","email.verifiedBadge":"✓ E-Mail verifiziert — Trust Score erhöht!","badge.github":"✓ GitHub verifiziert — Trust Score",
@@ -1538,7 +1538,7 @@ const T = {
     "btn.reg":"Create passkey →","btn.skip":"Already registered →","btn.skipTitle":"If you already have a passkey",
     "step.extras":"Pseudonym","step.extras":"Pseudonym","p2.strong":"Step 2 — Pseudonym (optional)","p2.body1":"A readable pseudonym appears in your token identifier — fully anonymous.","p3ef.strong":"Step 3 — Add passkey (optional, Trust 50→60)","p3ef.body":"Fingerprint, Face ID or device unlock — no hardware key needed. Raises Trust Score to 50 (passkey only) or 60 (email + passkey).","p2.bodyStrong":"",
     "btn.auth":"Confirm fingerprint / PIN →",
-    "p3.strong":"Step 3 — Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
+    "p3.strong":"Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
     "trust.label":"Trust Score","veri.optional":"// OPTIONAL VERIFICATION","veri.intro":"Choose a verification method to increase your trust score.",
     "email.p2":"), official authorities (","email.p3":") and associations are detected automatically. ","email.strong":"The address is not stored.",
     "email.inputPh":"you@email.com","btn.sendEmail":"✉ Send link","email.verifiedBadge":"✓ Email verified — trust score increased!","badge.github":"✓ GitHub verified — trust score",
@@ -2818,6 +2818,7 @@ window.setStep = function(n) {
   }
 };
 
+let _emailSessionId = null;
 let _passkeySessionActive = false;
 
 // E-Mail Domain Vorschau (Phase 1)
@@ -2865,6 +2866,7 @@ async function doStartEmailSession() {
     if (!r1.ok) throw new Error(d1.error);
 
     sessionId = d1.sessionId;
+    _emailSessionId = d1.sessionId;  // keep a stable handle for the optional passkey-merge later
     userId    = d1.userId;
     localStorage.setItem('hhttps_uid', userId);
 
@@ -2984,7 +2986,14 @@ async function doPasskeyOptional() {
     const assertResp = await startAuthentication(opts3);
     const r4 = await fetch('/hhttps/webauthn/auth/finish', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid3, response: assertResp })
+      // Pass emailSessionId so the server merges the existing email session
+      // (carrying emailVerified/emailDomain/emailLevel/emailTrustBonus) into
+      // the new passkey session. Otherwise the email verification is lost.
+      body: JSON.stringify({
+        sessionId: sid3,
+        response: assertResp,
+        emailSessionId: (typeof _emailSessionId !== 'undefined') ? _emailSessionId : undefined
+      })
     });
     const d4 = await r4.json();
     if (!r4.ok) throw new Error(d4.error);

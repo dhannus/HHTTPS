@@ -295,6 +295,7 @@ export const VERIFICATION_LEVELS = {
   'handelsregister':       { level: 5, label: 'Commercial register',        trustScore: 92 },
   'bundestag-verified':    { level: 6, label: 'Bundestag verified',         trustScore: 98 },
   'institution-verified':  { level: 5, label: 'Institution verified',       trustScore: 93 },
+  'eudi-wallet-role':      { level: 6, label: 'EUDI Wallet (role attestation)', trustScore: 95 },
 };
 
 // ─── Verification check registry (honesty gate) ───────────────────────────────

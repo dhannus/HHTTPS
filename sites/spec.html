@@ -774,6 +774,382 @@
                 </div>
               </div>
             </div>
+
+            <h3>Email-First Flow</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/session/email/start</div>
+                  <div class="ep-desc">Create an email-only verified session (no passkey required). Initial trust 30. Body: <code>{ pseudonym? }</code>.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/email/send</div>
+                  <div class="ep-desc">Send a magic-link verification email. The link is one-shot and expires in 15 min.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/email/verify?token=...&amp;session=...</div>
+                  <div class="ep-desc">Magic-link target — marks the session as <code>emailVerified</code>, records domain + bonus.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/email/status</div>
+                  <div class="ep-desc">Poll whether the magic link has been clicked yet (used by the landing page).</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>GitHub Role-Verification</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/verify/github/start</div>
+                  <div class="ep-desc">Begin GitHub OAuth — opens a new tab to github.com.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/verify/github/callback</div>
+                  <div class="ep-desc">OAuth callback — derives a one-way hashed anchor + trust bonus 60–85, discards account data.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/verify/github/status</div>
+                  <div class="ep-desc">Landing-page poll for GitHub-verification completion.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>EUDI Wallet (Age + Role Attestation)</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/eudi/age/request</div>
+                  <div class="ep-desc">Start an OpenID4VP age presentation against the EU verifier backend; returns a <code>deepLink</code> + <code>requestId</code> (selective disclosure: only "over N years: yes/no").</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/eudi/age/status/{requestId}</div>
+                  <div class="ep-desc">Poll for wallet response. On success, the token's <code>age_verified</code> flips to <code>true</code> at age-trust 99.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/age/upgrade</div>
+                  <div class="ep-desc">Upgrade a session's age claim from self-declared to cryptographically verified (method <code>eudi-wallet</code>).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/eudi/age/health</div>
+                  <div class="ep-desc">Liveness probe for the EUDI backend bridge.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>Text Signatures</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/sign-text</div>
+                  <div class="ep-desc">Sign arbitrary text content; returns a short slug for embedding.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/verify-text</div>
+                  <div class="ep-desc">Verify a signed text snippet (content + slug).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/signatures</div>
+                  <div class="ep-desc">List the caller's text signatures.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/s/{slug}</div>
+                  <div class="ep-desc">Public lookup for a single signature (used by /s/{slug} short-link).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/signatures/batch</div>
+                  <div class="ep-desc">Batch-lookup multiple signatures by slug.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/signatures/{slug}/revoke</div>
+                  <div class="ep-desc">Revoke a text signature.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>OAuth / OpenID Connect</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/.well-known/openid-configuration</div>
+                  <div class="ep-desc">OIDC discovery document (RFC 8414) for the OAuth integration.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/oauth/authorize</div>
+                  <div class="ep-desc">OAuth 2.1 authorization endpoint; renders the consent page.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/oauth/approve</div>
+                  <div class="ep-desc">Internal: user confirms the consent → exchanges session for a short-lived authorization code.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/oauth/token</div>
+                  <div class="ep-desc">Exchange auth-code for access/refresh tokens (PKCE-validated).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/oauth/userinfo</div>
+                  <div class="ep-desc">OIDC userinfo endpoint — returns the pairwise subject + granted scope claims.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/oauth/revoke</div>
+                  <div class="ep-desc">RFC 7009 token revocation.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>Machine / Workload Identity</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/machine/register</div>
+                  <div class="ep-desc">Register a bot/AI operator; returns API key for the machine-token endpoint.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/machine/token</div>
+                  <div class="ep-desc">Issue a machine token. The token carries <code>actorType: bot</code> — transparently labelled.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>Webhooks</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/webhooks</div>
+                  <div class="ep-desc">List registered webhooks for the caller.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/webhooks</div>
+                  <div class="ep-desc">Register a new webhook. Server delivers signed payloads with HMAC-SHA256 + exponential backoff.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method DELETE">DELETE</span>
+                <div>
+                  <div class="ep-path">/hhttps/webhooks/{id}</div>
+                  <div class="ep-desc">Delete a registered webhook.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/webhooks/verify</div>
+                  <div class="ep-desc">Helper that verifies a webhook payload's HMAC-SHA256 signature.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>Roles &amp; Public Info</h3>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/info</div>
+                  <div class="ep-desc">Server self-description: version, supported roles, list of endpoint paths.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/roles</div>
+                  <div class="ep-desc">Registry of all supported roles + their verification methods + trust scores.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/stats</div>
+                  <div class="ep-desc">Aggregated public stats (tokens issued, sessions, verifications).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/protected</div>
+                  <div class="ep-desc">Sample protected endpoint — requires a valid HHTTPS token.</div>
+                </div>
+              </div>
+            </div>
+
+            <h3>Developer Portal &amp; Admin</h3>
+            <p style="font-size:13px;color:var(--muted);margin:8px 0 14px;">
+              Endpoints for platforms registering as OAuth clients on hhttps.org. Most require
+              an authenticated developer session.
+            </p>
+            <div class="endpoints">
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients</div>
+                  <div class="ep-desc">List OAuth clients owned by the developer.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients</div>
+                  <div class="ep-desc">Register a new OAuth client.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients/{id}</div>
+                  <div class="ep-desc">Fetch a single OAuth client (with secret/DNS-check info).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method PATCH">PATCH</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients/{id}</div>
+                  <div class="ep-desc">Update client metadata, redirect URIs, scopes.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method DELETE">DELETE</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients/{id}</div>
+                  <div class="ep-desc">Delete an OAuth client.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients/{id}/dns-check</div>
+                  <div class="ep-desc">Verify domain ownership via DNS TXT record.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients/{id}/submit-review</div>
+                  <div class="ep-desc">Submit the client for admin verification (badge "Verified Platform").</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/clients/{id}/stats</div>
+                  <div class="ep-desc">OAuth usage stats for the client (authorisations, unique users).</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/developers/confirm-email</div>
+                  <div class="ep-desc">Email confirmation for new developer accounts.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/admin/clients</div>
+                  <div class="ep-desc">Admin: list all OAuth clients.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/admin/clients/pending</div>
+                  <div class="ep-desc">Admin: list clients awaiting verification review.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/admin/clients/{id}/approve</div>
+                  <div class="ep-desc">Admin: approve a client review → grants the "verified" badge.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/admin/clients/{id}/reject</div>
+                  <div class="ep-desc">Admin: reject a client review request.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method POST">POST</span>
+                <div>
+                  <div class="ep-path">/hhttps/admin/clients/{id}/suspend</div>
+                  <div class="ep-desc">Admin: suspend a misbehaving client.</div>
+                </div>
+              </div>
+              <div class="endpoint-row">
+                <span class="ep-method GET">GET</span>
+                <div>
+                  <div class="ep-path">/hhttps/admin/stats</div>
+                  <div class="ep-desc">Admin: aggregated system-wide stats.</div>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section class="doc-section" id="token">
@@ -838,26 +1214,43 @@
             <span class="anchor">§ 5</span>
             <h2>Trust Scoring</h2>
             <p>
-              Each verification method maps to a numeric trust score (0–100). Verifiers
-              choose a minimum threshold based on their use case — a comment section may
-              accept 30+, a medical-advice forum may require 90+.
+              Trust is computed as an <strong>additive score</strong> (0–100). Independent
+              components add up to an <em>account trust</em>; a role-specific verified
+              method can lift it further. Verifiers pick a minimum threshold based on
+              their use case — a comment section may accept 30+, a medical-advice forum
+              may require 90+.
             </p>
 
+            <h3 style="margin-top:24px;">Account-trust components (additive)</h3>
             <div class="trust-grid">
               <div class="trust-item">
-                <div class="trust-method">self-declared</div>
+                <div class="trust-method">Email verified (baseline)</div>
                 <div class="trust-score">30</div>
-                <div class="trust-label">Baseline</div>
+                <div class="trust-label">Always, any domain</div>
               </div>
               <div class="trust-item">
-                <div class="trust-method">webauthn</div>
-                <div class="trust-score">60</div>
-                <div class="trust-label">Passkey verified</div>
+                <div class="trust-method">+ Passkey (WebAuthn)</div>
+                <div class="trust-score">+30</div>
+                <div class="trust-label">Device-bound, phishing-resistant</div>
               </div>
               <div class="trust-item">
-                <div class="trust-method">email-verified</div>
+                <div class="trust-method">+ Domain: university / press / creative</div>
+                <div class="trust-score">+15</div>
+                <div class="trust-label">.uni-*, .edu, verlag, VDS, GEMA …</div>
+              </div>
+              <div class="trust-item">
+                <div class="trust-method">+ Domain: official authority</div>
+                <div class="trust-score">+40</div>
+                <div class="trust-label">@bundestag.de, @*.bund.de …</div>
+              </div>
+            </div>
+
+            <h3 style="margin-top:24px;">Role-verified methods (floor — wins if higher)</h3>
+            <div class="trust-grid">
+              <div class="trust-item">
+                <div class="trust-method">github-verified</div>
                 <div class="trust-score">70</div>
-                <div class="trust-label">Domain-based</div>
+                <div class="trust-label">Developer</div>
               </div>
               <div class="trust-item">
                 <div class="trust-method">orcid</div>
@@ -875,9 +1268,9 @@
                 <div class="trust-label">Notary</div>
               </div>
               <div class="trust-item">
-                <div class="trust-method">official-email</div>
-                <div class="trust-score">90</div>
-                <div class="trust-label">Civil servant</div>
+                <div class="trust-method">eudi-wallet-role</div>
+                <div class="trust-score">95</div>
+                <div class="trust-label">EUDI PID role attestation</div>
               </div>
               <div class="trust-item">
                 <div class="trust-method">bundestag-id</div>
@@ -886,11 +1279,25 @@
               </div>
             </div>
 
+            <p style="margin-top:20px;">
+              <strong>Examples.</strong>
+              Email only → 30 ·
+              Email + passkey → 60 ·
+              Email + uni-domain + passkey → 75 ·
+              Email + @bundestag.de + passkey → 100 ·
+              Email + passkey + verified ORCID → 88 (role-method takes over).
+            </p>
+
+            <p>
+              <strong>Age verification</strong> is orthogonal to role trust: an EUDI Wallet
+              age-over-N presentation grants <code>age_verified: true</code> at age-trust 99,
+              independently of the role's trust score.
+            </p>
+
             <p>
               See the full mapping in
-              <a href="https://github.com/dhannus/HumanProof/blob/main/roles.js">roles.js</a>.
-              Higher methods strictly imply lower ones (a score of 93 also satisfies
-              any threshold ≤ 93).
+              <a href="https://github.com/dhannus/HHTTPS/blob/main/server/roles.js">roles.js</a>.
+              A score satisfies any threshold ≤ itself (e.g. 93 also satisfies 70+).
             </p>
           </section>
 
