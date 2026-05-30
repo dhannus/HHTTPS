@@ -335,7 +335,7 @@ The HHTTPS issuer. By design. We document this honestly rather than hiding behin
 Yes — the entire server is open source under EUPL-1.2. See [`docs/architecture.md`](docs/architecture.md) for the operator's guide. Your issuer's users will appear with `unverified issuer` warnings on platforms until either the platform whitelists you or the federation registry includes you.
 
 **What about people without digital ID documents?**
-HHTTPS supports multiple verification methods at different trust levels — passkey + email at trust 30, organizational vouching at trust 50, GitHub/ORCID at trust 70, official ID at trust 90+. Even the lowest level provides "this is one person" guarantee, which is enough to defeat bot armies.
+HHTTPS uses an **additive trust score**: verified email is the baseline at 30, an added passkey raises it by +30 (so email + passkey = 60), a recognised institutional email domain adds +15 (university, press, association) or +40 (official authorities like @bundestag.de). On top of that, a verified role-specific method takes over as the floor: GitHub or ORCID push the score to 70–88, an EUDI-Wallet role attestation to 95, and bundestag-verified to 98. Every level proves "this is one person" — already enough to defeat bot armies — and higher levels add stronger role assurance. Even the lowest level provides "this is one person" guarantee, which is enough to defeat bot armies.
 
 **Can AI systems still operate on the internet?**
 Yes — they get a parallel **Machine Token** that explicitly identifies them as automated agents. Legitimate bots (crawlers, accessibility tools, moderation systems) are made transparent, not banned. See [`protocol/machine-token.md`](protocol/machine-token.md).
