@@ -713,7 +713,6 @@ app.get('/hhttps/info', async (req, res) => {
       'POST /hhttps/webauthn/register/{start,finish}': 'Passkey registration',
       'POST /hhttps/webauthn/auth/{start,finish}':     'Passkey authentication',
       'POST /hhttps/token/refresh':             'Refresh access token',
-      'POST /hhttps/session/email/start':       'Create email-only session (no WebAuthn required)',
       'POST /hhttps/email/send':                'Send email verification',
       'GET  /hhttps/email/verify':              'Confirm email',
       'POST /hhttps/role/declare':              'Declare role → token',
@@ -1783,7 +1782,7 @@ const CONSENT_I18N = {
   de: {
     "consent.verified":"✓ Verifizierte Plattform","consent.unverified":"⚠ Nicht verifiziert",
     "consent.warnStrong":"Achtung — Diese Plattform ist nicht von hhttps.org geprüft.",
-    "consent.warnB1":"Klicke nur auf \"Erlauben\", wenn du der Plattform",
+    "consent.warnB1":"Klicke nur auf „Erlauben“, wenn du der Plattform",
     "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
     "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
     "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
@@ -1799,7 +1798,7 @@ const CONSENT_I18N = {
   en: {
     "consent.verified":"✓ Verified platform","consent.unverified":"⚠ Not verified",
     "consent.warnStrong":"Caution — this platform has not been checked by hhttps.org.",
-    "consent.warnB1":"Only click \"Allow\" if you really trust the platform",
+    "consent.warnB1":"Only click “Allow” if you really trust the platform",
     "consent.warnB2":". Check in particular that the URL in the address bar matches",
     "consent.warnB3":".","consent.heading":"wants to see your identity",
     "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
@@ -2035,66 +2034,6 @@ app.post('/hhttps/token/refresh', async (req, res) => {
     });
   } catch (e) {
     res.status(401).json({ error: e.message });
-  }
-});
-
-// ─── Email-First Session ─────────────────────────────────────────────────────
-//
-// POST /hhttps/session/email/start
-//
-// Erstellt eine verified Session ohne WebAuthn-Credential.
-// Passkey bleibt optional und kann nachträglich den trust_score erhöhen.
-//
-// Motivation: Ermöglicht Email-first-Flow auf der Landing Page ohne
-// vorherige Passkey-Registrierung. Sessions werden mit trust_score: 30
-// erstellt (Baseline E-Mail). Nach erfolgreicher E-Mail-Verifikation
-// wertet /hhttps/role/declare den emailTrustBonus aus wie gehabt.
-//
-// Rate-limit: identisch mit limit.email (5 Req / 60 min pro IP).
-// Kein DB-Schema-Change: credential_id, device_type, backed_up sind nullable.
-//
-// Body:     { pseudonym?: string }
-// Response: { sessionId, userId, trustScore: 30, method: "email-pending" }
-//
-app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
-  try {
-    const { pseudonym } = req.body || {};
-
-    // Pseudonym: max 32 Zeichen, nur sichere Zeichen
-    const cleanPseudo = pseudonym
-      ? String(pseudonym)
-          .replace(/[^\w\-. äöüÄÖÜß]/gu, '')
-          .slice(0, 32)
-          .trim() || null
-      : null;
-
-    const userId = uuid();
-    const sid    = uuid();
-
-    // credential_id, device_type, backed_up sind in der DB nullable —
-    // kein ALTER TABLE nötig.
-    await db.sessions.create(sid, {
-      userId,
-      credentialId: null,
-      deviceType:   'email-only',
-      backedUp:     false,
-      verified:     true,   // session gilt als verified für /hhttps/email/send
-      trustScore:   30,
-    }, 900_000); // 15 min — ausreichend für E-Mail-Zustellung und Bestätigung
-
-    await db.stats.increment('verifications');
-
-    res.json({
-      sessionId:  sid,
-      userId,
-      trustScore: 30,
-      method:     'email-pending',
-      pseudonym:  cleanPseudo,
-      message:    'Session erstellt. Bitte E-Mail verifizieren.',
-    });
-  } catch (e) {
-    console.error('[session/email/start]', e.message);
-    res.status(500).json({ error: e.message });
   }
 });
 
