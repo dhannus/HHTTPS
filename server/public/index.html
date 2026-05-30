@@ -743,8 +743,8 @@ footer a{color:var(--cyan);text-decoration:none;}
             <button class="btn btn-sm" onclick="deletePasskey()"
               style="font-size:12px;padding:6px 12px;background:rgba(248,113,113,0.1);
               border:1px solid rgba(248,113,113,0.3);color:var(--red);"
-              title="Passkey aus diesem Browser löschen">
-              🗑 Löschen
+              title="Passkey-Verknüpfung in diesem Browser entfernen (der eigentliche Passkey im Betriebssystem bleibt)">
+              Vergessen
             </button>
           </div>
         </div>
@@ -2186,6 +2186,7 @@ function publishIdentity(data) {
     levelLabel:      data.levelLabel || null,
     trustScore:      data.trustScore || 0,
     method:          data.method || 'webauthn-passkey',
+    pseudonym:       data.pseudonym || null,
     issuer:          'hhttps://hhttps.org',
     issuedAt:        new Date().toISOString(),
     expiresAt:       data.expiresAt || null,
@@ -2725,6 +2726,7 @@ window.doDeclarRole = async function() {
       levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
       trustScore:       d.hhttps.trustScore,
       method:           d.role?.level || 'email-verified',
+      pseudonym:        d.role?.pseudonym || null,
       expiresAt:        d.hhttps.expiresAt,
       refreshExpiresAt: d.hhttps.refreshExpiresAt,
     });
@@ -3101,10 +3103,22 @@ function showPasskeyFoundBanner() {
 }
 
 function useExistingPasskey() {
-  // Versteckt Banner, springt zum Passkey-Auth-Flow (Original skipToAuth)
+  // Hide banner + run a FULL passkey re-auth. The previous build called
+  // skipToAuth() which assumed there was already a fresh challenge session
+  // — there isn't, after a popup-redirect or a reload. doAuth() goes
+  // through start+finish and produces a new sessionId bound to this passkey.
   const banner = document.getElementById('passkeyFoundBanner');
   if (banner) banner.style.display = 'none';
-  skipToAuth();
+  // Reset transient state from a previous flow, if any.
+  sessionId = null;
+  _emailSessionId = null;
+  // Drop the user into the passkey-first flow, step 2 (the prove-humanity
+  // step). setStep is already overridden in email-first builds so it routes
+  // to the right phase.
+  try { setStep(2); } catch(e) {}
+  // Trigger the auth right away — the user already clicked, no need to
+  // wait for them to click again inside the next phase.
+  setTimeout(() => { try { doAuth(); } catch(e){} }, 50);
 }
 
 function deletePasskey() {
@@ -3126,9 +3140,35 @@ if (!window.PublicKeyCredential) {
   msg(tr('msg.webauthnUnsupported'),'e');
   document.getElementById('btnReg').disabled = true;
 }
+// Stored-identity sanity check. The previous build kept hhttps_uid forever,
+// so every reload re-surfaced the "Passkey verwenden" banner -- even after
+// the bound session had long died (-> "Session invalid" later). We now do a
+// quick JWT-exp check on the stored identity and wipe stale state silently.
+(function reconcileStoredIdentity() {
+  try {
+    const raw = localStorage.getItem('hhttps_identity');
+    if (!raw) return; // nothing to reconcile
+    const id = JSON.parse(raw);
+    if (!id || !id.token) return;
+    const parts = String(id.token).split('.');
+    if (parts.length !== 3) throw new Error('not a JWT');
+    const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < now) {
+      // Token expired — drop the whole identity. Keep hhttps_uid because
+      // the passkey itself is still valid; the user can re-auth with it.
+      localStorage.removeItem('hhttps_identity');
+    }
+  } catch (e) {
+    // Anything malformed: wipe it. Better to start fresh than to ship junk.
+    localStorage.removeItem('hhttps_identity');
+  }
+})();
+
 if (userId) {
-  // Passkey gefunden — KEIN Auto-Jump mehr.
-  // Nutzer sieht Banner mit Option: weitermachen oder Passkey löschen.
+  // We still have a passkey credential on this device. The banner now offers
+  // a FRESH re-auth (creates a brand-new session bound to the existing
+  // passkey) instead of trying to reuse a dead session.
   showPasskeyFoundBanner();
 }
 

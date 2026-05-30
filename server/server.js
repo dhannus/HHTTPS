@@ -383,8 +383,13 @@ const rl = (max, windowMs = 60000) => rateLimit({
 const limit = {
   global:   rl(300),
   check:    rl(120),
-  webauthn: rl(20, 15 * 60_000),
-  email:    rl(5,  60 * 60_000),
+  // webauthn: 40 attempts / 15 min — covers normal registration retry, lost
+  // typo-fingerprint attempts, and re-auth roundtrips without being stingy.
+  webauthn: rl(40, 15 * 60_000),
+  // email: 30 sends / 60 min per IP. Generous on purpose: a single user
+  // who triggers session/start + send + confirm + retries can easily hit
+  // 5-8 requests; 30 leaves ample headroom for normal demos and dev work.
+  email:    rl(30, 60 * 60_000),
   revoke:   rl(30),
   webhooks: rl(20, 60 * 60_000),
   machine:  rl(60)
@@ -2279,14 +2284,63 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
 
   try {
     const result = await handleGithubCallback({ code, state, redirectBase: BASE_URL });
-    const warn = result.alreadyOwnedBy ? '&warning=anchor_collision' : '';
-    res.redirect(
-      `/?github_verify=success&score=${result.trustScore}&session=${result.sessionId}${warn}`
-    );
+    const warn = result.alreadyOwnedBy ? ' (warning: anchor collision)' : '';
+    // Render a self-closing landing page instead of redirecting the popup back
+    // to the SPA. The original tab is already polling /hhttps/verify/github/status
+    // and will pick up the verification on its own — we just need this tab to
+    // get out of the way without dragging fresh JS state into the user's flow.
+    res.send(renderGithubReturnPage({
+      ok: true,
+      title: 'GitHub verified',
+      message: 'You can close this tab and return to hhttps.org.' + warn,
+      trustScore: result.trustScore
+    }));
   } catch (e) {
-    res.redirect(`/?github_verify=error&reason=${encodeURIComponent(e.message)}`);
+    res.send(renderGithubReturnPage({
+      ok: false,
+      title: 'GitHub verification failed',
+      message: e.message
+    }));
   }
 });
+
+// ─── Static landing page for the GitHub OAuth popup tab ─────────────────────
+// Bilingual (EN/DE stacked), self-closes after 2 s. Inline CSS keeps it tiny.
+function renderGithubReturnPage({ ok, title, message, trustScore }) {
+  const color = ok ? '#34d399' : '#f87171';
+  const icon  = ok ? '✓'  : '✗';
+  const scoreLine = (ok && trustScore)
+    ? `<div style="font-family:monospace;font-size:13px;color:#7a8aa0;margin-top:6px;">Trust score: ${trustScore} / 100</div>`
+    : '';
+  return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="utf-8"><title>${title}</title>
+<style>
+  body{margin:0;background:#0d1421;color:#e2f0fa;font:14px/1.6 system-ui,sans-serif;
+       min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;}
+  .card{max-width:420px;text-align:center;background:#161e30;border:1px solid #2a3550;
+        border-radius:12px;padding:32px 28px;}
+  .icon{font-size:48px;color:${color};margin-bottom:8px;line-height:1;}
+  h1{font-size:18px;margin:0 0 12px;color:#e2f0fa;}
+  .msg{color:#a0b8d8;font-size:14px;line-height:1.5;margin:0 0 6px;}
+  .lang-de{color:#7a8aa0;font-size:13px;margin-top:14px;border-top:1px solid #2a3550;padding-top:12px;}
+  button{margin-top:18px;background:#00e5ff;color:#0d1421;border:0;border-radius:6px;
+         padding:10px 22px;font:600 13px/1 system-ui,sans-serif;cursor:pointer;}
+</style></head><body>
+  <div class="card">
+    <div class="icon">${icon}</div>
+    <h1>${title}</h1>
+    <p class="msg">${escapeHtml(message)}</p>
+    ${scoreLine}
+    <p class="lang-de">Du kannst diesen Tab schließen und zu hhttps.org zurückkehren.</p>
+    <button onclick="window.close()">Close tab / Tab schließen</button>
+  </div>
+  <script>
+    // Best-effort: try to close after 2 s. Some browsers refuse to close tabs
+    // that weren't opened via window.open() — the button is the manual fallback.
+    setTimeout(() => { try { window.close(); } catch(e){} }, 2000);
+  </script>
+</body></html>`;
+}
 
 app.post('/hhttps/verify/github/status', async (req, res) => {
   const { sessionId } = req.body;
@@ -2300,6 +2354,19 @@ app.post('/hhttps/role/declare', async (req, res) => {
   const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body;
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
+
+  // Pseudonym is optional and human-readable. It travels two paths:
+  //   1) via the email-first flow's session-merge (already on the session), or
+  //   2) directly in verificationData when the user typed it on the role page.
+  // We sanitize aggressively (letters/digits/dash/dot/space + German umlauts,
+  // max 32 chars) and prefer the request-fresh value over the session copy.
+  let pseudonym = (verificationData && verificationData.pseudonym) || session.pseudonym || null;
+  if (pseudonym) {
+    pseudonym = String(pseudonym)
+      .replace(/[^\w\-. äöüÄÖÜß]/gu, '')
+      .slice(0, 32)
+      .trim() || null;
+  }
 
   const roleDef = ROLES[role];
   if (!roleDef) return res.status(400).json({
@@ -2428,6 +2495,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
     deviceType: session.deviceType,
     verification_status: vClaimStatus,                          // verified | claimed | self-declared
     ...(vClaimedAs ? { claimed_as: vClaimedAs } : {}),          // asserted-but-unverified method
+    ...(pseudonym ? { pseudonym } : {}),                        // human-readable name (optional)
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, role);
@@ -2465,7 +2533,8 @@ app.post('/hhttps/role/declare', async (req, res) => {
       claimedAsLabel:     vClaimedAs ? (VERIFICATION_LEVELS[vClaimedAs]?.label || vClaimedAs) : null,
       targetTrust:        vTargetTrust || null,     // trust once the real check exists
       emailVerified: session.emailVerified || false,
-      emailDomain:   session.emailDomain   || null
+      emailDomain:   session.emailDomain   || null,
+      pseudonym:     pseudonym || null
     },
     ageGroup: ageClaims ? {
       id:        ageClaims.age_group,
