@@ -211,11 +211,11 @@ body::before{
   min-height:44px;display:inline-flex;align-items:center;}
 .vopt:hover{border-color:var(--cyan);color:var(--text);}
 .vopt.sel{border-color:var(--amber);color:var(--amber);background:rgba(255,171,64,.08);font-weight:600;}
-.vfield{width:100%;background:var(--bg);border:1px solid var(--b2);
-  border-radius:6px;padding:12px 14px;color:var(--text);font-family:var(--mono);
+.vfield{width:100%;background:#ffffff;border:1px solid var(--b2);
+  border-radius:6px;padding:12px 14px;color:#0d1421;font-family:var(--mono);
   font-size:14px;outline:none;transition:border-color .2s;margin-bottom:8px;min-height:44px;}
-.vfield:focus{border-color:var(--cyan);}
-.vfield::placeholder{color:var(--text-muted-strong);}
+.vfield:focus{border-color:var(--cyan);box-shadow:0 0 0 3px rgba(0,229,255,.15);}
+.vfield::placeholder{color:#7a8aa0;}
 
 /* Status badge rows shown after a verification succeeds */
 .verify-badge-row{
@@ -764,6 +764,8 @@ footer a{color:var(--cyan);text-decoration:none;}
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
           <input class="vfield" id="emailCode1" type="text"
             placeholder="6-stelliger Code" maxlength="6"
+            inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+            onkeydown="if(event.key==='Enter')doVerifyEmailCode();"
             style="letter-spacing:4px;font-size:1.2rem;text-align:center;flex:1;min-width:180px;">
           <button class="btn btn-p" id="btnVerifyCode1" type="button" onclick="doVerifyEmailCode()">
             ✓ Bestätigen
@@ -2292,20 +2294,22 @@ async function doCheck() {
 
 
 // ── Email verification ─────────────────────────────────────────────────────
+// Map of well-known email domains -> verification level + trust BONUS.
+// Account trust = 30 baseline + this bonus, plus +30 if a passkey is added.
 const DOMAIN_HINTS = {
-  'bundestag.de': {l:'official-email',s:90,t:'hint.parliament'},
-  'bmi.bund.de':  {l:'official-email',s:90,t:'hint.authority'},
+  'bundestag.de': {l:'official-email',s:40,t:'hint.parliament'},
+  'bmi.bund.de':  {l:'official-email',s:40,t:'hint.authority'},
 };
 function getDomainHint(email) {
   const domain = email.split('@')[1]?.toLowerCase() || '';
   if (DOMAIN_HINTS[domain]) return DOMAIN_HINTS[domain];
   if (['.uni-','.tu-','.lmu.','.rwth','.tum.de','.fau.de','.fu-berlin','.kit.edu','.hs-','.fh-'].some(d=>domain.includes(d)))
-    return {l:'email-verified',s:75,t:'hint.edu'};
+    return {l:'school-email',s:15,t:'hint.edu'};
   if (['spiegel.de','zeit.de','sueddeutsche.de','faz.net','dpa.com','ard.de','zdf.de'].some(d=>domain.endsWith(d)))
-    return {l:'email-verified',s:72,t:'hint.media'};
+    return {l:'email-verified',s:15,t:'hint.media'};
   if (['sprecherverband.de','bffs.de','synchronverband.de','bsd-synchron.de'].some(d=>domain.endsWith(d)))
-    return {l:'email-verified',s:78,t:'hint.assoc'};
-  return {l:'email-verified',s:65,t:'hint.standard'};
+    return {l:'email-verified',s:15,t:'hint.assoc'};
+  return {l:'email-verified',s:0,t:'hint.standard'};
 }
 
 function previewEmailDomain(email) {
@@ -2827,7 +2831,10 @@ function previewEmailDomain1(email) {
   if (!el) return;
   if (!email.includes('@')) { el.textContent=''; return; }
   const h = getDomainHint(email);
-  el.innerHTML = '<span style="color:var(--amber)">' + tr(h.t) + '</span> → Trust Score: <strong style="color:var(--cyan)">' + h.s + '/100</strong>';
+  // Account trust = 30 (email baseline) + domain bonus. Passkey is separate (+30).
+  const total = 30 + (h.s || 0);
+  const bonusTxt = h.s > 0 ? ' <span style="color:var(--muted)">(30 + ' + h.s + ')</span>' : '';
+  el.innerHTML = '<span style="color:var(--amber)">' + tr(h.t) + '</span> → Trust: <strong style="color:var(--cyan)">' + total + '/100</strong>' + bonusTxt;
 }
 
 // Pseudonym Live-Preview
@@ -2881,13 +2888,26 @@ async function doStartEmailSession() {
     btn.innerHTML = '✓ Code gesendet';
     emailEl.disabled = true;
 
-    if (d2.devMode && d2.devToken) {
-      msgEl('emailMsg1', '📧 DEV: Auto-verifiziere…', 'i');
-      setTimeout(() => autoVerifyDevEF(d2.devToken), 800);
+    if (d2.devMode && (d2.devCode || d2.devToken)) {
+      // DEV mode (no SMTP): show the user the same code-input UX a real user
+      // gets, then auto-fill and submit it after a short delay.
+      if (d2.devCode) {
+        const codeInp = document.getElementById('emailCode1');
+        codeInp.value = d2.devCode;
+        document.getElementById('emailCodeRow').style.display = 'block';
+        msgEl('emailMsg1', '📧 DEV: Code ' + d2.devCode + ' wird automatisch geprüft…', 'i');
+        setTimeout(doVerifyEmailCode, 800);
+      } else {
+        msgEl('emailMsg1', '📧 DEV: Auto-verifiziere…', 'i');
+        setTimeout(() => autoVerifyDevEF(d2.devToken), 800);
+      }
     } else {
-      msgEl('emailMsg1', '📧 Code gesendet an ' + email + '. Bitte Postfach prüfen.', 's');
-      document.getElementById('emailCodeRow').style.display = 'block';
-      // Polling starten
+      msgEl('emailMsg1', '📧 Code gesendet an ' + email + '. Bitte Postfach prüfen und 6-stelligen Code eintippen.', 's');
+      const codeRow = document.getElementById('emailCodeRow');
+      codeRow.style.display = 'block';
+      // Focus the code input so the user can just start typing.
+      setTimeout(() => document.getElementById('emailCode1')?.focus(), 250);
+      // Keep the legacy poller as a courtesy for mobile-link users; doVerifyEmailCode stops it.
       pollEmailEF();
     }
   } catch(e) {
@@ -2897,10 +2917,43 @@ async function doStartEmailSession() {
   }
 }
 
-// Manueller Code-Input (Fallback wenn Link statt Code)
+// User types the 6-digit code from their email into the SAME tab. We confirm
+// it server-side, the session flips to emailVerified, and the flow advances.
+// This is the PRIMARY verification path now — the magic-link / polling exists
+// only as a mobile-fallback (link in the email footer).
 async function doVerifyEmailCode() {
-  // Polling macht das automatisch — bei manuellem Code: status prüfen
-  await checkEmailStatus();
+  const inp = document.getElementById('emailCode1');
+  const btn = document.getElementById('btnVerifyCode1');
+  const code = (inp?.value || '').replace(/\D/g, '').trim();
+  if (code.length !== 6) {
+    msgEl('emailMsg1', 'Bitte 6-stelligen Code eingeben.', 'e');
+    return;
+  }
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Prüfe…';
+  live('pend', 'verifying code…');
+  try {
+    const r = await fetch('/hhttps/email/confirm-code', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, code })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Code-Verifikation fehlgeschlagen.');
+
+    // Stop the legacy magic-link poller if it was running.
+    if (_efPollTimer) { clearInterval(_efPollTimer); _efPollTimer = null; }
+
+    inp.disabled = true; btn.innerHTML = '✓ Bestätigt';
+    msgEl('emailMsg1', '✓ E-Mail bestätigt! Trust: ' + d.accountTrust + '/100', 's');
+    live('on', tr('live.verified'));
+    buildRoleGrid();
+
+    // Advance to the next step (pseudonym).
+    setTimeout(() => { if (typeof setStepEF === 'function') setStepEF(2); }, 500);
+  } catch (e) {
+    msgEl('emailMsg1', 'Fehler: ' + e.message, 'e');
+    btn.disabled = false; btn.innerHTML = '✓ Bestätigen';
+    live('err', tr('live.error'));
+  }
 }
 
 // Dev-Mode Auto-Verify

@@ -202,15 +202,38 @@ function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote })
 // LEGACY: User email verification (role declaration flow)
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Generate a 6-digit verification code that the user types into the SAME tab
+// where the flow started. No magic-link clicking, no new tab, no cross-tab
+// session glue — just a simple code-confirmation in one window.
+function generateCode6() {
+  // crypto.randomInt is uniform; fall back to randomBytes if needed
+  if (typeof crypto.randomInt === 'function') {
+    return String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  }
+  const buf = crypto.randomBytes(4);
+  return String(buf.readUInt32BE(0) % 1_000_000).padStart(6, '0');
+}
+
 export async function sendVerificationEmail({ email, role, sessionId, baseUrl }) {
   const base = baseUrl || BASE_URL;
 
+  // Two artifacts are generated up-front:
+  //   • code6     — what the user types in. Stored as sha256(code).
+  //   • rawToken  — long random token kept for a backward-compat magic-link
+  //                 fallback at the bottom of the email. Not promoted in UI.
+  const code6     = generateCode6();
+  const codeHash  = crypto.createHash('sha256').update(code6).digest('hex');
   const rawToken  = crypto.randomBytes(32).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
   const classification = classifyDomain(email);
 
+  // The DB row holds BOTH hashes so either input path (typed code OR clicked
+  // magic-link) can resolve to the same verification record. The `code` column
+  // is added in a non-breaking way: emailVerifications.create gets a `code`
+  // field, getAndConsume falls back to `null` when not set.
   await emailVerifications.create({
     token:      tokenHash,
+    code:       codeHash,
     email:      crypto.createHash('sha256').update(email.toLowerCase()).digest('hex'),
     domain:     classification.domain,
     level:      classification.level,
@@ -223,8 +246,23 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
   const verifyUrl = `${base}/hhttps/email/verify?token=${rawToken}&session=${sessionId}`;
   const label = roleDisplay(role);
 
+  // The visual centerpiece is the 6-digit code in monospace, copy-friendly.
+  // No link button in the primary CTA — that was the source of the new-tab
+  // confusion. The legacy magic-link still ships at the bottom for users who
+  // open the email on a phone and want to confirm there.
+  const codePretty = code6.replace(/(\d{3})(\d{3})/, '$1 $2');
+  const codeBox = `
+    <div style="margin:24px 0 18px;padding:22px 16px;text-align:center;background:#0f1a2d;border:1px solid #1f2f4a;border-radius:10px;">
+      <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#7a8aa0;margin-bottom:10px;">VERIFICATION CODE · BESTÄTIGUNGS-CODE</div>
+      <div style="font-family:'JetBrains Mono','Courier New',monospace;font-size:34px;letter-spacing:8px;color:#00e5ff;font-weight:700;">${codePretty}</div>
+      <div style="font-family:Arial,sans-serif;font-size:12px;color:#7a8aa0;margin-top:10px;">Valid for 15 minutes · 15 Minuten gültig</div>
+    </div>
+  `;
+
   const bodyHtml = biHtml(
     `<p>You requested email verification for your HHTTPS identity.</p>
+    ${codeBox}
+    <p>Enter the 6-digit code <strong>in the browser tab where you started</strong>. The tab is still waiting — do <em>not</em> open a new tab.</p>
     <div class="info-box">
       <div class="ib-key">Role</div>
       <div class="ib-val">${label}</div>
@@ -232,30 +270,31 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
     <div class="info-box">
       <div class="ib-key">Domain · Level · Trust bonus</div>
       <div class="ib-val">${classification.domain} · ${classification.level} · +${classification.trustBonus}</div>
-    </div>
-    <p>Click the button to confirm your email domain and raise your trust score. The link is valid for <strong>15 minutes</strong>.</p>`,
+    </div>`,
     `<p>Du hast eine E-Mail-Verifikation für deine HHTTPS-Identität angefordert.</p>
-    <p>Klicke auf den Button, um deine E-Mail-Domain zu bestätigen und deinen Trust Score zu erhöhen. Der Link ist <strong>15 Minuten</strong> gültig.</p>`
+    <p>Gib den 6-stelligen Code <strong>in dem Browser-Tab ein, in dem du gestartet hast</strong>. Der Tab wartet auf dich — <em>nicht</em> in einem neuen Tab öffnen.</p>`
   );
 
   const html = emailShell({
-    title:     'Email verification',
-    subtitle:  'HUMAN-VERIFIED HTTPS · ROLE VERIFICATION',
+    title:     'Verification code',
+    subtitle:  'HUMAN-VERIFIED HTTPS · EMAIL VERIFICATION',
     bodyHtml,
+    // We keep a discreet magic-link in the footer for users on mobile who'd
+    // rather tap than type. Most users will never see it.
     ctaUrl:    verifyUrl,
-    ctaLabel:  '✓ Confirm email / E-Mail bestätigen',
-    footerNote: '<strong style="color:#a0b8d8">Privacy:</strong> your email address is not stored. Only a hash of the domain is used for role verification; the token expires automatically after 15 minutes. — <strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nicht gespeichert. Nur ein Hash der Domain wird für die Rollenverifikation genutzt. Der Token verfällt automatisch nach 15 Minuten.'
+    ctaLabel:  'Mobile? Confirm via link / per Link bestätigen',
+    footerNote: '<strong style="color:#a0b8d8">Privacy:</strong> your email address is not stored — only a hash of the domain is used for role verification. The code expires automatically after 15 minutes. — <strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nicht gespeichert. Nur ein Hash der Domain wird für die Rollenverifikation genutzt. Der Code verfällt automatisch nach 15 Minuten.'
   });
 
   const text = biText(
-    `HHTTPS — Email verification\n\nRole: ${label}\nDomain: ${classification.domain}\nTrust bonus: +${classification.trustBonus}\n\nLink (valid 15 min):\n${verifyUrl}\n\n— HHTTPS Project · hhttps.org`,
-    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${label}\nDomain: ${classification.domain}\nTrust-Bonus: +${classification.trustBonus}\n\nLink (15 Min gültig):\n${verifyUrl}\n\n— HHTTPS Project · hhttps.org`
+    `HHTTPS — Email verification\n\nRole: ${label}\nDomain: ${classification.domain}\nTrust bonus: +${classification.trustBonus}\n\nYour verification code (15 min):\n\n    ${codePretty}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\n— HHTTPS Project · hhttps.org`,
+    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${label}\nDomain: ${classification.domain}\nTrust-Bonus: +${classification.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${codePretty}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\n— HHTTPS Project · hhttps.org`
   );
 
   const transporter = createTransport();
   if (!transporter) {
-    devLog('User email verification', email, verifyUrl, { role, classification });
-    return { sent: false, devMode: true, verifyUrl, classification, rawToken };
+    devLog('User email verification', email, verifyUrl, { role, classification, code: code6 });
+    return { sent: false, devMode: true, verifyUrl, code: code6, classification, rawToken };
   }
 
   await transporter.sendMail(buildMailOptions({
@@ -464,6 +503,31 @@ export async function verifyEmailToken(rawToken) {
   if (!entry) return {
     valid: false,
     error: 'Token not found, expired, or already used (valid: 15 min).'
+  };
+
+  return {
+    valid:      true,
+    sessionId:  entry.session_id,
+    domain:     entry.domain,
+    level:      entry.level,
+    trustBonus: entry.trust_bonus,
+    category:   entry.category
+  };
+}
+
+// ─── Verify a 6-digit code (used by /hhttps/email/confirm-code) ───────────
+// Same shape as verifyEmailToken — but resolves by sha256(code) and binds
+// the call to the SAME session that requested the code (defence in depth).
+export async function verifyEmailCode(code, sessionId) {
+  if (!/^\d{6}$/.test(String(code || '').trim())) {
+    return { valid: false, error: 'Code must be 6 digits.' };
+  }
+  const codeHash = crypto.createHash('sha256').update(String(code).trim()).digest('hex');
+  const entry = await emailVerifications.getAndConsumeByCode(codeHash, sessionId);
+
+  if (!entry) return {
+    valid: false,
+    error: 'Code wrong, expired or already used (valid: 15 min).'
   };
 
   return {

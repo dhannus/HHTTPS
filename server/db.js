@@ -308,14 +308,19 @@ export const revokedTokens = {
 // ─── EMAIL VERIFICATIONS ──────────────────────────────────────────────────────
 
 export const emailVerifications = {
-  async create({ token, email, domain, level, trustBonus, category, sessionId, ttlMs = 900_000 }) {
+  // The `code` column holds the sha256 of the 6-digit verification code that
+  // the user types into the original tab. It coexists with `token` (used by
+  // the legacy magic-link fallback at the bottom of the email). One ALTER
+  // is run on boot — see ensureSchema below.
+  async create({ token, code, email, domain, level, trustBonus, category, sessionId, ttlMs = 900_000 }) {
     await q(
-      `INSERT INTO email_verifications (token, email, domain, level, trust_bonus, category, session_id, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8 || ' milliseconds')::interval)`,
-      [token, email, domain, level, trustBonus, category, sessionId, ttlMs]
+      `INSERT INTO email_verifications (token, code, email, domain, level, trust_bonus, category, session_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + ($9 || ' milliseconds')::interval)`,
+      [token, code || null, email, domain, level, trustBonus, category, sessionId, ttlMs]
     );
   },
 
+  // Magic-link path (legacy fallback). Consumes by token only.
   async getAndConsume(token) {
     const { rows } = await q(
       `UPDATE email_verifications SET used = TRUE
@@ -324,8 +329,36 @@ export const emailVerifications = {
       [token]
     );
     return rows[0] || null;
+  },
+
+  // Code path (primary). Binds to session_id as defence-in-depth: a code
+  // posted from a different browser/session cannot consume the row.
+  async getAndConsumeByCode(codeHash, sessionId) {
+    const { rows } = await q(
+      `UPDATE email_verifications SET used = TRUE
+       WHERE code = $1 AND session_id = $2 AND used = FALSE AND expires_at > NOW()
+       RETURNING *`,
+      [codeHash, sessionId]
+    );
+    return rows[0] || null;
   }
 };
+
+// Ensure the `code` column exists. Idempotent, fires once on import.
+// Lives next to emailVerifications so the schema stays close to the code
+// that uses it.
+let _codeColumnEnsured = false;
+async function ensureCodeColumn() {
+  if (_codeColumnEnsured) return;
+  try {
+    await q(`ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS code TEXT`);
+    _codeColumnEnsured = true;
+  } catch (e) {
+    console.error('[db] ensureCodeColumn:', e.message);
+  }
+}
+// Fire-and-forget on module load — pg client is already initialised.
+ensureCodeColumn().catch(() => {});
 
 // ─── ROLES DECLARED ───────────────────────────────────────────────────────────
 

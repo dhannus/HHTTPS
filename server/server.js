@@ -36,7 +36,7 @@ import {
 import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
          VERIFICATION_CHECKS, resolveVerification, ageGroupFromEudiClaims } from './roles.js';
 import {
-  sendVerificationEmail, verifyEmailToken, classifyDomain,
+  sendVerificationEmail, verifyEmailToken, verifyEmailCode, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
 } from './email.js';
 import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
@@ -2155,9 +2155,11 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
       expectedTrustScore: classification.trustBonus, category: classification.category,
       expiresIn: '15 Minuten'
     };
-    if (result.devMode && result.rawToken) {
-      resp.devToken     = result.rawToken;
-      resp.devVerifyUrl = result.verifyUrl;
+    if (result.devMode) {
+      // In dev mode (no SMTP), surface the code so the page can show it.
+      if (result.code)     resp.devCode      = result.code;
+      if (result.rawToken) resp.devToken     = result.rawToken;
+      if (result.verifyUrl) resp.devVerifyUrl = result.verifyUrl;
     }
     res.json(resp);
   } catch (err) { res.status(500).json({ error: 'E-Mail-Fehler: ' + err.message }); }
@@ -2185,6 +2187,51 @@ app.get('/hhttps/email/verify', async (req, res) => {
     `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
     `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}`
   );
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /hhttps/email/confirm-code
+//
+// Same-tab verification path: the user types the 6-digit code they received
+// in the email into the page where they started, and we mark THIS session as
+// emailVerified. No tab-switching, no cross-tab session glue.
+//
+// Body:     { sessionId, code }
+// Response: { verified: true, level, domain, trustBonus, category, accountTrust }
+//
+app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
+  const { sessionId, code } = req.body || {};
+  if (!sessionId || !code) return res.status(400).json({ error: 'sessionId and code required.' });
+
+  const result = await verifyEmailCode(code, sessionId);
+  if (!result.valid) return res.status(400).json({ error: result.error });
+
+  const session = await db.sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+
+  await db.sessions.update(sessionId, {
+    emailVerified:   true,
+    emailLevel:      result.level,
+    emailDomain:     result.domain,
+    emailTrustBonus: result.trustBonus,
+    emailCategory:   result.category,
+  });
+
+  // Report the account-trust the user would have RIGHT NOW (before any role
+  // declaration), so the UI can show "Trust 30 + 15 = 45" immediately.
+  const accountTrust = Math.min(
+    100,
+    30 + (result.trustBonus || 0) + ((session.hasPasskey || session.credentialId) ? 30 : 0)
+  );
+
+  res.json({
+    verified:     true,
+    level:        result.level,
+    domain:       result.domain,
+    trustBonus:   result.trustBonus,
+    category:     result.category,
+    accountTrust,
+  });
 });
 
 app.post('/hhttps/email/status', async (req, res) => {
