@@ -690,12 +690,19 @@ footer a{color:var(--cyan);text-decoration:none;}
 @keyframes eudiSheen{0%{background-position:0% 50%}100%{background-position:250% 50%}}
 @keyframes eudiReveal{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
 
-.eudi-panel-head{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px;}
+.eudi-panel-head{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;margin-bottom:12px;}
 .eudi-panel-head .badge-shield{
   display:inline-flex;align-items:center;justify-content:center;
-  filter:drop-shadow(0 0 6px rgba(52,211,153,.5));
+  width:84px;height:84px;border-radius:50%;
+  background:radial-gradient(circle at 50% 45%, rgba(52,211,153,.20) 0%, rgba(52,211,153,.05) 55%, transparent 72%);
+  filter:drop-shadow(0 0 14px rgba(52,211,153,.55));
+  animation:shieldPulse 2.6s ease-in-out infinite;
 }
 .eudi-panel-head .badge-shield svg{display:block;}
+@keyframes shieldPulse{
+  0%,100%{transform:scale(1);filter:drop-shadow(0 0 12px rgba(52,211,153,.45));}
+  50%{transform:scale(1.06);filter:drop-shadow(0 0 22px rgba(52,211,153,.75));}
+}
 .eudi-panel-title{
   font-family:var(--syne,inherit);font-weight:700;font-size:15px;letter-spacing:.3px;
   color:var(--green);
@@ -761,7 +768,7 @@ footer a{color:var(--cyan);text-decoration:none;}
   100%{opacity:0;transform:translate(var(--bx,40px),var(--by,-40px)) scale(.3)}}
 
 @media (prefers-reduced-motion: reduce){
-  .eudi-panel,.eudi-panel::before,.eudi-thresh-btn .spark,.eudi-qr-wrap .sp,.eudi-burst.go i{animation:none!important;}
+  .eudi-panel,.eudi-panel::before,.eudi-thresh-btn .spark,.eudi-qr-wrap .sp,.eudi-burst.go i,.eudi-panel-head .badge-shield{animation:none!important;}
 }
 </style>
 </head>
@@ -999,10 +1006,10 @@ footer a{color:var(--cyan);text-decoration:none;}
         <div class="eudi-burst" id="eudiBurst"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
         <div class="eudi-panel-head">
           <span class="badge-shield" aria-hidden="true">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2.5l7 2.6v5.4c0 4.4-2.9 8.2-7 9.5-4.1-1.3-7-5.1-7-9.5V5.1l7-2.6z"
-                    fill="rgba(52,211,153,.14)" stroke="var(--green)" stroke-width="1.4" stroke-linejoin="round"/>
-              <path d="M8.4 12.2l2.4 2.4 4.8-4.8" stroke="var(--green)" stroke-width="1.7"
+                    fill="rgba(52,211,153,.16)" stroke="var(--green)" stroke-width="1.4" stroke-linejoin="round"/>
+              <path d="M8.4 12.2l2.4 2.4 4.8-4.8" stroke="var(--green)" stroke-width="1.9"
                     stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </span>
