@@ -847,19 +847,35 @@ footer a{color:var(--cyan);text-decoration:none;}
         </div>
       </div>
 
-      <!-- Optional age group (orthogonal to role). Phase 1: self-declared. -->
+      <!-- Optional age group (orthogonal to role). Self-declared (trust 30),
+           optionally upgraded to EUDI-verified (trust 99) right here.
+           Buttons keep data-age=<band> (our HHTTPS-header construct, unchanged);
+           labels follow the EUDI threshold scale; data-eudi=<N> is the relation
+           band → age_over_NN threshold that the EUDI verification uses. -->
       <div class="veri-box show" id="ageBox" style="margin-top:14px;">
         <h4 data-i18n="age.h4">// ALTERSGRUPPE (OPTIONAL)</h4>
         <p class="veri-intro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:6px;line-height:1.65;">
           <span data-i18n="age.intro1">Grobe Altersgruppe statt Geburtsdatum — z. B. für Jugendschutz oder „18+"-Bereiche.</span>
-          <span data-i18n="age.intro2a">Aktuell</span> <strong data-i18n="age.strong">Eigenangabe</strong> <span data-i18n="age.intro2b">(Trust niedrig). Später per EUDI-Wallet kryptografisch verifizierbar.</span>
+          <span data-i18n="age.intro2a">Aktuell</span> <strong data-i18n="age.strong">Eigenangabe</strong> <span data-i18n="age.intro2b">(Trust 30). Optional per EUDI-Wallet kryptografisch verifizierbar (Trust 99).</span>
         </p>
         <div class="veri-opts" id="ageOpts" role="radiogroup" data-i18n-aria="aria.ageGroup" aria-label="Altersgruppe wählen">
           <button type="button" class="veri-opt" data-age="" onclick="selectAge('')" aria-pressed="true" data-i18n="age.none">Keine Angabe</button>
-          <button type="button" class="veri-opt" data-age="minor_under_14" onclick="selectAge('minor_under_14')" aria-pressed="false" data-i18n="age.under14">Unter 14</button>
-          <button type="button" class="veri-opt" data-age="minor_14_to_15" onclick="selectAge('minor_14_to_15')" aria-pressed="false">14–15</button>
-          <button type="button" class="veri-opt" data-age="minor_16_to_17" onclick="selectAge('minor_16_to_17')" aria-pressed="false">16–17</button>
-          <button type="button" class="veri-opt" data-age="adult_18_plus" onclick="selectAge('adult_18_plus')" aria-pressed="false">18+</button>
+          <button type="button" class="veri-opt" data-age="minor_under_14" data-eudi="" onclick="selectAge('minor_under_14')" aria-pressed="false" data-i18n="age.under14">Unter 14</button>
+          <button type="button" class="veri-opt" data-age="minor_14_to_15" data-eudi="14" onclick="selectAge('minor_14_to_15')" aria-pressed="false">14+</button>
+          <button type="button" class="veri-opt" data-age="minor_16_to_17" data-eudi="16" onclick="selectAge('minor_16_to_17')" aria-pressed="false">16+</button>
+          <button type="button" class="veri-opt" data-age="adult_18_plus" data-eudi="18" onclick="selectAge('adult_18_plus')" aria-pressed="false">18+</button>
+        </div>
+
+        <!-- EUDI verification hint + button — appears only for EUDI-verifiable
+             bands (14+/16+/18+). On click we issue the token (→ Phase 5) and
+             show the QR there, since EUDI upgrades an issued token. -->
+        <div id="eudiAge" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--b2);">
+          <p style="font-size:13px;color:var(--text-muted-strong);margin:0 0 10px;line-height:1.6;">
+            <span data-i18n="eudi.hint1">Diese Angabe ist aktuell</span> <em data-i18n="eudi.pEm">Eigenangabe</em> <span data-i18n="eudi.hint2">(Trust 30). Verifiziere sie ohne Geburtsdatum per EUDI-Wallet — Selective Disclosure, nur „über N Jahre: ja/nein".</span>
+          </p>
+          <button type="button" class="btn btn-g" id="eudiVerifyBtn" onclick="startEudiAgeForSelected()" style="font-size:13px;">
+            <span data-i18n="eudi.verifyPre">Mit EUDI verifizieren</span> <span id="eudiVerifyThreshold"></span> <span data-i18n="eudi.verifyTrust">→ Trust 99</span>
+          </button>
         </div>
       </div>
 
@@ -886,32 +902,27 @@ footer a{color:var(--cyan);text-decoration:none;}
           <div class="tc"><div class="k">TRUST</div><div class="v" id="tcT">—</div></div>
           <div class="tc"><div class="k">LEVEL</div><div class="v" id="tcL">—</div></div>
           <div class="tc" id="tcAgeWrap" style="display:none;"><div class="k">AGE GROUP</div><div class="v" id="tcAge">—</div></div>
+          <div class="tc" id="tcAgeVerifiedWrap" style="display:none;"><div class="k">AGE VERIFIED</div><div class="v" id="tcAgeVerified">—</div></div>
+          <div class="tc" id="tcAgeMethodWrap" style="display:none;"><div class="k">AGE METHOD</div><div class="v" id="tcAgeMethod">—</div></div>
         </div>
         <div id="tokenExpiryHint" style="margin-top:10px;font-size:12px;color:var(--text-muted-strong);min-height:18px;"></div>
       </div>
-      <!-- EUDI age verification (Phase 3 — cryptographic age upgrade via EUDI Wallet) -->
-      <div class="eudi-age" id="eudiAge" style="margin-top:18px;padding-top:16px;border-top:1px solid var(--b2);">
-        <h4 data-i18n="eudi.h4" style="font-size:11px;letter-spacing:1.5px;color:var(--muted);margin:0 0 6px;">// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)</h4>
-        <p style="font-size:13px;color:var(--text-muted-strong);margin:0 0 10px;line-height:1.6;">
-          <span data-i18n="eudi.p1">Beweise eine Altersschwelle über deine EUDI-Wallet —</span> <strong data-i18n="eudi.p1Strong1">ohne Geburtsdatum</strong><span data-i18n="eudi.p2">. Selective Disclosure: es wird nur „über N Jahre: ja/nein" geteilt. Hebt die Altersgruppe von</span> <em data-i18n="eudi.pEm">Eigenangabe</em> <span data-i18n="eudi.p3">auf</span> <strong data-i18n="eudi.p1Strong2">verifiziert</strong> <span data-i18n="eudi.p4">(Trust 99).</span>
-        </p>
-        <div class="veri-opts" id="eudiThresholds" role="group" data-i18n-aria="eudi.ariaThresholds" aria-label="Altersschwelle wählen">
-          <button type="button" class="veri-opt" onclick="startEudiAge(14)" data-i18n="eudi.btn14">14+ nachweisen</button>
-          <button type="button" class="veri-opt" onclick="startEudiAge(16)" data-i18n="eudi.btn16">16+ nachweisen</button>
-          <button type="button" class="veri-opt" onclick="startEudiAge(18)" data-i18n="eudi.btn18">18+ nachweisen</button>
+
+      <!-- EUDI age verification QR (shown after the verify button issues the
+           token and starts the OpenID4VP flow). Cross-device QR + same-device
+           deep-link + status. On success the AGE GROUP above flips to verified. -->
+      <div id="eudiQrBox" style="display:none;margin-top:14px;text-align:center;">
+        <div id="eudiQrLabel" style="font-size:11px;letter-spacing:1.5px;color:var(--muted);margin-bottom:10px;" data-i18n="eudi.qrLabel">// MIT EUDI-WALLET SCANNEN</div>
+        <img id="eudiQr" data-i18n-alt="eudi.qrAlt" alt="EUDI-Wallet QR-Code" width="180" height="180"
+             style="border-radius:10px;background:#fff;padding:8px;image-rendering:pixelated;" />
+        <div style="margin-top:10px;">
+          <a id="eudiDeepLink" href="#" rel="noopener"
+             style="font-size:13px;color:var(--accent,#6ee7c7);text-decoration:underline;"
+             data-i18n="eudi.deeplink">
+            Auf diesem Gerät mit Wallet öffnen →
+          </a>
         </div>
-        <div id="eudiQrBox" style="display:none;margin-top:14px;text-align:center;">
-          <img id="eudiQr" data-i18n-alt="eudi.qrAlt" alt="EUDI-Wallet QR-Code" width="180" height="180"
-               style="border-radius:10px;background:#fff;padding:8px;image-rendering:pixelated;" />
-          <div style="margin-top:10px;">
-            <a id="eudiDeepLink" href="#" rel="noopener"
-               style="font-size:13px;color:var(--accent,#6ee7c7);text-decoration:underline;"
-               data-i18n="eudi.deeplink">
-              Auf diesem Gerät mit Wallet öffnen →
-            </a>
-          </div>
-          <div id="eudiStatus" style="margin-top:10px;font-size:13px;min-height:20px;color:var(--text-muted-strong);"></div>
-        </div>
+        <div id="eudiStatus" style="margin-top:10px;font-size:13px;min-height:20px;color:var(--text-muted-strong);"></div>
       </div>
 
       <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled data-i18n="btn.check">/hhttps/check aufrufen — Live-Test →</button>
@@ -936,6 +947,9 @@ footer a{color:var(--cyan);text-decoration:none;}
       <div class="hline"><span class="hk">HHTTPS-Role:</span><span class="hv m" id="hRole">—</span></div>
       <div class="hline"><span class="hk">HHTTPS-Role-Level:</span><span class="hv m" id="hLevel">—</span></div>
       <div class="hline"><span class="hk">HHTTPS-Trust-Score:</span><span class="hv m" id="hScore">0</span></div>
+      <div class="hline" id="hAgeGroupLine" style="display:none;"><span class="hk">HHTTPS-Age-Group:</span><span class="hv m" id="hAgeGroup">—</span></div>
+      <div class="hline" id="hAgeVerifiedLine" style="display:none;"><span class="hk">HHTTPS-Age-Verified:</span><span class="hv m" id="hAgeVerified">—</span></div>
+      <div class="hline" id="hAgeMethodLine" style="display:none;"><span class="hk">HHTTPS-Age-Method:</span><span class="hv m" id="hAgeMethod">—</span></div>
       <div class="hline"><span class="hk">HHTTPS-Token:</span><span class="hv m" id="hToken">—</span></div>
     </div>
     <div class="rp-col">
@@ -1322,14 +1336,37 @@ let selVMethod = 'self-declared';
 let vData      = {};
 let selAgeGroup = '';  // orthogonal age_group (optional, self-declared in Phase 1)
 
-// Age group selector (radio-style)
+// Age group selector (radio-style). Keeps selAgeGroup = our band id (HHTTPS
+// header construct). Also reveals the EUDI verify hint for EUDI-verifiable bands
+// (those carrying a data-eudi threshold: 14/16/18). "Unter 14" and "Keine
+// Angabe" have no positive threshold, so no EUDI button is shown for them.
+let selAgeEudiThreshold = '';  // '' | '14' | '16' | '18' — relation band→age_over_NN
 function selectAge(group) {
   selAgeGroup = group || '';
+  let sel = null;
   document.querySelectorAll('#ageOpts .veri-opt').forEach(b => {
     const on = (b.dataset.age || '') === selAgeGroup;
     b.classList.toggle('sel', on);
     b.setAttribute('aria-pressed', String(on));
+    if (on) sel = b;
   });
+
+  // Relation: the chosen band's data-eudi attribute is the EUDI threshold.
+  selAgeEudiThreshold = (sel && sel.dataset.eudi) ? sel.dataset.eudi : '';
+  const eudiAge = document.getElementById('eudiAge');
+  const qrBox   = document.getElementById('eudiQrBox');
+  if (eudiPoll) { clearInterval(eudiPoll); eudiPoll = null; }
+  if (qrBox) qrBox.style.display = 'none';   // reset any previous QR on re-pick
+  if (eudiAge) {
+    if (selAgeEudiThreshold) {
+      // Show the verify hint + set the threshold label on the button.
+      const thr = document.getElementById('eudiVerifyThreshold');
+      if (thr) thr.textContent = selAgeEudiThreshold + '+';
+      eudiAge.style.display = '';
+    } else {
+      eudiAge.style.display = 'none';
+    }
+  }
 }
 
 // ── EUDI age verification (Phase 3 — drives the eudi-verifier orchestrator) ───
@@ -1337,6 +1374,20 @@ function selectAge(group) {
 // shows a QR (cross-device) + deep-link (same-device), polls for the result,
 // and on success adopts the upgraded token (verified age, trust 99).
 let eudiPoll = null;
+
+// Wrapper for the "Mit EUDI verifizieren" button in Phase 4. EUDI age upgrade
+// lifts an ISSUED token to verified, so we first issue the token (doDeclarRole,
+// which advances to the Phase-5 token view), then start the OpenID4VP flow —
+// the QR box lives in Phase 5 and becomes visible there.
+async function startEudiAgeForSelected() {
+  if (!selAgeEudiThreshold) return;            // only 14/16/18 are verifiable
+  if (!selRole) { msg(tr('eudi.msgNeedRole') || 'Bitte zuerst eine Rolle wählen.', 'e'); return; }
+  // Always (re)issue to ensure a fresh token carrying the chosen age band, and
+  // to advance to the Phase-5 view where the QR is shown.
+  await doDeclarRole();
+  if (!hhttpsToken) return;                     // issuance failed — error already shown
+  startEudiAge(Number(selAgeEudiThreshold));
+}
 async function startEudiAge(minAge) {
   if (!sessionId) { msg(tr('eudi.msgNeedStep2'),'e'); return; }
   if (eudiPoll) { clearInterval(eudiPoll); eudiPoll = null; }
@@ -1397,10 +1448,39 @@ async function pollEudiStatus(requestId) {
         }
       } catch (e) {}
     }
-    // Update the AGE GROUP field in the token card to the verified value.
+    // Update the age fields to the cryptographically verified value, so the
+    // verification is visible in both boxes (not only via the trust score).
     if (d.ageGroup && d.ageGroup.id) {
-      document.getElementById('tcAge').textContent = d.ageGroup.label + ' ✓';
+      const tcAge = document.getElementById('tcAge');
+      if (tcAge) tcAge.textContent = d.ageGroup.label + ' ✓';
       document.getElementById('tcAgeWrap').style.display = '';
+
+      const tcAgeVer = document.getElementById('tcAgeVerified');
+      const tcAgeVerWrap = document.getElementById('tcAgeVerifiedWrap');
+      if (tcAgeVer) tcAgeVer.textContent = 'true ✓';
+      if (tcAgeVerWrap) tcAgeVerWrap.style.display = '';
+
+      const tcAgeMethod = document.getElementById('tcAgeMethod');
+      const tcAgeMethodWrap = document.getElementById('tcAgeMethodWrap');
+      if (tcAgeMethod) tcAgeMethod.textContent = d.ageGroup.methodLabel || d.ageGroup.method || 'EUDI Wallet (PID)';
+      if (tcAgeMethodWrap) tcAgeMethodWrap.style.display = '';
+
+      // Refresh the live header box with verified age (trust 99 typically).
+      updateHeaders(true, 'human', 'verified', selRole,
+                    (document.getElementById('hLevel')?.textContent || undefined),
+                    99, hhttpsToken,
+                    { group: d.ageGroup.id, verified: true,
+                      method: d.ageGroup.method || 'eudi-wallet' });
+    }
+    // Age is now cryptographically verified and the token is upgraded. The
+    // token view was already shown when doDeclarRole issued the token (it ran
+    // before this verification). Here we only enable the live check and ensure
+    // the result view is visible using the same helper the issuance path uses.
+    document.getElementById('btnCheck').disabled = false;
+    if (typeof setStepEF === 'function' && document.getElementById('p5')) {
+      setStepEF(5);
+    } else {
+      setStep(4);
     }
   } else if (d.status === 'expired') {
     statusEl.textContent = tr('eudi.expired');
@@ -1514,7 +1594,7 @@ const T = {
     "tok.validPre":"Token gültig — läuft ab in","tok.minute":"Minute","tok.minutes":"Minuten","tok.soon":"⚠ Token läuft in unter 1 Minute ab.","tok.expired":"✗ Token ist abgelaufen.",
     "alert.sessionExpired":"Deine Sitzung ist abgelaufen. Du wirst abgemeldet.","confirm.refresh":"Dein HHTTPS-Token ist abgelaufen. Möchtest du eingeloggt bleiben?\n\n[OK] = Token erneuern\n[Abbrechen] = Abmelden","alert.noRefresh":"Kein Refresh-Token verfügbar — bitte neu anmelden.","alert.refreshFailed":"Token-Refresh fehlgeschlagen — bitte neu anmelden.","msg.tokenRenewed":"✓ Token erneuert.",
     "msg.ghDone":"✓ GitHub-Verifikation abgeschlossen. Falls dein Login nicht mehr sichtbar ist, melde dich bitte erneut an.","msg.ghNeedPasskey":"Bitte erst per Passkey anmelden, bevor du GitHub verifizierst.","gh.newTab":"Ein neuer Tab wurde geöffnet. Bestätige dort mit GitHub und kehre dann hierher zurück.","gh.timeout":"Zeitüberschreitung. Bitte erneut versuchen.","gh.confirmedPre":"✓ GitHub bestätigt! Trust Score:",
-    "eudi.h4":"// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)","eudi.p1":"Beweise eine Altersschwelle über deine EUDI-Wallet —","eudi.p1Strong1":"ohne Geburtsdatum","eudi.p2":". Selective Disclosure: es wird nur „über N Jahre: ja/nein\" geteilt. Hebt die Altersgruppe von","eudi.pEm":"Eigenangabe","eudi.p3":"auf","eudi.p1Strong2":"verifiziert","eudi.p4":"(Trust 99).","eudi.ariaThresholds":"Altersschwelle wählen","eudi.btn14":"14+ nachweisen","eudi.btn16":"16+ nachweisen","eudi.btn18":"18+ nachweisen","eudi.qrAlt":"EUDI-Wallet QR-Code","eudi.deeplink":"Auf diesem Gerät mit Wallet öffnen →","eudi.msgNeedStep2":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen.","eudi.errRequest":"EUDI-Anfrage fehlgeschlagen.","eudi.waitingPre":"Warte auf Wallet… (Schwelle","eudi.errBackend":"EUDI-Backend nicht erreichbar:","eudi.statusVerifiedPre":"✓ Alter verifiziert:","eudi.statusSuffix":"(EUDI-Wallet)","eudi.msgVerified":"Alter kryptografisch verifiziert ✓","eudi.expired":"Sitzung abgelaufen — bitte erneut starten.","eudi.noAge":"Keine Altersangabe von der Wallet erhalten.","eudi.errVerify":"Fehler bei der Verifikation."
+    "eudi.h4":"// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)","eudi.p1":"Beweise eine Altersschwelle über deine EUDI-Wallet —","eudi.p1Strong1":"ohne Geburtsdatum","eudi.p2":". Selective Disclosure: es wird nur „über N Jahre: ja/nein\" geteilt. Hebt die Altersgruppe von","eudi.pEm":"Eigenangabe","eudi.p3":"auf","eudi.p1Strong2":"verifiziert","eudi.p4":"(Trust 99).","eudi.hint1":"Diese Angabe ist aktuell","eudi.hint2":"(Trust 30). Verifiziere sie ohne Geburtsdatum per EUDI-Wallet — Selective Disclosure, nur „über N Jahre: ja/nein“.","eudi.verifyPre":"Mit EUDI verifizieren","eudi.verifyTrust":"→ Trust 99","eudi.msgNeedRole":"Bitte zuerst eine Rolle wählen.","eudi.ariaThresholds":"Altersschwelle wählen","eudi.btn14":"14+ nachweisen","eudi.btn16":"16+ nachweisen","eudi.btn18":"18+ nachweisen","eudi.qrAlt":"EUDI-Wallet QR-Code","eudi.qrLabel":"// MIT EUDI-WALLET SCANNEN","eudi.deeplink":"Auf diesem Gerät mit Wallet öffnen →","eudi.msgNeedStep2":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen.","eudi.errRequest":"EUDI-Anfrage fehlgeschlagen.","eudi.waitingPre":"Warte auf Wallet… (Schwelle","eudi.errBackend":"EUDI-Backend nicht erreichbar:","eudi.statusVerifiedPre":"✓ Alter verifiziert:","eudi.statusSuffix":"(EUDI-Wallet)","eudi.msgVerified":"Alter kryptografisch verifiziert ✓","eudi.expired":"Sitzung abgelaufen — bitte erneut starten.","eudi.noAge":"Keine Altersangabe von der Wallet erhalten.","eudi.errVerify":"Fehler bei der Verifikation."
   },
   en: {
     /* en-flow-keys moved to main T.en block */
@@ -1576,7 +1656,7 @@ const T = {
     "tok.validPre":"Token valid — expires in","tok.minute":"minute","tok.minutes":"minutes","tok.soon":"⚠ Token expires in under 1 minute.","tok.expired":"✗ Token has expired.",
     "alert.sessionExpired":"Your session has expired. You will be logged out.","confirm.refresh":"Your HHTTPS token has expired. Do you want to stay logged in?\n\n[OK] = Refresh token\n[Cancel] = Log out","alert.noRefresh":"No refresh token available — please sign in again.","alert.refreshFailed":"Token refresh failed — please sign in again.","msg.tokenRenewed":"✓ Token renewed.",
     "msg.ghDone":"✓ GitHub verification complete. If your login is no longer visible, please sign in again.","msg.ghNeedPasskey":"Please sign in with a passkey before verifying GitHub.","gh.newTab":"A new tab has opened. Confirm with GitHub there and then return here.","gh.timeout":"Timed out. Please try again.","gh.confirmedPre":"✓ GitHub verified! Trust score:",
-    "eudi.h4":"// VERIFY AGE CRYPTOGRAPHICALLY (EUDI WALLET)","eudi.p1":"Prove an age threshold via your EUDI wallet —","eudi.p1Strong1":"without your date of birth","eudi.p2":". Selective disclosure: only \"over N years: yes/no\" is shared. Lifts the age group from","eudi.pEm":"self-declared","eudi.p3":"to","eudi.p1Strong2":"verified","eudi.p4":"(trust 99).","eudi.ariaThresholds":"Choose age threshold","eudi.btn14":"Prove 14+","eudi.btn16":"Prove 16+","eudi.btn18":"Prove 18+","eudi.qrAlt":"EUDI wallet QR code","eudi.deeplink":"Open with wallet on this device →","eudi.msgNeedStep2":"Please complete step 2 (prove humanity) first.","eudi.errRequest":"EUDI request failed.","eudi.waitingPre":"Waiting for wallet… (threshold","eudi.errBackend":"EUDI backend not reachable:","eudi.statusVerifiedPre":"✓ Age verified:","eudi.statusSuffix":"(EUDI wallet)","eudi.msgVerified":"Age cryptographically verified ✓","eudi.expired":"Session expired — please start again.","eudi.noAge":"No age info received from the wallet.","eudi.errVerify":"Verification error."
+    "eudi.h4":"// VERIFY AGE CRYPTOGRAPHICALLY (EUDI WALLET)","eudi.p1":"Prove an age threshold via your EUDI wallet —","eudi.p1Strong1":"without your date of birth","eudi.p2":". Selective disclosure: only \"over N years: yes/no\" is shared. Lifts the age group from","eudi.pEm":"self-declared","eudi.p3":"to","eudi.p1Strong2":"verified","eudi.p4":"(trust 99).","eudi.hint1":"This value is currently","eudi.hint2":"(trust 30). Verify it without your date of birth via your EUDI wallet — selective disclosure, only “over N years: yes/no”.","eudi.verifyPre":"Verify with EUDI","eudi.verifyTrust":"→ trust 99","eudi.msgNeedRole":"Please choose a role first.","eudi.ariaThresholds":"Choose age threshold","eudi.btn14":"Prove 14+","eudi.btn16":"Prove 16+","eudi.btn18":"Prove 18+","eudi.qrAlt":"EUDI wallet QR code","eudi.qrLabel":"// SCAN WITH EUDI WALLET","eudi.deeplink":"Open with wallet on this device →","eudi.msgNeedStep2":"Please complete step 2 (prove humanity) first.","eudi.errRequest":"EUDI request failed.","eudi.waitingPre":"Waiting for wallet… (threshold","eudi.errBackend":"EUDI backend not reachable:","eudi.statusVerifiedPre":"✓ Age verified:","eudi.statusSuffix":"(EUDI wallet)","eudi.msgVerified":"Age cryptographically verified ✓","eudi.expired":"Session expired — please start again.","eudi.noAge":"No age info received from the wallet.","eudi.errVerify":"Verification error."
   }
 };
 let LANG = 'de';
@@ -1835,7 +1915,7 @@ function setFp(id, st, em='🫆') {
   el.className = 'fpr ' + ({scanning:'sc',success:'ok',error:'er'}[st]||'');
   el.textContent = {scanning:'🫆',success:'✅',error:'❌'}[st] || em;
 }
-function updateHeaders(h, actor, status, role, level, score, token) {
+function updateHeaders(h, actor, status, role, level, score, token, age) {
   const hv = (id, v, cls) => {
     const el = document.getElementById(id);
     el.textContent = v; el.className = 'hv ' + (cls||'m');
@@ -1847,6 +1927,22 @@ function updateHeaders(h, actor, status, role, level, score, token) {
   hv('hLevel',  level||'—', level?'a':'m');
   hv('hScore',  score||'0', +score>60?'g':+score>30?'a':'m');
   hv('hToken',  token ? token.slice(0,20)+'…' : '—', token?'c':'m');
+
+  // Age headers — shown only when an age group is present. age_verified flips
+  // green once cryptographically verified (EUDI), amber while self-declared, so
+  // the verification is visible directly, not only inferable from the score.
+  const ageLine = (lineId, valId, val, cls) => {
+    const line = document.getElementById(lineId);
+    if (!line) return;
+    if (val === null || val === undefined || val === '') { line.style.display = 'none'; return; }
+    line.style.display = '';
+    hv(valId, String(val), cls);
+  };
+  const a = age || {};
+  ageLine('hAgeGroupLine',    'hAgeGroup',    a.group || null,  a.group ? 'a' : 'm');
+  ageLine('hAgeVerifiedLine', 'hAgeVerified', (a.group ? String(a.verified === true) : null), a.verified === true ? 'g' : 'a');
+  ageLine('hAgeMethodLine',   'hAgeMethod',   a.method || null, a.verified === true ? 'g' : 'm');
+
   hv('bHuman',  String(h),  h?'g':'m');
   hv('bActor',  actor,      actor==='human'?'g':'m');
   const rl = ROLES_LOCAL[role];
@@ -2274,7 +2370,9 @@ async function doCheck() {
 
     // Update response preview
     updateHeaders(d.hhttps.human, d.hhttps.actorType, d.hhttps.status,
-      d.role?.id, d.role?.level, d.hhttps.trustScore, hhttpsToken);
+      d.role?.id, d.role?.level, d.hhttps.trustScore, hhttpsToken,
+      d.ageGroup ? { group: d.ageGroup.id, verified: d.ageGroup.verified === true,
+                     method: d.ageGroup.method || null } : null);
 
     // Update sample response tab
     document.getElementById('sampleResponse').textContent =
@@ -2747,19 +2845,35 @@ window.doDeclarRole = async function() {
     document.getElementById('tcT').textContent = d.hhttps.trustScore + '/100';
     document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
 
-    // Altersgruppe (falls vorhanden)
+    // Altersgruppe (falls vorhanden) — Group, Verified-Status und Methode,
+    // damit die Verifikation sichtbar ist (nicht nur am Trust-Score ablesbar).
+    let ageHdr = null;
     if (d.ageGroup && d.ageGroup.id) {
       const verifiedMark = d.ageGroup.verified ? ' ✓' : ' (Eigenangabe)';
       const tcAge = document.getElementById('tcAge');
       const tcAgeWrap = document.getElementById('tcAgeWrap');
       if (tcAge) tcAge.textContent = d.ageGroup.label + verifiedMark;
       if (tcAgeWrap) tcAgeWrap.style.display = '';
+
+      const tcAgeVer = document.getElementById('tcAgeVerified');
+      const tcAgeVerWrap = document.getElementById('tcAgeVerifiedWrap');
+      if (tcAgeVer) tcAgeVer.textContent = d.ageGroup.verified ? 'true ✓' : 'false (Eigenangabe)';
+      if (tcAgeVerWrap) tcAgeVerWrap.style.display = '';
+
+      const tcAgeMethod = document.getElementById('tcAgeMethod');
+      const tcAgeMethodWrap = document.getElementById('tcAgeMethodWrap');
+      if (tcAgeMethod) tcAgeMethod.textContent = d.ageGroup.methodLabel || d.ageGroup.method || '—';
+      if (tcAgeMethodWrap) tcAgeMethodWrap.style.display = '';
+
+      ageHdr = { group: d.ageGroup.id, verified: d.ageGroup.verified === true,
+                 method: d.ageGroup.method || null };
     } else {
-      const tcAgeWrap = document.getElementById('tcAgeWrap');
-      if (tcAgeWrap) tcAgeWrap.style.display = 'none';
+      ['tcAgeWrap','tcAgeVerifiedWrap','tcAgeMethodWrap'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.style.display = 'none';
+      });
     }
 
-    updateHeaders(true, 'human', 'verified', selRole, d.role.level, d.hhttps.trustScore, hhttpsToken);
+    updateHeaders(true, 'human', 'verified', selRole, d.role.level, d.hhttps.trustScore, hhttpsToken, ageHdr);
     document.getElementById('btnCheck').disabled = false;
     live('on', tr('live.tokenActive'));
     msg('✓ ' + d.message, 's');

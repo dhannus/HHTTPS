@@ -84,11 +84,40 @@ export function buildWalletLink({ client_id, request_uri, request_uri_method }) 
 //   - 200 + JSON containing the validated presentation once the wallet posted
 //
 // We return { status: 'pending' } or { status: 'done', walletResponse }.
+const DEBUG = process.env.EUDI_DEBUG === '1';
+
 export async function pollWalletResponse(transactionId, responseCode) {
   const url = new URL(`${BACKEND}/ui/presentations/${encodeURIComponent(transactionId)}`);
   if (responseCode) url.searchParams.set('response_code', responseCode);
 
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
+
+  // When EUDI_DEBUG=1, read the body as raw text first and log status + body so
+  // we can see EXACTLY what the EU backend returns at each poll (state machine,
+  // empty 200/400, or the real wallet response). This is the diagnostic for the
+  // first real wallet scan. We then re-parse the captured text as JSON so the
+  // body isn't consumed twice.
+  if (DEBUG) {
+    const raw = await r.text().catch(() => '');
+    const tag = transactionId.slice(0, 8);
+    console.log(`[EUDI-DEBUG] poll tx=${tag}… HTTP ${r.status} bodyLen=${raw.length} body=${raw.slice(0, 500)}`);
+
+    if (r.status === 404) return { status: 'pending' };
+    if (r.status === 400) {
+      if (!raw || raw.trim().length === 0) return { status: 'pending' };
+      throw new Error(`EU backend rejected poll (400): ${raw.slice(0, 200)}`);
+    }
+    if (!r.ok) throw new Error(`EU backend poll failed (${r.status}): ${raw.slice(0, 200)}`);
+
+    let body = null;
+    try { body = raw && raw.trim().length ? JSON.parse(raw) : null; } catch { body = null; }
+    if (!body || (Array.isArray(body) && body.length === 0)) {
+      console.log(`[EUDI-DEBUG] tx=${tag}… → treated as PENDING (empty/[]) `);
+      return { status: 'pending' };
+    }
+    console.log(`[EUDI-DEBUG] tx=${tag}… → DONE, walletResponse keys=${JSON.stringify(Object.keys(body))}`);
+    return { status: 'done', walletResponse: body };
+  }
 
   // EU backend state machine: GET /ui/presentations/{id} only returns the wallet
   // response once the presentation reaches the `Submitted` state (wallet has

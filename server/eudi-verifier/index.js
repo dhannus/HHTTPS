@@ -171,6 +171,10 @@ export function createEudiVerifierRouter() {
 
       // Wallet responded — extract validated age booleans.
       const ageOver = extractAgeClaims(poll.walletResponse);
+      if (process.env.EUDI_DEBUG === '1') {
+        console.log(`[EUDI-DEBUG] walletResponse=${JSON.stringify(poll.walletResponse).slice(0, 1500)}`);
+        console.log(`[EUDI-DEBUG] extracted ageOver=${JSON.stringify(ageOver)}`);
+      }
       const proven = Object.values(ageOver).some(v => v === true);
       if (!proven) {
         tx.status = 'failed';

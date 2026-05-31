@@ -771,7 +771,10 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
 
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
                      role: d.role, roleLevel: d.roleLevel, trustScore: d.trustScore,
-                     token, method: d.method });
+                     token, method: d.method,
+                     ageGroup:              d.age_group || null,
+                     ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
+                     ageVerificationMethod: d.age_verification_method || null });
 
     return res.json({
       hhttps: { version: '0.4.1', status: 'verified', human: true, actorType: 'human',
@@ -781,7 +784,16 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
       role: { id: d.role, label: roleDef.label, icon: roleDef.icon,
               description: roleDef.description, level: d.roleLevel,
               levelLabel: vlevel.label, trustScore: d.trustScore,
-              privileges: roleDef.privileges, userStory: roleDef.userStory }
+              privileges: roleDef.privileges, userStory: roleDef.userStory },
+      ...(d.age_group ? {
+        ageGroup: {
+          id:          d.age_group,
+          label:       (AGE_GROUPS[d.age_group]?.label) || d.age_group,
+          verified:    d.age_verified ?? false,
+          method:      d.age_verification_method || null,
+          methodLabel: AGE_VERIFICATION_METHODS[d.age_verification_method]?.label || null
+        }
+      } : {})
     });
   } catch (e) {
     setHHTPPS(res, { status: 'invalid', human: false, actorType: 'unknown' });
