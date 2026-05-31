@@ -1,21 +1,12 @@
 # HHTTPS Phase 3 — Official EU Verifier Endpoint backend
 #
-# Runs the European Commission's reference OpenID4VP verifier next to hhttps-v4.
-# This container does ALL the heavy crypto: OpenID4VP 1.0, mso_mdoc parsing,
-# signature validation, (optional) trusted-list checks. Our slim Node module
-# (server/eudi-verifier/) only orchestrates it and bridges to /hhttps/age/upgrade.
-#
 # Image: ghcr.io/eu-digital-identity-wallet/eudi-srv-verifier-endpoint (v0.9.0+)
-# Repo:  https://github.com/eu-digital-identity-wallet/eudi-srv-verifier-endpoint
-# License: Apache-2.0
+# NOTE: this image uses VERIFIER_ACCESS_CERTIFICATE_* env names for the JAR
+# signing keystore (NOT VERIFIER_JAR_SIGNING_KEY_* — that's the older
+# ...-23220-4-kt repo variant). Verified against the official repo README.
 #
 # Start:  cd server/eudi-verifier/docker && docker compose up -d
-# Logs:   docker compose logs -f verifier
-# Stop:   docker compose down
-#
-# The verifier listens on 127.0.0.1:8080 ONLY (not exposed publicly). Our Node
-# orchestrator talks to it over localhost; the wallet reaches it through the
-# public request_uri that the verifier itself builds from VERIFIER_PUBLICURL.
+# Logs:   docker compose logs --tail 50 verifier
 
 services:
   verifier:
@@ -23,35 +14,30 @@ services:
     container_name: eudi-verifier-backend
     restart: unless-stopped
     ports:
-      # Bind to localhost only — the Node orchestrator (also on this host) reaches it.
       - "127.0.0.1:8080:8080"
+    volumes:
+      # PKCS12 keystore (RP private key + access certificate), read-only.
+      - /var/www/hhttps/eudi-keys/rp-access.p12:/keystore.p12:ro
     environment:
       SERVER_PORT: "8080"
-
-      # Public URL the WALLET will use to fetch the request and post its response.
-      # MUST be reachable from the user's phone. Set to the public hhttps.org path
-      # that nginx proxies to this container (see nginx snippet in COMMIT.md).
       VERIFIER_PUBLICURL: "https://hhttps.org/eudi-backend"
 
-      # direct_post (not .jwt) keeps the wallet response as a plain form post that
-      # the backend parses for us — simplest for the hackathon. The Node module
-      # never parses the vp_token itself; it reads the validated result from the
-      # backend's /ui/presentations/{id} endpoint.
-      VERIFIER_RESPONSE_MODE: "DirectPost"
+      # RP authentication: sign Authorization Requests (JAR) with our access cert.
+      # client_id becomes "x509_san_dns:hhttps.org" — matches SAN DNS:hhttps.org.
+      VERIFIER_CLIENTIDPREFIX: "x509_san_dns"
+      VERIFIER_ORIGINALCLIENTID: "hhttps.org"
 
-      # Authorization request passed by reference (request_uri) — standard for QR.
+      # CORRECT keystore variables for THIS image (VERIFIER_ACCESS_CERTIFICATE_*):
+      VERIFIER_ACCESS_CERTIFICATE_SIGNING_ALGORITHM: "ES256"
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE: "file:///keystore.p12"
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_TYPE: "pkcs12"
+      VERIFIER_ACCESS_CERTIFICATE_KEYSTORE_PASSWORD: "Acepthanu231079"
+      VERIFIER_ACCESS_CERTIFICATE_ALIAS: "access_certificate"
+      VERIFIER_ACCESS_CERTIFICATE_PASSWORD: "Acepthanu231079"
+
       VERIFIER_REQUESTJWT_EMBED: "ByReference"
-
-      # mso_mdoc is enabled by default; keep it explicit for clarity.
+      VERIFIER_RESPONSE_MODE: "DirectPost"
       VERIFIER_CLIENTMETADATA_VPFORMATS_MSOMDOC_ENABLED: "true"
-
-      # Trust: by default the backend trusts ALL issuers. For the hackathon/sandbox
-      # this is intended (the EU dev wallet's issuer is trusted automatically).
-      # To enforce the real AV Trusted List later, set:
-      #   VERIFIER_TRUSTVALIDATOR_SERVICEURL: "https://acceptance.eidas.ec.europa.eu/..."
-      # and configure VERIFIER_ATTESTATIONCLASSIFICATIONS for the av/pid doctype.
-
-      # CORS: only our own host needs it; the wallet uses request_uri, not CORS.
       CORS_ORIGINS: "https://hhttps.org"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
