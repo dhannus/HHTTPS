@@ -670,12 +670,12 @@ footer a{color:var(--cyan);text-decoration:none;}
 .lang-toggle button.active{background:rgba(0,229,255,.15);color:var(--cyan,#00e5ff);}
 /* ─── EUDI age verification panel (Phase 5) — polished, presentation-grade ─── */
 .eudi-panel{
-  position:relative;margin-top:18px;padding:20px 20px 22px;border-radius:16px;
+  position:relative;margin:18px 0 22px;padding:24px 22px 26px;border-radius:16px;
   background:
     radial-gradient(120% 80% at 50% -10%, rgba(52,211,153,.10) 0%, transparent 60%),
     linear-gradient(160deg, var(--s2) 0%, var(--s1) 100%);
   border:1px solid rgba(52,211,153,.28);
-  overflow:hidden;
+  overflow:hidden;text-align:center;
   animation:eudiReveal .55s cubic-bezier(.2,.9,.25,1) both;
 }
 /* moving sheen across the panel border */
@@ -690,35 +690,36 @@ footer a{color:var(--cyan);text-decoration:none;}
 @keyframes eudiSheen{0%{background-position:0% 50%}100%{background-position:250% 50%}}
 @keyframes eudiReveal{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
 
-.eudi-panel-head{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+.eudi-panel-head{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px;}
 .eudi-panel-head .badge-shield{
-  font-size:18px;filter:drop-shadow(0 0 6px rgba(52,211,153,.5));
+  font-size:20px;filter:drop-shadow(0 0 6px rgba(52,211,153,.5));
 }
 .eudi-panel-title{
-  font-family:var(--syne,inherit);font-weight:700;font-size:14px;letter-spacing:.3px;
+  font-family:var(--syne,inherit);font-weight:700;font-size:15px;letter-spacing:.3px;
   color:var(--green);
 }
-.eudi-panel-sub{font-size:12.5px;color:var(--text-muted-strong);line-height:1.6;margin:0 0 14px;}
+.eudi-panel-sub{font-size:12.5px;color:var(--text-muted-strong);line-height:1.6;
+  margin:0 auto 18px;max-width:420px;}
 .eudi-panel-sub em{color:var(--p-apricot);font-style:normal;}
 .eudi-panel-sub strong{color:var(--green);}
 
-/* the single, matching threshold button (re-poll) */
-.eudi-thresh-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;}
+/* the single, matching threshold button (start / re-poll) — centered */
+.eudi-thresh-row{display:flex;flex-direction:column;align-items:center;gap:8px;margin-bottom:6px;}
 .eudi-thresh-btn{
-  position:relative;display:inline-flex;align-items:center;gap:8px;
-  padding:10px 18px;border-radius:10px;cursor:pointer;
-  font-family:var(--mono,inherit);font-size:14px;font-weight:600;color:var(--green);
-  background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.35);
+  position:relative;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:13px 26px;border-radius:11px;cursor:pointer;
+  font-family:var(--mono,inherit);font-size:15px;font-weight:600;color:var(--green);
+  background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.40);
   transition:transform .15s,box-shadow .2s,background .2s;
 }
-.eudi-thresh-btn:hover{transform:translateY(-1px);background:rgba(52,211,153,.14);
-  box-shadow:0 6px 20px rgba(52,211,153,.18);}
-.eudi-thresh-btn .spark{font-size:13px;animation:sparkTwinkle 1.8s ease-in-out infinite;}
+.eudi-thresh-btn:hover{transform:translateY(-1px);background:rgba(52,211,153,.16);
+  box-shadow:0 6px 22px rgba(52,211,153,.22);}
+.eudi-thresh-btn .spark{font-size:14px;animation:sparkTwinkle 1.8s ease-in-out infinite;}
 @keyframes sparkTwinkle{0%,100%{opacity:.4;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
 .eudi-rehint{font-size:11.5px;color:var(--muted);}
 
-/* QR wrapper with soft glow + corner sparkles */
-.eudi-qr-wrap{position:relative;width:200px;margin:16px auto 6px;}
+/* QR wrapper with soft glow + corner sparkles — centered */
+.eudi-qr-wrap{position:relative;width:200px;margin:20px auto 8px;}
 .eudi-qr-wrap img{
   display:block;width:200px;height:200px;border-radius:14px;background:#fff;padding:10px;
   image-rendering:pixelated;
@@ -733,11 +734,11 @@ footer a{color:var(--cyan);text-decoration:none;}
 @keyframes qrSpark{0%,100%{opacity:0;transform:scale(.6) rotate(0deg)}
   45%,55%{opacity:1;transform:scale(1.1) rotate(20deg)}}
 
-.eudi-deeplink{display:inline-block;margin-top:8px;font-size:13px;color:var(--green);
+.eudi-deeplink{display:inline-block;margin-top:10px;font-size:13px;color:var(--green);
   text-decoration:none;border-bottom:1px dashed rgba(52,211,153,.5);padding-bottom:1px;
   transition:color .2s,border-color .2s;}
 .eudi-deeplink:hover{color:var(--p-sage);border-color:var(--p-sage);}
-.eudi-status{margin-top:12px;font-size:13px;min-height:20px;color:var(--text-muted-strong);}
+.eudi-status{margin-top:14px;font-size:13px;min-height:20px;color:var(--text-muted-strong);text-align:center;}
 
 /* success burst when age gets verified */
 .eudi-panel.verified{border-color:rgba(52,211,153,.6);
@@ -991,9 +992,8 @@ footer a{color:var(--cyan);text-decoration:none;}
           <span class="eudi-panel-title" data-i18n="eudi.panelTitle">Alter kryptografisch verifizieren</span>
         </div>
         <p class="eudi-panel-sub">
-          <span data-i18n="eudi.panelSub1">Beweise die gewählte Altersschwelle über deine EUDI-Wallet —</span>
-          <strong data-i18n="eudi.panelSubStrong">ohne Geburtsdatum</strong><span data-i18n="eudi.panelSub2">. Selective Disclosure: nur „über N Jahre: ja/nein". Hebt die Gruppe von</span>
-          <em data-i18n="eudi.pEm">Eigenangabe</em> <span data-i18n="eudi.panelSub3">auf</span> <strong data-i18n="eudi.panelSubVerified">verifiziert (Trust 99)</strong>.
+          <span data-i18n="eudi.panelSub1">Beweise die gewählte Altersschwelle über deine EUDI-Wallet</span>
+          <strong data-i18n="eudi.panelSubStrong">ohne Geburtsdatum</strong><span data-i18n="eudi.panelSub2">. Es wird nur „über N Jahre: ja/nein" geteilt</span> <strong data-i18n="eudi.panelSubVerified">(Trust 99)</strong>.
         </p>
 
         <div class="eudi-thresh-row" id="eudiThreshRow">
@@ -1013,7 +1013,7 @@ footer a{color:var(--cyan);text-decoration:none;}
         </div>
       </div>
 
-      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled data-i18n="btn.check">/hhttps/check aufrufen — Live-Test →</button>
+      <button class="btn btn-g" id="btnCheck" onclick="doCheck()" disabled data-i18n="btn.check" style="display:flex;margin:22px auto 0;">/hhttps/check aufrufen — Live-Test →</button>
     </div>
 
   </div>
@@ -1458,8 +1458,11 @@ function showEudiPanel(autostart) {
   const n = Number(selAgeEudiThreshold);
   const row = document.getElementById('eudiThreshRow');
   const reHint = document.getElementById('eudiReHint');
+
   if (row) {
     // Build (once) exactly ONE button — the threshold matching the chosen band.
+    // It is only the RE-POLL / restart control; the QR is shown immediately
+    // below via startEudiAge(), so the user never has to click to see it.
     let btn = document.getElementById('eudiThreshBtn');
     if (!btn) {
       btn = document.createElement('button');
@@ -1475,7 +1478,9 @@ function showEudiPanel(autostart) {
   panel.style.display = '';
   // Smooth-scroll the panel into view for the presentation.
   try { panel.scrollIntoView({ behavior:'smooth', block:'center' }); } catch(e){}
-  if (autostart) startEudiAge(n);
+
+  // Show the QR immediately — no click required. (autostart defaults to true.)
+  if (autostart !== false) startEudiAge(n);
 }
 
 // Confetti-ish sparkle burst when verification succeeds.
@@ -1700,7 +1705,7 @@ const T = {
     "tok.validPre":"Token gültig — läuft ab in","tok.minute":"Minute","tok.minutes":"Minuten","tok.soon":"⚠ Token läuft in unter 1 Minute ab.","tok.expired":"✗ Token ist abgelaufen.",
     "alert.sessionExpired":"Deine Sitzung ist abgelaufen. Du wirst abgemeldet.","confirm.refresh":"Dein HHTTPS-Token ist abgelaufen. Möchtest du eingeloggt bleiben?\n\n[OK] = Token erneuern\n[Abbrechen] = Abmelden","alert.noRefresh":"Kein Refresh-Token verfügbar — bitte neu anmelden.","alert.refreshFailed":"Token-Refresh fehlgeschlagen — bitte neu anmelden.","msg.tokenRenewed":"✓ Token erneuert.",
     "msg.ghDone":"✓ GitHub-Verifikation abgeschlossen. Falls dein Login nicht mehr sichtbar ist, melde dich bitte erneut an.","msg.ghNeedPasskey":"Bitte erst per Passkey anmelden, bevor du GitHub verifizierst.","gh.newTab":"Ein neuer Tab wurde geöffnet. Bestätige dort mit GitHub und kehre dann hierher zurück.","gh.timeout":"Zeitüberschreitung. Bitte erneut versuchen.","gh.confirmedPre":"✓ GitHub bestätigt! Trust Score:",
-    "eudi.h4":"// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)","eudi.p1":"Beweise eine Altersschwelle über deine EUDI-Wallet —","eudi.p1Strong1":"ohne Geburtsdatum","eudi.p2":". Selective Disclosure: es wird nur „über N Jahre: ja/nein\" geteilt. Hebt die Altersgruppe von","eudi.pEm":"Eigenangabe","eudi.p3":"auf","eudi.p1Strong2":"verifiziert","eudi.p4":"(Trust 99).","eudi.hint1":"Diese Angabe ist aktuell","eudi.hint2":"(Trust 30). Verifiziere sie ohne Geburtsdatum per EUDI-Wallet — Selective Disclosure, nur „über N Jahre: ja/nein“.","eudi.verifyPre":"Mit EUDI verifizieren","eudi.verifyTrust":"→ Trust 99","eudi.msgNeedRole":"Bitte zuerst eine Rolle wählen.","eudi.ariaThresholds":"Altersschwelle wählen","eudi.btn14":"14+ nachweisen","eudi.btn16":"16+ nachweisen","eudi.btn18":"18+ nachweisen","eudi.qrAlt":"EUDI-Wallet QR-Code","eudi.qrLabel":"// MIT EUDI-WALLET SCANNEN","eudi.panelTitle":"Alter kryptografisch verifizieren","eudi.panelSub1":"Beweise die gewählte Altersschwelle über deine EUDI-Wallet —","eudi.panelSubStrong":"ohne Geburtsdatum","eudi.panelSub2":". Selective Disclosure: nur „über N Jahre: ja/nein“. Hebt die Gruppe von","eudi.panelSub3":"auf","eudi.panelSubVerified":"verifiziert (Trust 99)","eudi.proveBtn":"Mit EUDI verifizieren","eudi.rehint":"Abgelaufen? Button erneut tippen zum Neustart.","eudi.deeplink":"Auf diesem Gerät mit Wallet öffnen →","eudi.msgNeedStep2":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen.","eudi.errRequest":"EUDI-Anfrage fehlgeschlagen.","eudi.waitingPre":"Warte auf Wallet… (Schwelle","eudi.errBackend":"EUDI-Backend nicht erreichbar:","eudi.statusVerifiedPre":"✓ Alter verifiziert:","eudi.statusSuffix":"(EUDI-Wallet)","eudi.msgVerified":"Alter kryptografisch verifiziert ✓","eudi.expired":"Sitzung abgelaufen — bitte erneut starten.","eudi.noAge":"Keine Altersangabe von der Wallet erhalten.","eudi.errVerify":"Fehler bei der Verifikation."
+    "eudi.h4":"// ALTER KRYPTOGRAFISCH VERIFIZIEREN (EUDI-WALLET)","eudi.p1":"Beweise eine Altersschwelle über deine EUDI-Wallet —","eudi.p1Strong1":"ohne Geburtsdatum","eudi.p2":". Selective Disclosure: es wird nur „über N Jahre: ja/nein\" geteilt. Hebt die Altersgruppe von","eudi.pEm":"Eigenangabe","eudi.p3":"auf","eudi.p1Strong2":"verifiziert","eudi.p4":"(Trust 99).","eudi.hint1":"Diese Angabe ist aktuell","eudi.hint2":"(Trust 30). Verifiziere sie ohne Geburtsdatum per EUDI-Wallet — Selective Disclosure, nur „über N Jahre: ja/nein“.","eudi.verifyPre":"Mit EUDI verifizieren","eudi.verifyTrust":"→ Trust 99","eudi.msgNeedRole":"Bitte zuerst eine Rolle wählen.","eudi.ariaThresholds":"Altersschwelle wählen","eudi.btn14":"14+ nachweisen","eudi.btn16":"16+ nachweisen","eudi.btn18":"18+ nachweisen","eudi.qrAlt":"EUDI-Wallet QR-Code","eudi.qrLabel":"// MIT EUDI-WALLET SCANNEN","eudi.panelTitle":"Alter kryptografisch verifizieren","eudi.panelSub1":"Beweise die gewählte Altersschwelle über deine EUDI-Wallet","eudi.panelSubStrong":"ohne Geburtsdatum","eudi.panelSub2":". Es wird nur „über N Jahre: ja/nein“ geteilt","eudi.panelSub3":"auf","eudi.panelSubVerified":"verifiziert (Trust 99)","eudi.proveBtn":"Mit EUDI verifizieren","eudi.rehint":"Abgelaufen? Button erneut tippen zum Neustart.","eudi.deeplink":"Auf diesem Gerät mit Wallet öffnen →","eudi.msgNeedStep2":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen.","eudi.errRequest":"EUDI-Anfrage fehlgeschlagen.","eudi.waitingPre":"Warte auf Wallet… (Schwelle","eudi.errBackend":"EUDI-Backend nicht erreichbar:","eudi.statusVerifiedPre":"✓ Alter verifiziert:","eudi.statusSuffix":"(EUDI-Wallet)","eudi.msgVerified":"Alter kryptografisch verifiziert ✓","eudi.expired":"Sitzung abgelaufen — bitte erneut starten.","eudi.noAge":"Keine Altersangabe von der Wallet erhalten.","eudi.errVerify":"Fehler bei der Verifikation."
   },
   en: {
     /* en-flow-keys moved to main T.en block */
@@ -1762,7 +1767,7 @@ const T = {
     "tok.validPre":"Token valid — expires in","tok.minute":"minute","tok.minutes":"minutes","tok.soon":"⚠ Token expires in under 1 minute.","tok.expired":"✗ Token has expired.",
     "alert.sessionExpired":"Your session has expired. You will be logged out.","confirm.refresh":"Your HHTTPS token has expired. Do you want to stay logged in?\n\n[OK] = Refresh token\n[Cancel] = Log out","alert.noRefresh":"No refresh token available — please sign in again.","alert.refreshFailed":"Token refresh failed — please sign in again.","msg.tokenRenewed":"✓ Token renewed.",
     "msg.ghDone":"✓ GitHub verification complete. If your login is no longer visible, please sign in again.","msg.ghNeedPasskey":"Please sign in with a passkey before verifying GitHub.","gh.newTab":"A new tab has opened. Confirm with GitHub there and then return here.","gh.timeout":"Timed out. Please try again.","gh.confirmedPre":"✓ GitHub verified! Trust score:",
-    "eudi.h4":"// VERIFY AGE CRYPTOGRAPHICALLY (EUDI WALLET)","eudi.p1":"Prove an age threshold via your EUDI wallet —","eudi.p1Strong1":"without your date of birth","eudi.p2":". Selective disclosure: only \"over N years: yes/no\" is shared. Lifts the age group from","eudi.pEm":"self-declared","eudi.p3":"to","eudi.p1Strong2":"verified","eudi.p4":"(trust 99).","eudi.hint1":"This value is currently","eudi.hint2":"(trust 30). Verify it without your date of birth via your EUDI wallet — selective disclosure, only “over N years: yes/no”.","eudi.verifyPre":"Verify with EUDI","eudi.verifyTrust":"→ trust 99","eudi.msgNeedRole":"Please choose a role first.","eudi.ariaThresholds":"Choose age threshold","eudi.btn14":"Prove 14+","eudi.btn16":"Prove 16+","eudi.btn18":"Prove 18+","eudi.qrAlt":"EUDI wallet QR code","eudi.qrLabel":"// SCAN WITH EUDI WALLET","eudi.panelTitle":"Verify age cryptographically","eudi.panelSub1":"Prove the chosen age threshold via your EUDI wallet —","eudi.panelSubStrong":"without your date of birth","eudi.panelSub2":". Selective disclosure: only “over N years: yes/no”. Lifts the group from","eudi.panelSub3":"to","eudi.panelSubVerified":"verified (trust 99)","eudi.proveBtn":"Verify with EUDI","eudi.rehint":"Expired? Tap the button again to restart.","eudi.deeplink":"Open with wallet on this device →","eudi.msgNeedStep2":"Please complete step 2 (prove humanity) first.","eudi.errRequest":"EUDI request failed.","eudi.waitingPre":"Waiting for wallet… (threshold","eudi.errBackend":"EUDI backend not reachable:","eudi.statusVerifiedPre":"✓ Age verified:","eudi.statusSuffix":"(EUDI wallet)","eudi.msgVerified":"Age cryptographically verified ✓","eudi.expired":"Session expired — please start again.","eudi.noAge":"No age info received from the wallet.","eudi.errVerify":"Verification error."
+    "eudi.h4":"// VERIFY AGE CRYPTOGRAPHICALLY (EUDI WALLET)","eudi.p1":"Prove an age threshold via your EUDI wallet —","eudi.p1Strong1":"without your date of birth","eudi.p2":". Selective disclosure: only \"over N years: yes/no\" is shared. Lifts the age group from","eudi.pEm":"self-declared","eudi.p3":"to","eudi.p1Strong2":"verified","eudi.p4":"(trust 99).","eudi.hint1":"This value is currently","eudi.hint2":"(trust 30). Verify it without your date of birth via your EUDI wallet — selective disclosure, only “over N years: yes/no”.","eudi.verifyPre":"Verify with EUDI","eudi.verifyTrust":"→ trust 99","eudi.msgNeedRole":"Please choose a role first.","eudi.ariaThresholds":"Choose age threshold","eudi.btn14":"Prove 14+","eudi.btn16":"Prove 16+","eudi.btn18":"Prove 18+","eudi.qrAlt":"EUDI wallet QR code","eudi.qrLabel":"// SCAN WITH EUDI WALLET","eudi.panelTitle":"Verify age cryptographically","eudi.panelSub1":"Prove the chosen age threshold via your EUDI wallet","eudi.panelSubStrong":"without your date of birth","eudi.panelSub2":". Only “over N years: yes/no” is shared","eudi.panelSub3":"to","eudi.panelSubVerified":"verified (trust 99)","eudi.proveBtn":"Verify with EUDI","eudi.rehint":"Expired? Tap the button again to restart.","eudi.deeplink":"Open with wallet on this device →","eudi.msgNeedStep2":"Please complete step 2 (prove humanity) first.","eudi.errRequest":"EUDI request failed.","eudi.waitingPre":"Waiting for wallet… (threshold","eudi.errBackend":"EUDI backend not reachable:","eudi.statusVerifiedPre":"✓ Age verified:","eudi.statusSuffix":"(EUDI wallet)","eudi.msgVerified":"Age cryptographically verified ✓","eudi.expired":"Session expired — please start again.","eudi.noAge":"No age info received from the wallet.","eudi.errVerify":"Verification error."
   }
 };
 let LANG = 'de';
@@ -2993,10 +2998,10 @@ window.doDeclarRole = async function() {
     }
 
     // Auto-reveal the EUDI verification panel in Phase 5 if an EUDI-verifiable
-    // age band (14/16/18) was chosen. No manual button in Phase 4 anymore.
-    // We do NOT autostart the scan — the user taps the (single) threshold
-    // button to begin, which also lets them re-poll if the session expires.
-    try { showEudiPanel(false); } catch(e){}
+    // age band (14/16/18) was chosen. No manual button in Phase 4 anymore, and
+    // the QR appears immediately (no click) — the threshold button only serves
+    // to re-poll if the session expires.
+    try { showEudiPanel(true); } catch(e){}
 
   } catch(e) {
     msg('Fehler: ' + e.message, 'e');
