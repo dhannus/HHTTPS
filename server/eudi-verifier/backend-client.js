@@ -34,6 +34,9 @@ function buildDcqlQuery(minAge) {
         id: 'proof_of_age',
         format: 'mso_mdoc',
         meta: { doctype_value: AV_DOCTYPE },
+        // EU verifier backend (all versions incl. main) requires the `path`
+        // form for mso_mdoc claims: [namespace, element]. For PID the mdoc
+        // namespace equals the docType.
         claims: [{ path: [AV_DOCTYPE, claimName] }]
       }
     ]
