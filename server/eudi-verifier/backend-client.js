@@ -1,159 +1,234 @@
 // server/eudi-verifier/backend-client.js
 //
-// Thin client for the official EU Verifier Endpoint backend (Docker,Port :8080).
-// Wraps exactly two real endpoints (verified against the repo README):
+// Thin client for EUDIPLO (OpenWallet Foundation), the verifier component we
+// switched to for the German SPRIND EUDI sandbox wallet. It REPLACES the old
+// EU Verifier Endpoint backend (Docker, :8080) but keeps the EXACT same export
+// surface, so eudi-verifier/index.js needs no changes:
 //
-//   POST /ui/presentations               → initialise a transaction
-//   GET  /ui/presentations/{id}          → poll for the wallet's response
+//   initTransaction(minAge)          → { transaction_id, nonce, uri, crossDeviceUri }
+//   buildWalletLink(tx)              → openid4vp:// URL (already built by EUDIPLO)
+//   pollWalletResponse(id, code)     → { status:'pending' } | { status:'done', walletResponse }
+//   extractAgeClaims(walletResponse) → { age_over_14?, age_over_16?, age_over_18? }
+//   config                           → { BACKEND, AV_DOCTYPE, AUTH_SCHEME }
 //
-// This module does NOT parse mdoc/vp_token or do any crypto — the EU backend
-// does all of that. We only send a DCQL age query and read back the validated
-// age_over_NN booleans.
+// EUDIPLO does ALL the OpenID4VP 1.0 / DCQL / mso_mdoc / SessionTranscript /
+// JWE work and signs the request object with our German-Registrar access cert.
+// We only speak HTTP/JSON. The calls below (token, offer, config-create) are the
+// ones proven manually against the running instance; the two behaviours we could
+// NOT verify end-to-end are marked **CONFIRM** with the exact check to run.
+//
+// EUDIPLO API surface used (all under the /api prefix):
+//   POST /api/oauth2/token      { client_id, client_secret } → { access_token, expires_in }
+//   POST /api/verifier/config   { id, dcql_query, ... }       → stored config (201)
+//   POST /api/verifier/offer    { response_type:'uri', requestId } → { uri, crossDeviceUri, session }
+//   GET  /api/<session-path>    (CONFIRM) → session/result with disclosed claims
 
-import crypto from 'crypto';
+// EUDIPLO base URL — INCLUDES the /api prefix (confirmed: 404 on /oauth2/token,
+// 201 on /api/oauth2/token). EUDIPLO runs on the same box on :3002; talk to it
+// internally, not through nginx /eudiplo/ (that path is for the wallet).
+const BACKEND       = process.env.EUDIPLO_BASE_URL    || 'http://127.0.0.1:3002/api';
+const CLIENT_ID     = process.env.EUDIPLO_CLIENT_ID   || 'hhttps';
+const CLIENT_SECRET = process.env.EUDIPLO_CLIENT_SECRET || '';
 
-const BACKEND = process.env.EUDI_BACKEND_URL || 'http://127.0.0.1:8080';
+// Doctype to request. The SPRIND sandbox wallet presented PID, so PID is the
+// default here (the old EU AV app used eu.europa.ec.av.1). Configurable so the
+// doctype can change without code. For mdoc, the namespace equals the doctype.
+const AV_DOCTYPE    = process.env.EUDI_AV_DOCTYPE     || 'eu.europa.ec.eudi.pid.1';
 
-// Which credential + doctype to request. The EU Age-Verification app issues
-// `eu.europa.ec.av.1`; a generic EUDI wallet with PID uses
-// `eu.europa.ec.eudi.pid.1`. Both carry age_over_NN claims — only the doctype
-// string differs. Configurable so the hackathon sandbox can switch without code.
-const AV_DOCTYPE = process.env.EUDI_AV_DOCTYPE || 'eu.europa.ec.av.1';
+// Kept only for /age/health display: EUDIPLO already returns the full
+// openid4vp:// URL in the offer, so we never assemble the scheme ourselves.
+const AUTH_SCHEME   = process.env.EUDI_AUTH_SCHEME    || 'openid4vp://';
 
-// Scheme used inside the QR / deep-link. The AV profile uses custom schemes;
-// `openid4vp://` is the interoperable default. Configurable for the sandbox.
-const AUTH_SCHEME = process.env.EUDI_AUTH_SCHEME || 'openid4vp://';
+// Verifier-config id prefix. We map each HHTTPS age threshold to one EUDIPLO
+// verifier config: age-over-14 / age-over-16 / age-over-18. (age-over-18 was
+// created manually during bring-up; the others are created on first request.)
+const CONFIG_PREFIX = process.env.EUDIPLO_CONFIG_PREFIX || 'age-over-';
 
-// Build the DCQL query asking for the minimal age_over_NN boolean(s).
-// `minAge` is one of 14 | 16 | 18 (the thresholds HHTTPS cares about).
+const DEBUG = process.env.EUDI_DEBUG === '1';
+
+// ── Token (client-credentials, cached, re-auth on expiry) ────────────────────
+
+let tokenCache = { value: null, expiresAt: 0 };
+
+async function getToken() {
+  const now = Date.now();
+  if (tokenCache.value && now < tokenCache.expiresAt - 60_000) return tokenCache.value;
+  if (!CLIENT_SECRET) throw new Error('EUDIPLO_CLIENT_SECRET not configured');
+
+  const r = await fetch(`${BACKEND}/oauth2/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET })
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`EUDIPLO token failed (${r.status}): ${text.slice(0, 200)}`);
+  }
+  const data = await r.json();
+  tokenCache = {
+    value: data.access_token,
+    expiresAt: now + (Number(data.expires_in) || 86400) * 1000
+  };
+  return tokenCache.value;
+}
+
+async function authed(path, init = {}) {
+  const token = await getToken();
+  const headers = Object.assign({ Accept: 'application/json' }, init.headers, {
+    Authorization: `Bearer ${token}`
+  });
+  if (init.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
+  return fetch(`${BACKEND}${path}`, Object.assign({}, init, { headers }));
+}
+
+// ── Verifier config (one per age threshold, created on demand) ───────────────
+
+// DCQL in the OpenID4VP 1.0 `path` form [namespace, element] — the form EUDIPLO
+// expects and that matched the German wallet (confirmed for age_over_18).
 function buildDcqlQuery(minAge) {
-  const claimName = `age_over_${minAge}`;
   return {
     credentials: [
       {
-        id: 'proof_of_age',
+        id: 'pid',
         format: 'mso_mdoc',
         meta: { doctype_value: AV_DOCTYPE },
-        // EU verifier backend (all versions incl. main) requires the `path`
-        // form for mso_mdoc claims: [namespace, element]. For PID the mdoc
-        // namespace equals the docType.
-        claims: [{ path: [AV_DOCTYPE, claimName] }]
+        claims: [{ path: [AV_DOCTYPE, `age_over_${minAge}`] }]
       }
     ]
   };
 }
 
-// Initialise a presentation transaction. Returns the backend's JSON:
-//   { transaction_id, client_id, request_uri, request_uri_method }
-// We build the wallet-facing openid4vp:// link from request_uri + client_id.
-export async function initTransaction(minAge) {
-  const nonce = crypto.randomUUID();
-  const body = {
-    dcql_query: buildDcqlQuery(minAge),
-    nonce,
-    jar_mode: 'by_reference',
-    request_uri_method: 'post',
-    response_mode: 'direct_post',
-    profile: 'openid4vp'
-  };
+// Track configs we've ensured this process lifetime to avoid re-POSTing.
+const ensuredConfigs = new Set();
 
-  const r = await fetch(`${BACKEND}/ui/presentations`, {
+// Ensure the verifier config `age-over-{minAge}` exists; return its id.
+// **CONFIRM**: re-creating an existing config wasn't tested — does EUDIPLO 409
+// or overwrite? We tolerate a conflict (treat "already exists" as success). If
+// your instance returns something else on duplicate, tighten the check below.
+async function ensureVerifierConfig(minAge) {
+  const id = `${CONFIG_PREFIX}${minAge}`;
+  if (ensuredConfigs.has(id)) return id;
+
+  const r = await authed('/verifier/config', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify({
+      id,
+      description: `HHTTPS age verification (>=${minAge})`,
+      dcql_query: buildDcqlQuery(minAge)
+    })
   });
 
+  if (r.ok) {
+    ensuredConfigs.add(id);
+    return id;
+  }
+  // Tolerate "already exists": HTTP 409, or a 400/422 whose body mentions it.
+  const text = await r.text().catch(() => '');
+  if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
+    ensuredConfigs.add(id);
+    return id;
+  }
+  throw new Error(`EUDIPLO config create failed (${r.status}): ${text.slice(0, 200)}`);
+}
+
+// ── 1. Init transaction = create an EUDIPLO presentation offer ───────────────
+
+// Returns the shape index.js expects. EUDIPLO's `session` is our transaction id;
+// it returns the full wallet-ready openid4vp:// URL, so there is no client_id /
+// request_uri assembly on our side. The OID4VP nonce is managed inside EUDIPLO.
+export async function initTransaction(minAge) {
+  const requestId = await ensureVerifierConfig(minAge);
+
+  const r = await authed('/verifier/offer', {
+    method: 'POST',
+    body: JSON.stringify({ response_type: 'uri', requestId })
+  });
   if (!r.ok) {
     const text = await r.text().catch(() => '');
-    throw new Error(`EU backend init failed (${r.status}): ${text.slice(0, 200)}`);
+    throw new Error(`EUDIPLO offer failed (${r.status}): ${text.slice(0, 200)}`);
   }
-  const data = await r.json();
-  return { ...data, nonce };
+  const data = await r.json(); // { uri, crossDeviceUri, session }
+  return {
+    transaction_id: data.session,
+    nonce: null,
+    uri: data.uri,
+    crossDeviceUri: data.crossDeviceUri
+  };
 }
 
-// Build the openid4vp:// URL the wallet consumes (same string for QR + deep-link).
-// Per OpenID4VP, the wallet receives client_id + request_uri.
-export function buildWalletLink({ client_id, request_uri, request_uri_method }) {
-  const params = new URLSearchParams({
-    client_id,
-    request_uri
-  });
-  if (request_uri_method) params.set('request_uri_method', request_uri_method);
-  return `${AUTH_SCHEME}?${params.toString()}`;
+// ── 2. Wallet link ───────────────────────────────────────────────────────────
+
+// EUDIPLO already returns the wallet-ready openid4vp:// URL (client_id +
+// request_uri embedded, request object signed with the German-Registrar cert).
+// `uri` works same- and cross-device; `crossDeviceUri` is the no-redirect
+// variant if you ever want to split the two surfaces. index.js uses one string.
+export function buildWalletLink(tx) {
+  return (tx && (tx.uri || tx.crossDeviceUri)) || null;
 }
 
-// Poll the backend for the wallet's response. The EU backend returns:
-//   - 404 / empty while the wallet hasn't responded yet (still pending)
-//   - 200 + JSON containing the validated presentation once the wallet posted
-//
-// We return { status: 'pending' } or { status: 'done', walletResponse }.
-const DEBUG = process.env.EUDI_DEBUG === '1';
+// ── 3. Poll the EUDIPLO session for the wallet's response ────────────────────
 
-export async function pollWalletResponse(transactionId, responseCode) {
-  const url = new URL(`${BACKEND}/ui/presentations/${encodeURIComponent(transactionId)}`);
-  if (responseCode) url.searchParams.set('response_code', responseCode);
+// **CONFIRM**: the session/result endpoint path. We auto-discover it across the
+// candidates below on the first poll and cache the one that answers; set
+// EUDIPLO_SESSION_PATH to pin it explicitly. Run the check in the chat to lock
+// this. While the wallet hasn't responded the session reports a non-terminal
+// status (no age claims yet) → 'pending'.
+const SESSION_PATHS = (process.env.EUDIPLO_SESSION_PATH
+  ? [process.env.EUDIPLO_SESSION_PATH]
+  : ['/verifier/session/{id}', '/session/{id}', '/presentations/{id}']);
+let resolvedSessionPath = process.env.EUDIPLO_SESSION_PATH || null;
 
-  const r = await fetch(url, { headers: { Accept: 'application/json' } });
+const TERMINAL = ['verified', 'completed', 'success', 'valid', 'done', 'submitted'];
 
-  // When EUDI_DEBUG=1, read the body as raw text first and log status + body so
-  // we can see EXACTLY what the EU backend returns at each poll (state machine,
-  // empty 200/400, or the real wallet response). This is the diagnostic for the
-  // first real wallet scan. We then re-parse the captured text as JSON so the
-  // body isn't consumed twice.
+// Done = explicit terminal status OR disclosed age_over_* claims present.
+function sessionLooksDone(body) {
+  if (!body || typeof body !== 'object') return false;
+  const status = String(body.status || body.state || '').toLowerCase();
+  if (TERMINAL.includes(status)) return true;
+  return Object.keys(extractAgeClaims(body)).length > 0;
+}
+
+async function fetchSession(sessionId, tpl) {
+  const r = await authed(tpl.replace('{id}', encodeURIComponent(sessionId)), { method: 'GET' });
+  const raw = await r.text().catch(() => '');
+  let body = null;
+  try { body = raw && raw.trim().length ? JSON.parse(raw) : null; } catch { body = null; }
+  return { ok: r.ok, status: r.status, body, raw };
+}
+
+export async function pollWalletResponse(transactionId, _responseCode) {
+  const tag = String(transactionId).slice(0, 8);
+
+  // Resolve the session endpoint once (first 2xx wins), then reuse it.
+  if (!resolvedSessionPath) {
+    for (const tpl of SESSION_PATHS) {
+      const res = await fetchSession(transactionId, tpl);
+      if (DEBUG) console.log(`[EUDI-DEBUG] probe ${tpl} tx=${tag}… HTTP ${res.status} bodyLen=${res.raw.length}`);
+      if (res.ok) { resolvedSessionPath = tpl; break; }
+    }
+    if (!resolvedSessionPath) return { status: 'pending' }; // no path answered yet; retry next poll
+  }
+
+  const res = await fetchSession(transactionId, resolvedSessionPath);
   if (DEBUG) {
-    const raw = await r.text().catch(() => '');
-    const tag = transactionId.slice(0, 8);
-    console.log(`[EUDI-DEBUG] poll tx=${tag}… HTTP ${r.status} bodyLen=${raw.length} body=${raw.slice(0, 500)}`);
-
-    if (r.status === 404) return { status: 'pending' };
-    if (r.status === 400) {
-      if (!raw || raw.trim().length === 0) return { status: 'pending' };
-      throw new Error(`EU backend rejected poll (400): ${raw.slice(0, 200)}`);
-    }
-    if (!r.ok) throw new Error(`EU backend poll failed (${r.status}): ${raw.slice(0, 200)}`);
-
-    let body = null;
-    try { body = raw && raw.trim().length ? JSON.parse(raw) : null; } catch { body = null; }
-    if (!body || (Array.isArray(body) && body.length === 0)) {
-      console.log(`[EUDI-DEBUG] tx=${tag}… → treated as PENDING (empty/[]) `);
-      return { status: 'pending' };
-    }
-    console.log(`[EUDI-DEBUG] tx=${tag}… → DONE, walletResponse keys=${JSON.stringify(Object.keys(body))}`);
-    return { status: 'done', walletResponse: body };
+    console.log(`[EUDI-DEBUG] poll tx=${tag}… HTTP ${res.status} bodyLen=${res.raw.length} body=${res.raw.slice(0, 500)}`);
   }
 
-  // EU backend state machine: GET /ui/presentations/{id} only returns the wallet
-  // response once the presentation reaches the `Submitted` state (wallet has
-  // posted vp_token). While still in `Requested` or `RequestObjectRetrieved`
-  // (wallet hasn't scanned/answered yet), the backend responds with HTTP 400
-  // and an empty body — this is its convention for "still pending", NOT a real
-  // error. We therefore treat 404 AND 400-with-empty-body as pending. A 400
-  // WITH content remains a real error so genuine backend problems still surface.
-  if (r.status === 404) return { status: 'pending' };
-  if (r.status === 400) {
-    const text = await r.text().catch(() => '');
-    if (!text || text.trim().length === 0) return { status: 'pending' };
-    throw new Error(`EU backend rejected poll (400): ${text.slice(0, 200)}`);
-  }
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`EU backend poll failed (${r.status}): ${text.slice(0, 200)}`);
-  }
+  if (res.status === 404) return { status: 'pending' };
+  if (!res.ok) throw new Error(`EUDIPLO session poll failed (${res.status}): ${res.raw.slice(0, 200)}`);
 
-  const body = await r.json().catch(() => null);
-  // A 200 with an empty/again-pending body can also mean "not yet"; treat the
-  // presence of presentation data as the done signal.
-  if (!body || (Array.isArray(body) && body.length === 0)) {
-    return { status: 'pending' };
+  if (sessionLooksDone(res.body)) {
+    if (DEBUG) console.log(`[EUDI-DEBUG] tx=${tag}… → DONE, keys=${JSON.stringify(Object.keys(res.body || {}))}`);
+    return { status: 'done', walletResponse: res.body };
   }
-  return { status: 'done', walletResponse: body };
+  return { status: 'pending' };
 }
 
-// Extract the disclosed age_over_NN booleans from the backend's wallet response.
-// The validated attributes appear under the doctype namespace. We defensively
-// scan for any age_over_* keys so a PID-vs-AV doctype mismatch still yields the
-// booleans. Returns { age_over_14?, age_over_16?, age_over_18? } (only present
-// ones are set true; absent/false → not proven, handled by ageGroupFromEudiClaims).
+// ── 4. Extract disclosed age_over_NN booleans (unchanged) ────────────────────
+
+// Defensive recursive scan for any age_over_* keys, so a PID-vs-AV doctype
+// difference still yields the booleans. Returns { age_over_14?, age_over_16?,
+// age_over_18? } with only present ones set; ageGroupFromEudiClaims maps the rest.
 export function extractAgeClaims(walletResponse) {
   const out = {};
   const scan = (obj) => {
