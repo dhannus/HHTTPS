@@ -34,7 +34,9 @@ import {
 } from '@simplewebauthn/server';
 
 import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
-         VERIFICATION_CHECKS, resolveVerification, ageGroupFromEudiClaims } from './roles.js';
+         VERIFICATION_CHECKS, resolveVerification, ageGroupFromEudiClaims,
+         VERIFICATION_METHODS, computeVerification,
+         TRUST_BANDS, trustBand, HUMAN_CONFIRMED_THRESHOLD } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, verifyEmailCode, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
@@ -295,7 +297,7 @@ function sendJson(req, res, data, opts = {}) {
       <span class="logo-text">HHTTPS</span>
     </a>
     <div class="meta">
-      <span class="badge"><span class="dot"></span>v0.4.1</span>
+      <span class="badge"><span class="dot"></span>v0.5.0</span>
       <span class="badge">${req.path}</span>
     </div>
   </header>
@@ -447,7 +449,7 @@ function readIdentityCookie(req) {
 // identity in the headers; otherwise emit the issuer-level headers. We never
 // invent identity — headers reflect a verified token or nothing.
 app.use((req, res, next) => {
-  res.setHeader('HHTTPS-Protocol-Version', '0.4.1');
+  res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
 
   const cookieToken = readIdentityCookie(req);
   if (cookieToken) {
@@ -486,8 +488,11 @@ app.use(express.static(join(__dirname, 'public')));
 app.use(privacyPassWellKnownRouter);
 app.use('/privacy-pass', privacyPassRouter);
 
-// EUDI age-verification orchestrator (Phase 3, additive, see eudi-verifier/index.js)
-app.use('/eudi', createEudiVerifierRouter());
+// EUDI verification orchestrator (age + eID identity, additive, see eudi-verifier/index.js).
+// setIdentityCookie is injected so the browser-facing /eudi/*/status handlers can
+// mirror the upgraded token into the httpOnly identity cookie (fixes the bug where
+// EUDI claims never reached the browser cookie — the upgrade runs server-to-server).
+app.use('/eudi', createEudiVerifierRouter({ setIdentityCookie }));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -495,7 +500,8 @@ function setHHTPPS(res, opts = {}) {
   const { status = 'unverified', human = false, actorType = 'unknown',
           role = null, roleLevel = null, trustScore = 0, token = null,
           method = 'none', machineOperator = null, machinePurpose = null,
-          ageGroup = null, ageVerified = null, ageVerificationMethod = null } = opts;
+          ageGroup = null, ageVerified = null, ageVerificationMethod = null,
+          verifiedMethods = null, domainValue = null } = opts;
 
   // HTTP header values must be ASCII (Latin-1). German role labels contain
   // umlauts (Bürger, Schüler, Pädagoge), which make res.setHeader throw
@@ -508,7 +514,7 @@ function setHHTPPS(res, opts = {}) {
     .replace(/[^\x20-\x7E]/g, '')   // drop any remaining non-ASCII / control chars
     .trim();
 
-  res.setHeader('HHTTPS-Protocol-Version', '0.4.1');
+  res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
   res.setHeader('HHTTPS-Status',           hdrSafe(status));
   res.setHeader('HHTTPS-Human',            String(human));
   res.setHeader('HHTTPS-Actor-Type',       hdrSafe(actorType));
@@ -530,6 +536,25 @@ function setHHTPPS(res, opts = {}) {
   if (ageGroup)              res.setHeader('HHTTPS-Age-Group', hdrSafe(ageGroup));
   if (ageVerified !== null)  res.setHeader('HHTTPS-Age-Verified', String(ageVerified));
   if (ageVerificationMethod) res.setHeader('HHTTPS-Age-Method', hdrSafe(ageVerificationMethod));
+
+  // Verification methods (v0.5) — the trademark "HHTTPS fields in headers/cookie".
+  // Each confirmed method appears as its own official HHTTPS-<Method>-Verified
+  // header plus a comma-separated roll-up, exactly mirroring the age-group fields.
+  // The trust SCORE stays in HHTTPS-Trust-Score (API only); the UI shows methods,
+  // never the number. Adding a method needs nothing here — it derives from the
+  // VERIFICATION_METHODS registry in roles.js.
+  if (Array.isArray(verifiedMethods) && verifiedMethods.length) {
+    res.setHeader('HHTTPS-Verified-Methods', hdrSafe(verifiedMethods.join(',')));
+    for (const id of verifiedMethods) {
+      const m = VERIFICATION_METHODS[id];
+      if (!m || !m.header) continue;
+      res.setHeader(m.header, 'true');
+      // Methods that carry a value (domain → the domain name) expose it too.
+      if (m.valueHeader && id === 'domain' && domainValue) {
+        res.setHeader(m.valueHeader, hdrSafe(domainValue));
+      }
+    }
+  }
 }
 
 // ─── Signature helpers (Phase 2.5: Domain-bound slugs) ───────────────────────
@@ -608,11 +633,17 @@ async function issueAccessToken(payload) {
   return { token: tok, jti };
 }
 
-async function issueRefreshToken(userId, credId, role) {
+async function issueRefreshToken(userId, credId, role, surface = {}) {
   const jti = uuid();
   const tok = signToken({
     jti, iss: `https://${RP_ID}`, hhttps_iss: `hhttps://${RP_ID}`,
-    sub: 'refresh', userId, credId, role
+    sub: 'refresh', userId, credId, role,
+    // v0.5: the verification surface rides inside the SIGNED refresh token, so the
+    // session may expire and the identity still rehydrates statelessly on refresh.
+    // Nothing is persisted server-side (zero-PII) — the signature is the integrity.
+    ...(Array.isArray(surface.verifiedMethods) ? { verified_methods: surface.verifiedMethods } : {}),
+    ...(surface.trustScore != null ? { trustScore: surface.trustScore } : {}),
+    ...(surface.emailDomain ? { emailDomain: surface.emailDomain } : {})
     // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
   }, { expiresIn: REFRESH_TTL });
   await db.refreshTokens.create({
@@ -651,7 +682,7 @@ app.get('/.well-known/hhttps-configuration', (req, res) => {
   sendJson(req, res, {
     issuer:                  `https://${RP_ID}`,
     hhttps_issuer:           `hhttps://${RP_ID}`,
-    protocol_version:        '0.4.1',
+    protocol_version:        '0.5.0',
     base_url:                BASE_URL,
     jwks_uri:                `${BASE_URL}/.well-known/jwks.json`,
     check_endpoint:          `${BASE_URL}/hhttps/check`,
@@ -693,7 +724,7 @@ app.get('/hhttps/info', async (req, res) => {
   ]);
 
   sendJson(req, res, {
-    protocol: 'HHTTPS — Human-verified HTTPS', version: '0.4.1',
+    protocol: 'HHTTPS — Human-verified HTTPS', version: '0.5.0',
     initiative: 'iamhmn', contact: 'daniel.hannuschka@tweakz.de',
     github: 'github.com/dhannus/HHTTPS', demo: 'https://hhttps.org',
     features: ['webauthn', 'roles-15', 'email-verification', 'refresh-tokens',
@@ -745,7 +776,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
   if (!token) {
     setHHTPPS(res, { status: 'unverified', human: false, actorType: 'unknown' });
     return res.json({
-      hhttps: { version: '0.4.1', human: false, actorType: 'unknown',
+      hhttps: { version: '0.5.0', human: false, actorType: 'unknown',
                 status: 'unverified', message: 'No HHTTPS token. Please verify.' }
     });
   }
@@ -759,32 +790,44 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
                        method: 'machine-token', machineOperator: d.operatorId,
                        machinePurpose: d.purpose });
       return res.json({
-        hhttps: { version: '0.4.1', human: false, actorType: 'bot',
+        hhttps: { version: '0.5.0', human: false, actorType: 'bot',
                   status: 'verified', trustScore: 0, method: 'machine-token' },
         machine: { operatorId: d.operatorId, operatorName: d.operatorName,
                    purpose: d.purpose, issuedAt: new Date(d.iat * 1000).toISOString() }
       });
     }
 
-    const roleDef = ROLES[d.role] || ROLES.citizen;
-    const vlevel  = VERIFICATION_LEVELS[d.roleLevel] || VERIFICATION_LEVELS['self-declared'];
+    const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
 
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
-                     role: d.role, roleLevel: d.roleLevel, trustScore: d.trustScore,
+                     role: d.role || null, roleLevel: d.roleLevel || null, trustScore: d.trustScore,
                      token, method: d.method,
+                     verifiedMethods: methods.length ? methods : null,
+                     domainValue: d.domain_name || null,
                      ageGroup:              d.age_group || null,
                      ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
                      ageVerificationMethod: d.age_verification_method || null });
 
     return res.json({
-      hhttps: { version: '0.4.1', status: 'verified', human: true, actorType: 'human',
+      hhttps: { version: '0.5.0', status: 'verified', human: true, actorType: 'human',
                 method: d.method, trustScore: d.trustScore,
+                verifiedMethods: methods,
                 issuedAt: new Date(d.iat * 1000).toISOString(),
                 expiresAt: new Date(d.exp * 1000).toISOString(), issuer: d.iss },
-      role: { id: d.role, label: roleDef.label, icon: roleDef.icon,
-              description: roleDef.description, level: d.roleLevel,
-              levelLabel: vlevel.label, trustScore: d.trustScore,
-              privileges: roleDef.privileges, userStory: roleDef.userStory },
+      verification: {
+        methods: methods.map(id => ({
+          id, label: VERIFICATION_METHODS[id]?.label || id, verified: true,
+          value: id === 'domain' ? (d.domain_name || null)
+               : id === 'age'    ? (d.age_group || null) : null
+        }))
+      },
+      // A professional role is present ONLY when it arrived via an EUDI (Q)EAA.
+      ...(d.role ? {
+        role: { id: d.role, label: ROLES[d.role]?.label, icon: ROLES[d.role]?.icon,
+                description: ROLES[d.role]?.description, level: d.roleLevel,
+                levelLabel: (VERIFICATION_LEVELS[d.roleLevel]?.label) || null,
+                trustScore: d.trustScore, privileges: ROLES[d.role]?.privileges }
+      } : {}),
       ...(d.age_group ? {
         ageGroup: {
           id:          d.age_group,
@@ -848,7 +891,7 @@ app.post('/hhttps/sign-text', limit.check, async (req, res) => {
     });
 
     return res.json({
-      hhttps:    { version: '0.4.1', mode: 'beta-text-bound' },
+      hhttps:    { version: '0.5.0', mode: 'beta-text-bound' },
       signature,                       // the JWT that proves text + identity
       textHash,                        // sha256 hex of the signed text
       role: {
@@ -908,7 +951,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
 
     const roleDef = ROLES[d.role] || ROLES.citizen;
     return res.json({
-      hhttps: { version: '0.4.1', status: 'verified', mode: 'beta-text-bound', match: true },
+      hhttps: { version: '0.5.0', status: 'verified', mode: 'beta-text-bound', match: true },
       match: true,
       role: {
         id: d.role,
@@ -926,7 +969,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
 });
 
 // ─── Signatures (Phase 2.5: domain-bound, slug-based) ───────────────────────
-// Replaces the v0.4.1 raw-token-in-marker approach. Now:
+// Replaces the v0.5.0 raw-token-in-marker approach. Now:
 //   - Marker is a short slug (e.g. #hhttps:s:hp-7K2-XQ9NMR-3F)
 //   - Slug references a DB record, never reveals the access token
 //   - Each signature is single-use creation, but verifiable forever
@@ -1000,7 +1043,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     await db.stats.increment('signatures_created');
 
     return res.json({
-      hhttps: { version: '0.4.1', mode: 'slug' },
+      hhttps: { version: '0.5.0', mode: 'slug' },
       id:      slug,
       marker:  `#hhttps:s:${slug}`,
       url:     `${BASE_URL}/s/${slug}`,
@@ -1048,7 +1091,7 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 
   // Build response
   const out = {
-    hhttps:    { version: '0.4.1', status: 'verified' },
+    hhttps:    { version: '0.5.0', status: 'verified' },
     id:        sig.id,
     role: {
       id:    sig.role,
@@ -1181,7 +1224,7 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
 
   await db.stats.increment('signatures_verified', Object.keys(out).length).catch(() => {});
 
-  return res.json({ hhttps: { version: '0.4.1' }, results: out });
+  return res.json({ hhttps: { version: '0.5.0' }, results: out });
 });
 
 // Revoke a signature (only by original signer)
@@ -1206,7 +1249,7 @@ app.post('/hhttps/signatures/:slug/revoke', async (req, res) => {
     }
     await db.stats.increment('signatures_revoked').catch(() => {});
     return res.json({
-      hhttps: { version: '0.4.1', status: 'revoked' },
+      hhttps: { version: '0.5.0', status: 'revoked' },
       id:     slug,
       revokedAt: new Date().toISOString()
     });
@@ -1862,7 +1905,7 @@ function escapeHtml(s) {
 
 app.get('/hhttps/roles', (req, res) => {
   sendJson(req, res, {
-    hhttps: { version: '0.4.1' },
+    hhttps: { version: '0.5.0' },
     roles: Object.values(ROLES).map(r => ({
       id: r.id, label: r.label, icon: r.icon,
       description: r.description, verificationMethods: r.verificationMethods,
@@ -2003,9 +2046,16 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     let emailMerge = {};
     if (emailSessionId) {
       const prior = await db.sessions.get(emailSessionId);
-      if (prior && prior.userId === (stored.userId || cred.userId)) {
+      // `emailSessionId` is a same-tab handle the client just email-verified, so
+      // we merge whenever that prior session is genuinely email-verified. We do
+      // NOT require prior.userId === cred.userId: register/start can mint a fresh
+      // WebAuthn user handle for the new passkey, so the email-session userId and
+      // the credential userId legitimately differ. Requiring them to match
+      // silently dropped emailVerified, which made /role/declare 403 right after
+      // a passkey was added (the new session was not email-verified).
+      if (prior && prior.emailVerified) {
         emailMerge = {
-          emailVerified:    prior.emailVerified    || false,
+          emailVerified:    true,
           emailDomain:      prior.emailDomain      || null,
           emailLevel:       prior.emailLevel       || null,
           emailTrustBonus:  prior.emailTrustBonus  || 0,
@@ -2026,9 +2076,10 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       verified:     true,
       hasPasskey:   true,
       // Initial trust placeholder. The final trust is computed in /role/declare
-      // (base 30 + emailDomainBonus + passkey 30, capped 100). We seed with 60
-      // so that callers without /role/declare still see a sane number.
-      trustScore:   60,
+      // via computeVerification (email 20 + passkey 30 + domain + …, capped 100).
+      // We seed with 50 — the human-confirmed threshold (email+passkey) — so a
+      // caller that reads the session before /role/declare sees a sane number.
+      trustScore:   50,
       ...emailMerge,
     }, 1800_000); // 30 min
     await db.stats.increment('verifications');
@@ -2056,32 +2107,40 @@ app.post('/hhttps/token/refresh', async (req, res) => {
     const stored = await db.refreshTokens.get(d.jti);
     if (!stored) throw new Error('Refresh-Token nicht aktiv');
 
-    const cred       = stored.credential_id ? await db.credentials.get(stored.credential_id) : null;
-    const role       = stored.role || d.role;
-    const roleDef    = ROLES[role] || ROLES.citizen;
-    const savedRole  = await db.rolesDeclared.get(stored.user_id);
+    const cred = stored.credential_id ? await db.credentials.get(stored.credential_id) : null;
+
+    // v0.5: rehydrate the verification surface STATELESSLY from the signed refresh
+    // token (zero-PII — nothing is read from a per-user table). verified_methods,
+    // trust and the domain value were embedded into the refresh token at issuance.
+    const methods    = Array.isArray(d.verified_methods) ? d.verified_methods : [];
+    const trustScore = (typeof d.trustScore === 'number') ? d.trustScore : 20;  // email floor
+    const domainVal  = d.emailDomain || null;
 
     const { token: newAccess } = await issueAccessToken({
       userId:     stored.user_id,
-      role,
-      roleLabel:  roleDef.label,
-      roleLevel:  savedRole?.role_level  || 'self-declared',
-      trustScore: savedRole?.trust_score || 60,
-      method:     'webauthn-passkey',
-      deviceType: cred?.deviceType || 'unknown'
+      role:       null,
+      roleLabel:  null,
+      roleLevel:  null,
+      trustScore,
+      method:     'verification-methods',
+      deviceType: cred?.deviceType || 'unknown',
+      verified_methods:    methods,
+      verification_status: 'verified',
+      ...(domainVal ? { domain_name: domainVal } : {})
     });
 
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
-                     role, roleLevel: savedRole?.role_level,
-                     trustScore: savedRole?.trust_score || 60,
-                     token: newAccess, method: 'webauthn-passkey' });
+                     role: null, trustScore, token: newAccess,
+                     method: 'verification-methods',
+                     verifiedMethods: methods, domainValue: domainVal });
     setIdentityCookie(res, newAccess);  // refresh the hhttps.org-scoped cookie too
 
     res.json({
-      hhttps:    { version: '0.4.1', status: 'refreshed', human: true, actorType: 'human' },
+      hhttps:    { version: '0.5.0', status: 'refreshed', human: true, actorType: 'human',
+                   trustScore, verifiedMethods: methods },
       token:     newAccess,
       expiresAt: new Date(Date.now() + ACCESS_TTL * 1000).toISOString(),
-      role:      { id: role, label: roleDef.label, trustScore: savedRole?.trust_score || 60 },
+      role:      null,
       message:   '✓ New access token issued — no re-authentication needed.'
     });
   } catch (e) {
@@ -2130,7 +2189,7 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
       deviceType:   'email-only',
       backedUp:     false,
       verified:     true,   // session gilt als verified für /hhttps/email/send
-      trustScore:   30,
+      trustScore:   0,      // email pending — 0 until the email is confirmed (then 20)
     }, 900_000); // 15 min — ausreichend für E-Mail-Zustellung und Bestätigung
 
     await db.stats.increment('verifications');
@@ -2138,7 +2197,7 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
     res.json({
       sessionId:  sid,
       userId,
-      trustScore: 30,
+      trustScore: 0,        // email pending — not yet a verified method
       method:     'email-pending',
       pseudonym:  cleanPseudo,
       message:    'Session erstellt. Bitte E-Mail verifizieren.',
@@ -2234,12 +2293,18 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     emailCategory:   result.category,
   });
 
-  // Report the account-trust the user would have RIGHT NOW (before any role
-  // declaration), so the UI can show "Trust 30 + 15 = 45" immediately.
-  const accountTrust = Math.min(
-    100,
-    30 + (result.trustBonus || 0) + ((session.hasPasskey || session.credentialId) ? 30 : 0)
-  );
+  // Report the verification surface the user has RIGHT NOW (before adding more
+  // methods), so the UI can immediately show the confirmed method badges. Trust
+  // is internal/API-only; the UI renders `methods`, never the number.
+  const v = computeVerification({
+    email:       true,
+    passkey:     !!(session.hasPasskey || session.credentialId),
+    domain:      !!result.domain,
+    domainTrust: result.trustBonus || 0,
+    domainValue: result.domain || null,
+    github:      !!session.githubVerified,
+    eudi:        !!session.eudiVerified
+  });
 
   res.json({
     verified:     true,
@@ -2247,7 +2312,8 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     domain:       result.domain,
     trustBonus:   result.trustBonus,
     category:     result.category,
-    accountTrust,
+    methods:      v.methods,        // confirmed verification methods (UI shows these)
+    accountTrust: v.trust,          // API only — the UI must not render this number
   });
 });
 
@@ -2304,8 +2370,7 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
     res.send(renderGithubReturnPage({
       ok: true,
       title: 'GitHub verified',
-      message: 'You can close this tab and return to hhttps.org.' + warn,
-      trustScore: result.trustScore
+      message: 'You can close this tab and return to hhttps.org.' + warn
     }));
   } catch (e) {
     res.send(renderGithubReturnPage({
@@ -2318,12 +2383,10 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
 
 // ─── Static landing page for the GitHub OAuth popup tab ─────────────────────
 // Bilingual (EN/DE stacked), self-closes after 2 s. Inline CSS keeps it tiny.
-function renderGithubReturnPage({ ok, title, message, trustScore }) {
+function renderGithubReturnPage({ ok, title, message }) {
   const color = ok ? '#34d399' : '#f87171';
   const icon  = ok ? '✓'  : '✗';
-  const scoreLine = (ok && trustScore)
-    ? `<div style="font-family:monospace;font-size:13px;color:#7a8aa0;margin-top:6px;">Trust score: ${trustScore} / 100</div>`
-    : '';
+  // v0.5: the trust score is API-only and is NEVER shown to the user — no score line.
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><title>${title}</title>
 <style>
@@ -2342,7 +2405,6 @@ function renderGithubReturnPage({ ok, title, message, trustScore }) {
     <div class="icon">${icon}</div>
     <h1>${title}</h1>
     <p class="msg">${escapeHtml(message)}</p>
-    ${scoreLine}
     <p class="lang-de">Du kannst diesen Tab schließen und zu hhttps.org zurückkehren.</p>
     <button onclick="window.close()">Close tab / Tab schließen</button>
   </div>
@@ -2380,10 +2442,15 @@ app.post('/hhttps/role/declare', async (req, res) => {
       .trim() || null;
   }
 
-  const roleDef = ROLES[role];
-  if (!roleDef) return res.status(400).json({
-    error: `Unknown role: ${role}`, available: Object.keys(ROLES)
-  });
+  // v0.5: roles are no longer self-declared. The base identity is simply "human".
+  // A professional role arrives ONLY via an EUDI (Q)EAA (handled by eudi-verifier),
+  // so we do not take a role from the request. Email is the sign-in gate — without
+  // a verified email there is no valid logged-in identity (trust 0 is not a state).
+  if (!session.emailVerified) {
+    return res.status(403).json({
+      error: 'Email verification required to establish a human identity.'
+    });
+  }
 
   // Optional age_group (orthogonal to role). Phase 1: self-declared only —
   // honestly labelled, low trust, age_verified:false. Phase 3 will set this
@@ -2402,161 +2469,93 @@ app.post('/hhttps/role/declare', async (req, res) => {
     };
   }
 
-  let vMethod    = verificationMethod || 'self-declared';
-  let note       = null;
-  let vClaimStatus = 'self-declared';  // 'verified' | 'claimed' | 'self-declared'
-  let vClaimedAs   = null;             // the method the user asserted but we couldn't verify
-  let vTargetTrust = null;             // trust that method will grant once a real check exists
+  // ─── Verification surface (v0.5) ────────────────────────────────────────────
+  // Build the method flag-bag from the session and let roles.js compute the
+  // additive, API-only trust + the official HHTTPS method headers + the badges.
+  // Self-declared role picking and the typed-in role-ID honesty gate are gone;
+  // the only role path is an EUDI (Q)EAA (handled by the eudi-verifier).
+  const ageVerifiedFlag = !!(ageClaims && ageClaims.age_verified === true);
+  const flags = {
+    email:       !!session.emailVerified,
+    passkey:     !!(session.hasPasskey || session.credentialId),
+    domain:      !!session.emailDomain,
+    domainTrust: session.emailTrustBonus || 0,
+    domainValue: session.emailDomain || null,
+    github:      !!session.githubVerified,
+    eudi:        !!session.eudiVerified,           // set by the EUDI eID flow (eudi-verifier)
+    age:         ageVerifiedFlag                   // self-declared age is trust-neutral, not a "method"
+  };
+  const v = computeVerification(flags);
+  const trustScore = v.trust;
 
-  // ─── Additive account trust (Phase 3 model) ─────────────────────────────────
-  // Trust is built out of independent components that ADD UP, capped at 100:
-  //   • emailBase  : 30 when the user verified an email (always the same — no
-  //                  domain magic), 0 otherwise.
-  //   • domainBonus: +0 / +15 / +40 depending on email-domain category
-  //                  (see classifyDomain in email.js).
-  //   • passkeyBonus: +30 when the user added a passkey (hasPasskey or
-  //                   credentialId on the session).
-  //
-  // The resulting `accountTrust` is the FLOOR for this token. A role-specific
-  // verification method (orcid, github, eudi-wallet-role, …) may grant an
-  // even higher trust — the final score is max(accountTrust, methodTrust).
-  const emailBase    = session.emailVerified ? 30 : 0;
-  const domainBonus  = session.emailTrustBonus || 0;
-  const passkeyBonus = (session.hasPasskey || session.credentialId) ? 30 : 0;
-  const accountTrust = Math.min(100, emailBase + domainBonus + passkeyBonus);
-
-  let trustScore = accountTrust;
-
-  // GitHub takes precedence for developer if both are set, since it's a
-  // stronger pseudonymous signal than mere email-domain classification.
-  if (session.githubVerified && session.githubTrustBonus && role === 'developer') {
-    vMethod    = 'github-verified';
-    trustScore = Math.max(trustScore, session.githubTrustBonus);
-    note       = `GitHub account verified (trust ${session.githubTrustBonus}).`;
-    vClaimStatus = 'verified';
-  } else if (session.emailVerified && session.emailLevel && session.emailLevel !== 'email-verified') {
-    // Domain-classified email (school-email / official-email …) is a stronger
-    // signal than plain email-verified; record the specific level on the token.
-    vMethod    = session.emailLevel;
-    note       = `Email domain "${session.emailDomain}" verified — category bonus +${domainBonus}.`;
-    vClaimStatus = 'verified';
-  } else if (session.emailVerified) {
-    vMethod    = 'email-verified';
-    note       = session.emailDomain
-      ? `Email domain "${session.emailDomain}" verified.`
-      : `Email verified.`;
-    vClaimStatus = 'verified';
-  } else {
-    // Honesty gate (Phase 2): a method only grants its trust if a REAL automated
-    // check backs it. Unimplemented checks (typed-in numbers like approbation-id,
-    // bar-association-id, press-card, ...) BREAK here: trust stays self-declared
-    // (30), the method is recorded as 'claimed' (what the user asserts), and the
-    // submitted number is kept in the note for later real verification.
-    const resolved = resolveVerification(vMethod);
-    vClaimStatus   = resolved.status;          // 'verified' | 'claimed' | 'self-declared'
-    vClaimedAs     = resolved.claimedAs || null;
-    vTargetTrust   = resolved.targetTrust || null;
-
-    if (resolved.downgraded) {
-      // Record the submitted id so it can be verified once the real check exists.
-      const submitted =
-        verificationData?.pressCardId || verificationData?.studentId ||
-        verificationData?.memberId    || verificationData?.barId     ||
-        verificationData?.craftId     || verificationData?.approbationId ||
-        verificationData?.notaryId    || verificationData?.hrbId      ||
-        verificationData?.serviceId   || null;
-      vMethod    = 'self-declared';
-      // Method downgraded (typed-in id without real check) — no method bonus,
-      // but keep the additive accountTrust floor (email + passkey).
-      trustScore = Math.max(trustScore, resolved.trustScore);
-      note = submitted
-        ? `Self-declared "${submitted}" for ${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} recorded — not yet automatically checked, no trust bonus.`
-        : `${VERIFICATION_LEVELS[resolved.claimedAs]?.label || resolved.claimedAs} recorded as self-declared — not yet automatically checked, no trust bonus.`;
-    } else {
-      // Real check (or ORCID format gate). ORCID still needs its format validated.
-      vMethod    = resolved.method;
-      trustScore = Math.max(trustScore, resolved.trustScore);
-      if (resolved.method === 'orcid' && verificationData?.orcid) {
-        const ok = /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/.test(verificationData.orcid);
-        if (!ok) {
-          vMethod = 'self-declared';
-          trustScore = Math.max(trustScore, 30);  // keep accountTrust floor
-          vClaimStatus = 'self-declared';
-          note = 'ORCID format invalid — no verification.';
-        } else {
-          note = `ORCID ${verificationData.orcid} (format checked, not confirmed against orcid.org).`;
-        }
-      }
-    }
-  }
-
-  const cred = session.credentialId ? await db.credentials.get(session.credentialId) : null;
-
-  // Issue access + refresh token
-  // Note: `method` is the verification method that lifted the trust score
-  // (github-verified, email-verified, orcid, ...). 'webauthn-passkey' is
-  // the baseline assertion that there is a real human; vMethod tells you
-  // WHAT was additionally verified about that human.
+  // Issue access + refresh token. The access token carries the human identity,
+  // the verified_methods[] array and (optional, orthogonal) age claims. No role.
   const { token } = await issueAccessToken({
     userId:     session.userId,
-    role,
-    roleLabel:  roleDef.label,
-    roleLevel:  vMethod,
+    role:       null,
+    roleLabel:  null,
+    roleLevel:  null,
     trustScore,
-    method:     vMethod,
+    method:     'verification-methods',
     deviceType: session.deviceType,
-    verification_status: vClaimStatus,                          // verified | claimed | self-declared
-    ...(vClaimedAs ? { claimed_as: vClaimedAs } : {}),          // asserted-but-unverified method
-    ...(pseudonym ? { pseudonym } : {}),                        // human-readable name (optional)
+    verified_methods:    v.methods,
+    verification_status: 'verified',
+    ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
+    ...(pseudonym ? { pseudonym } : {}),
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
-  const refresh = await issueRefreshToken(session.userId, session.credentialId, role);
+  const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
+    verifiedMethods: v.methods, trustScore, emailDomain: session.emailDomain || null
+  });
 
-  await db.rolesDeclared.upsert(session.userId, role, vMethod, trustScore);
-  await db.sessions.update(sessionId, { role, roleLevel: vMethod, trustScore });
+  // Zero-PII: role / methods / trust are NOT persisted against the user. The
+  // session keeps only the transient trust for in-flow display; the durable
+  // identity lives in the signed tokens (client-held), never in the database.
+  await db.sessions.update(sessionId, { trustScore });
 
-  // Webhooks (fire-and-forget)
-  fireEvent('role.declared', { role, roleLevel: vMethod, trustScore });
-  fireEvent('token.issued',  { role, trustScore, method: vMethod });
+  fireEvent('identity.verified', { trustScore, methods: v.methods });
+  fireEvent('token.issued',      { trustScore, methods: v.methods });
 
   setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
-                   role, roleLevel: vMethod, trustScore,
-                   token, method: vMethod,
+                   role: null, trustScore, token, method: 'verification-methods',
+                   verifiedMethods: v.methods, domainValue: session.emailDomain || null,
                    ageGroup:              ageClaims?.age_group || null,
                    ageVerified:           ageClaims ? ageClaims.age_verified : null,
                    ageVerificationMethod: ageClaims?.age_verification_method || null });
-  // Refresh token also stays out of headers (size); it is in the JSON body.
-  setIdentityCookie(res, token);  // mirror into hhttps.org-scoped cookie (dev convenience)
+  setIdentityCookie(res, token);  // trademark: the HHTTPS fields mirrored into the cookie
+
+  // Human-readable badge list for the UI (the UI shows methods, never the score).
+  const badges = v.badges.map(id => ({
+    id, label: VERIFICATION_METHODS[id]?.label || id, verified: true,
+    value: id === 'domain' ? (session.emailDomain || null)
+         : id === 'age'    ? (ageClaims?.age_group || null) : null
+  }));
 
   res.json({
     hhttps: {
-      version: '0.4.1', status: 'verified', human: true, actorType: 'human',
+      version: '0.5.0', status: 'verified', human: true, actorType: 'human',
       token, refreshToken: refresh,
       expiresAt:        new Date(Date.now() + ACCESS_TTL  * 1000).toISOString(),
       refreshExpiresAt: new Date(Date.now() + REFRESH_TTL * 1000).toISOString(),
-      trustScore
+      trustScore,                 // API only — the UI must not render this number
+      verifiedMethods: v.methods
     },
-    role: {
-      id: role, label: roleDef.label, icon: roleDef.icon, level: vMethod,
-      levelLabel: VERIFICATION_LEVELS[vMethod]?.label, trustScore,
-      verificationNote: note, privileges: roleDef.privileges,
-      verificationStatus: vClaimStatus,            // verified | claimed | self-declared
-      claimedAs:          vClaimedAs || null,       // method asserted but not yet verifiable
-      claimedAsLabel:     vClaimedAs ? (VERIFICATION_LEVELS[vClaimedAs]?.label || vClaimedAs) : null,
-      targetTrust:        vTargetTrust || null,     // trust once the real check exists
+    verification: {
+      methods:       badges,      // confirmed methods (what the UI renders)
+      pseudonym:     pseudonym || null,
       emailVerified: session.emailVerified || false,
-      emailDomain:   session.emailDomain   || null,
-      pseudonym:     pseudonym || null
+      emailDomain:   session.emailDomain   || null
     },
+    role: null,                    // no self-declared role (EUDI EAA only)
     ageGroup: ageClaims ? {
       id:        ageClaims.age_group,
       label:     AGE_GROUPS[ageClaims.age_group].label,
       verified:  ageClaims.age_verified,
       method:    ageClaims.age_verification_method,
       methodLabel: AGE_VERIFICATION_METHODS[ageClaims.age_verification_method]?.label,
-      note:      'Self-declared — verifiable later via EUDI Wallet.'
+      note:      'Self-declared — verifiable via EUDI Wallet.'
     } : null,
-    message: `✓ "${roleDef.label}" · Trust ${trustScore}/100 · Access (1h) + Refresh (7d)`
+    message: `✓ Human verified · ${badges.length} method(s) · Access (1h) + Refresh (7d)`
   });
 });
 
@@ -2582,7 +2581,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
 // }
 app.post('/hhttps/age/upgrade', async (req, res) => {
   try {
-    const { sessionId, ageOver, assertion, nonce, iat } = req.body || {};
+    const { sessionId, ageOver, assertion, nonce, iat, currentToken } = req.body || {};
 
     if (!sessionId || typeof ageOver !== 'object' || ageOver === null || !assertion) {
       return res.status(400).json({ error: 'sessionId, ageOver and assertion are required.' });
@@ -2634,24 +2633,63 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     const ag = AGE_GROUPS[ageGroupId];
     const eudiMethod = AGE_VERIFICATION_METHODS['eudi-wallet'];
 
+    // Carry forward EUDI identity from the holder's current signed token (eID
+    // lives in the token, not the session), so verifying age after eID does not
+    // drop the +40 eudi method.
+    let priorEudi = false;
+    if (currentToken) {
+      try {
+        const prev = verifyToken(currentToken);
+        priorEudi = prev?.eudi_verified === true ||
+                    (Array.isArray(prev?.verified_methods) && prev.verified_methods.includes('eudi'));
+      } catch (_) { /* invalid/expired — ignore */ }
+    }
+
     // Reissue the holder's token with VERIFIED age claims. age_group lives in the
     // token (client-driven design); no session schema change is needed.
+    // Recompute the verification surface, now with age cryptographically verified.
+    // Age is TRUST-NEUTRAL (contributesToTrust:false): this flips HHTTPS-Age-Verified
+    // to true and adds 'age' to verified_methods, but the trust score is UNCHANGED.
+    // No role (EUDI EAA only). No age_trust / no "99".
+    const flags = {
+      email:       !!session.emailVerified,
+      passkey:     !!(session.hasPasskey || session.credentialId),
+      domain:      !!session.emailDomain,
+      domainTrust: session.emailTrustBonus || 0,
+      domainValue: session.emailDomain || null,
+      github:      !!session.githubVerified,
+      eudi:        priorEudi,
+      age:         true
+    };
+    const v = computeVerification(flags);
+
     const { token } = await issueAccessToken({
       userId:     session.userId,
-      role:       session.role || 'citizen',
-      roleLabel:  ROLES[session.role || 'citizen']?.label,
-      roleLevel:  session.roleLevel || 'self-declared',
-      trustScore: session.trustScore ?? 30,
-      method:     session.roleLevel || 'self-declared',
+      role:       null,
+      roleLabel:  null,
+      roleLevel:  null,
+      trustScore: v.trust,                          // age added 0 — trust UNCHANGED by design
+      method:     'verification-methods',
       deviceType: session.deviceType,
-      // verified age claims:
+      verified_methods:        v.methods,
+      verification_status:     'verified',
+      ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
+      ...(priorEudi ? { eudi_verified: true } : {}),
+      // verified age claims (orthogonal, trust-neutral):
       age_group:               ag.id,
-      age_verified:            true,               // cryptographically verified now
-      age_verification_method: eudiMethod.id,      // 'eudi-wallet'
-      age_trust:               eudiMethod.trustScore  // 99 (age-specific, orthogonal to role trust)
+      age_verified:            true,                 // cryptographically verified now
+      age_verification_method: eudiMethod.id         // 'eudi-wallet'
+    });
+    // Reissue the refresh token too, so the upgraded surface survives the 1h
+    // access-token expiry (zero-PII — the surface rides in the signed token).
+    const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
+      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null
     });
 
-    // Mirror the verified age into the hhttps.org identity cookie (additive).
+    // Mirror the verified age into the identity cookie. NOTE: this endpoint is
+    // called server-side by the eudi-verifier, so this Set-Cookie reaches that
+    // internal response — NOT the browser. The browser cookie is (re)set by the
+    // browser-facing /eudi/age/status handler, which adopts this same token.
     setIdentityCookie(res, token);
 
     console.log(`[AGE-UPGRADE] session ${String(sessionId).slice(0,8)}… → ${ag.id} (eudi-wallet, verified)`);
@@ -2659,18 +2697,136 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     fireEvent('age.verified', { ageGroup: ag.id, method: 'eudi-wallet' });
 
     res.json({
-      hhttps: { version: '0.4.1', token },
+      hhttps: { version: '0.5.0', token, refreshToken: refresh, trustScore: v.trust, verifiedMethods: v.methods },
       ageGroup: {
         id:       ag.id,
         label:    ag.label,
         verified: true,
-        method:   eudiMethod.id,
-        trust:    eudiMethod.trustScore
+        method:   eudiMethod.id
       },
       message: `✓ Age verified: ${ag.label} (EUDI Wallet)`
     });
   } catch (e) {
     console.error('[AGE-UPGRADE] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── EUDI eID identity upgrade (v0.5) ─────────────────────────────────────────
+//
+// INTERNAL endpoint (127.0.0.1 only, like /hhttps/age/upgrade). Called by the
+// eudi-verifier after a VALID PID presentation. Establishes "EUDI verified" on
+// the session (the +40 `eudi` method) and reissues the holder's token. ZERO-PII:
+// no PID attribute is read or stored — the proof is the validated presentation.
+//
+// Orthogonal age claims (which live in the token, not the session) are carried
+// forward from the holder's current signed token if it is supplied.
+//
+// Body: { sessionId, currentToken?, nonce, iat, assertion }
+//   assertion = HMAC-SHA256 over canonical { sessionId, eidVerified:true, nonce, iat }
+app.post('/hhttps/eid/upgrade', async (req, res) => {
+  try {
+    const { sessionId, currentToken, nonce, iat, assertion } = req.body || {};
+    if (!sessionId || !assertion) {
+      return res.status(400).json({ error: 'sessionId and assertion are required.' });
+    }
+
+    const secret = process.env.EUDI_VERIFIER_SECRET;
+    if (!secret) {
+      console.error('[EID-UPGRADE] EUDI_VERIFIER_SECRET not configured — refusing.');
+      return res.status(503).json({ error: 'EUDI verification not configured.' });
+    }
+
+    const canonical = JSON.stringify({
+      sessionId, eidVerified: true, nonce: nonce || null, iat: iat || null
+    });
+    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+    const a = Buffer.from(String(assertion), 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn(`[EID-UPGRADE] invalid assertion for session ${String(sessionId).slice(0,8)}…`);
+      return res.status(401).json({ error: 'Invalid verifier assertion.' });
+    }
+
+    if (iat) {
+      const ageMs = Date.now() - Number(iat);
+      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
+        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
+      }
+    }
+
+    const session = await db.sessions.get(sessionId);
+    if (!session?.verified) {
+      return res.status(404).json({ error: 'Unknown or expired session.' });
+    }
+
+    // eID lives in the TOKEN, not the session (like age) — no session column and
+    // no DB migration. The +40 rides in the reissued access + refresh tokens.
+
+    // Carry forward any orthogonal age claims from the holder's current signed
+    // token (age lives in the token, not the session, by design).
+    let ageCarry = {};
+    if (currentToken) {
+      try {
+        const prev = verifyToken(currentToken);
+        if (prev && prev.age_group) {
+          ageCarry = {
+            age_group:               prev.age_group,
+            age_verified:            prev.age_verified === true,
+            age_verification_method: prev.age_verification_method || null
+          };
+        }
+      } catch (_) { /* invalid/expired token — reissue without age */ }
+    }
+
+    // Recompute the verification surface with eudi now true → +40.
+    const flags = {
+      email:       !!session.emailVerified,
+      passkey:     !!(session.hasPasskey || session.credentialId),
+      domain:      !!session.emailDomain,
+      domainTrust: session.emailTrustBonus || 0,
+      domainValue: session.emailDomain || null,
+      github:      !!session.githubVerified,
+      eudi:        true,
+      age:         ageCarry.age_verified === true
+    };
+    const v = computeVerification(flags);
+
+    const { token } = await issueAccessToken({
+      userId:     session.userId,
+      role:       null,
+      roleLabel:  null,
+      roleLevel:  null,
+      trustScore: v.trust,
+      method:     'verification-methods',
+      deviceType: session.deviceType,
+      verified_methods:    v.methods,
+      verification_status: 'verified',
+      eudi_verified:       true,
+      ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
+      ...ageCarry
+    });
+    // Reissue the refresh token so the +40 survives the 1h access-token expiry.
+    const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
+      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null
+    });
+
+    // NOTE: server-to-server call — this Set-Cookie reaches the eudi-verifier, not
+    // the browser. The browser cookie is (re)set by the browser-facing
+    // /eudi/eid/status handler, which adopts this same token.
+    setIdentityCookie(res, token);
+
+    console.log(`[EID-UPGRADE] session ${String(sessionId).slice(0,8)}… → eudi-verified (+40)`);
+    await db.stats.increment('eudi_verifications');
+    fireEvent('eudi.verified', { trustScore: v.trust });
+
+    res.json({
+      hhttps: { version: '0.5.0', token, refreshToken: refresh, trustScore: v.trust, verifiedMethods: v.methods },
+      eudi:   { verified: true, method: 'eudi-eid' },
+      message: '✓ EUDI verified (eID)'
+    });
+  } catch (e) {
+    console.error('[EID-UPGRADE] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2728,7 +2884,7 @@ app.post('/hhttps/validate', async (req, res) => {
                      roleLevel: d.roleLevel, trustScore: d.trustScore,
                      token, method: d.method });
     res.json({
-      hhttps: { status: 'valid', human: true, actorType: 'human', version: '0.4.1' },
+      hhttps: { status: 'valid', human: true, actorType: 'human', version: '0.5.0' },
       claims: { role: d.role, roleLabel: roleDef.label, roleIcon: roleDef.icon,
                 roleLevel: d.roleLevel, trustScore: d.trustScore,
                 issuedAt: new Date(d.iat * 1000).toISOString(),
@@ -2799,7 +2955,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   });
 
   res.status(201).json({
-    hhttps: { version: '0.4.1' },
+    hhttps: { version: '0.5.0' },
     operatorId, apiKey,
     role: normalizedRole,
     roleLabel,
@@ -2847,7 +3003,7 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
                    method: 'machine-token', machineOperator: operatorId,
                    machinePurpose: op.purpose });
   res.json({
-    hhttps: { version: '0.4.1', human: false, actorType: 'bot' },
+    hhttps: { version: '0.5.0', human: false, actorType: 'bot' },
     token, expiresAt: new Date(Date.now() + MACHINE_TTL * 1000).toISOString(),
     operator: { id: operatorId, name: op.operator_name, purpose: op.purpose }
   });
@@ -2856,7 +3012,7 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 // ─── Webhooks ────────────────────────────────────────────────────────────────
 
 app.get('/hhttps/webhooks', limit.webhooks, async (req, res) => {
-  res.json({ hhttps: { version: '0.4.1' }, webhooks: await listWebhooks() });
+  res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks() });
 });
 
 app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
@@ -2865,7 +3021,7 @@ app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
   try {
     const wh = await registerWebhook({ url, events, secret });
     res.status(201).json({
-      hhttps: { version: '0.4.1' },
+      hhttps: { version: '0.5.0' },
       webhook: { id: wh.id, url: wh.url, events: wh.events, secret: wh.secret },
       note: 'Speichere das Secret — Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
     });
@@ -3537,7 +3693,7 @@ app.get('/hhttps/stats', async (req, res) => {
   const total = dist.reduce((sum, r) => sum + r.n, 0);
 
   sendJson(req, res, {
-    hhttps: { version: '0.4.1' },
+    hhttps: { version: '0.5.0' },
     stats: {
       verifications:       s.verifications      || 0,
       tokensIssued:        s.tokens_issued      || 0,

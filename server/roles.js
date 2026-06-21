@@ -1,6 +1,19 @@
 /**
- * HHTTPS Role Definitions — v4.1
- * 15 roles covering professional, public, educational, and basic citizenship.
+ * HHTTPS Role & Verification Definitions — v0.5
+ *
+ * MODEL CHANGE (v0.5): The protocol is now leaner. The user-facing surface is
+ * binary — human vs bot — and is NEVER asked to self-pick a professional role.
+ * Instead, after sign-in the user completes VERIFICATION METHODS (email, passkey,
+ * GitHub, EUDI, age …), each surfaced as a confirmed badge and as an official
+ * HHTTPS-* response header. A professional ROLE is no longer self-declared; it
+ * travels exclusively as an EUDI (Q)EAA attestation (eIDAS 2.0 Annex VI).
+ *
+ * The trust score is now INTERNAL / API-only. It is computed additively from the
+ * verification methods, exposed in the JWT and the HHTTPS-Trust-Score header, and
+ * is NEVER rendered in the UI (we do not rank the human — we only confirm methods).
+ *
+ * `ROLES` below is RETAINED as protocol vocabulary only: it is the canonical
+ * target an EUDI role-EAA maps onto. It is no longer offered for self-selection.
  *
  * CANONICAL LANGUAGE: English.
  * This module is the protocol layer. Every human-readable string here is the
@@ -9,13 +22,23 @@
  * into the protocol. Dependency direction is one-way: roles.i18n.js imports
  * from roles.js, never the reverse.
  *
- * Verification levels:
- *   self-declared        → 30 (baseline)
- *   webauthn             → 60 (cryptographic human proof)
- *   email-verified       → 65-78 (domain-based)
- *   institution-id       → 82-92 (membership/registry)
- *   official-email       → 90 (.bund.de etc.)
- *   bundestag-verified   → 98 (highest)
+ * Verification-method trust (additive, internal/API-only, capped at 100):
+ *   email    → 20  FOUNDATION. Sign-in gate / floor. 0 means "not signed in".
+ *   passkey  → +30 HUMAN THRESHOLD. email+passkey = 50 = "Verified Human": at/above
+ *                  this a verifier may rely on "this is a human" (see TRUST_BANDS).
+ *   github   → +15 real-world account (GitHub OAuth)
+ *   eudi     → +40 EUDI Wallet eID / PID (state identity; also crosses the human
+ *                  threshold on its own — a state eID is a strong human proof)
+ *   domain   → +0 / +15 / +40 verified domain (email-domain category OR ownership);
+ *                  shown as its own badge carrying the domain name
+ *   age      → +0  ORTHOGONAL, trust-neutral — confirms a band, never raises trust
+ *
+ * The score is NEVER shown to the user (we do not rank the human). Its MEANING for
+ * relying parties is defined by TRUST_BANDS / HUMAN_CONFIRMED_THRESHOLD below.
+ *
+ * Role-level verification levels (used only for EUDI-EAA role resolution):
+ *   self-declared → 30 · webauthn → 60 · email → 65-78 · institution → 82-92
+ *   official-email → 90 · eudi-wallet-role → 95 · bundestag → 98
  */
 
 export const ROLES = {
@@ -298,6 +321,114 @@ export const VERIFICATION_LEVELS = {
   'eudi-wallet-role':      { level: 6, label: 'EUDI Wallet (role attestation)', trustScore: 95 },
 };
 
+// ─── Verification methods (account-level registry) ────────────────────────────
+//
+// THE single source of truth for the user-facing verification surface. Header
+// names, the token `verified_methods[]` array and the frontend badges all derive
+// from this object — adding a new method is one entry here, nothing else.
+//
+// Fields:
+//   id                  stable method id (also the token-array value)
+//   label               English canonical (German lives in roles.i18n.js)
+//   header              the official HHTTPS-* response header for this method
+//   trust               additive trust contribution (number) OR null if dynamic
+//   dynamic             true → contribution is read at runtime (e.g. github heuristic,
+//                       domain category); the static `trust` is then ignored
+//   contributesToTrust  false → method is trust-NEUTRAL (age: confirms, never raises)
+//   badge               false → counts/headers as a method but is NOT shown as its
+//                       own UI badge (domain folds into the email badge)
+//   isGate              true → this method is the sign-in floor (email). Without it
+//                       there is no logged-in identity (trust 0 is not a valid state).
+//
+// Trust is INTERNAL/API-only. The UI shows only the confirmed methods, never a score.
+export const VERIFICATION_METHODS = {
+  email: {
+    id: 'email', label: 'Email verified', header: 'HHTTPS-Email-Verified',
+    trust: 20, dynamic: false, contributesToTrust: true, badge: true, isGate: true
+  },
+  passkey: {
+    id: 'passkey', label: 'Passkey (WebAuthn)', header: 'HHTTPS-Passkey-Verified',
+    trust: 30, dynamic: false, contributesToTrust: true, badge: true
+  },
+  domain: {
+    id: 'domain', label: 'Verified domain', header: 'HHTTPS-Domain-Verified',
+    valueHeader: 'HHTTPS-Domain',          // carries the domain name, e.g. example.com
+    trust: null, dynamic: true, contributesToTrust: true, badge: true  // email-domain OR ownership
+  },
+  github: {
+    id: 'github', label: 'GitHub verified', header: 'HHTTPS-Github-Verified',
+    trust: 15, dynamic: false, contributesToTrust: true, badge: true
+  },
+  eudi: {
+    id: 'eudi', label: 'EUDI verified (eID)', header: 'HHTTPS-Eudi-Verified',
+    trust: 40, dynamic: false, contributesToTrust: true, badge: true
+  },
+  age: {
+    id: 'age', label: 'Age verified', header: 'HHTTPS-Age-Verified',
+    trust: 0, dynamic: false, contributesToTrust: false, badge: true  // orthogonal, trust-neutral
+  },
+};
+
+// ─── Trust bands (the MEANING of the internal score, for relying parties) ─────
+//
+// The numeric score is internal/API-only and never shown to the user. Its meaning
+// is defined here so a verifier can act on it without us ranking the human in the
+// UI. Email is always the foundation; the passkey (or a state eID) is the point at
+// which presence is cryptographically proven — the human-confirmed threshold.
+export const HUMAN_CONFIRMED_THRESHOLD = 50;
+export const TRUST_BANDS = [
+  { id: 'unregistered', min: 0,  max: 19,  label: 'Not signed in' },
+  { id: 'registered',   min: 20, max: 49,  label: 'Registered (email)' },
+  { id: 'human',        min: 50, max: 79,  label: 'Verified human' },
+  { id: 'high',         min: 80, max: 100, label: 'Verified human + identity' },
+];
+export function trustBand(score = 0) {
+  const s = Math.min(100, Math.max(0, Number(score) || 0));
+  return TRUST_BANDS.find(b => s >= b.min && s <= b.max) || TRUST_BANDS[0];
+}
+
+// Compute the verification surface from a flag bag.
+//
+// `flags` is a plain object the caller (server.js) assembles from the session:
+//   { email:true, passkey:true,
+//     domain:true, domainTrust:15, domainValue:'example.com',
+//     github:true, eudi:true, age:true }
+// For a `dynamic` method, the contribution is read from `flags[id + 'Trust']`.
+// For a method with a `valueHeader`, the value is read from `flags[id + 'Value']`.
+//
+// Returns:
+//   methods   : string[]  all established method ids        → HHTTPS-Verified-Methods (CSV)
+//   badges    : string[]  established methods with badge:true → frontend chips
+//   headers   : { 'HHTTPS-…': '…', … }                       → response headers
+//   trust     : number 0-100  additive, capped               → API/JWT only, never UI
+//   band      : TRUST_BANDS entry                            → API/JWT only, never UI
+//   isHuman   : boolean  trust >= HUMAN_CONFIRMED_THRESHOLD
+export function computeVerification(flags = {}) {
+  const f = (flags && typeof flags === 'object') ? flags : {};
+  const methods = [];
+  const badges  = [];
+  const headers = {};
+  let trust = 0;
+
+  for (const m of Object.values(VERIFICATION_METHODS)) {
+    if (!f[m.id]) continue;                       // method not established
+    methods.push(m.id);
+    headers[m.header] = 'true';
+    if (m.valueHeader && f[m.id + 'Value']) headers[m.valueHeader] = String(f[m.id + 'Value']);
+    if (m.badge) badges.push(m.id);
+    if (!m.contributesToTrust) continue;          // age → trust-neutral
+    trust += m.dynamic ? (Number(f[m.id + 'Trust']) || 0) : (m.trust || 0);
+  }
+
+  const finalTrust = Math.min(100, Math.max(0, trust));
+  return {
+    methods, badges, headers,
+    trust:   finalTrust,
+    band:    trustBand(finalTrust),
+    isHuman: finalTrust >= HUMAN_CONFIRMED_THRESHOLD
+  };
+}
+
 // ─── Verification check registry (honesty gate) ───────────────────────────────
 //
 // A method only grants its trustScore if it is BACKED BY A REAL, AUTOMATED CHECK.
@@ -345,6 +476,12 @@ export const VERIFICATION_CHECKS = {
   'handelsregister':    { implemented: false, status: 'claimed', targetTrust: 65, note: 'Commercial-register check not yet connected.' },
   'institution-verified':{ implemented: false, status: 'claimed', targetTrust: 63, note: 'Institution check not yet connected.' },
   'bundestag-verified': { implemented: false, status: 'claimed', targetTrust: 65, note: 'Bundestag check not yet connected.' },
+
+  // ── EUDI role attestation — real today via the German Sandbox (iamhmn (Q)EAA) ──
+  // The role is cryptographically presented from the wallet (OpenID4VP), not typed
+  // in, so it passes the honesty gate as 'verified'. Self-declared role picking is
+  // gone; this is the ONLY path that grants a professional role.
+  'eudi-wallet-role':   { implemented: true,  status: 'verified', note: 'EUDI Wallet (Q)EAA role attestation (German Sandbox).' },
 };
 
 // Helper: resolve the effective verification given a requested method.
@@ -416,22 +553,24 @@ export const AGE_GROUPS = {
   },
 };
 
-// How an age_group was established. Phase 1 ships only self-declared (honest,
-// low trust). Phase 3 adds eudi-wallet once the OpenID4VP verifier is wired up.
-//   self-declared → age_verified:false, trust 30 (self-declared)
-//   eudi-wallet   → age_verified:true,  trust 99 (PID selective disclosure)  [planned]
+// How an age_group was established. Age is ORTHOGONAL and TRUST-NEUTRAL: verifying
+// an age confirms a band and flips HHTTPS-Age-Verified=true, but it NEVER changes
+// the trust score (trustScore: 0 on every method). EUDI age is live today (German
+// Sandbox PID, age_over_NN selective disclosure).
+//   self-declared → age_verified:false, trust 0
+//   eudi-wallet   → age_verified:true,  trust 0  (PID selective disclosure, live)
 //
 // `label`/`note` are the English canonical; German lives in roles.i18n.js.
 export const AGE_VERIFICATION_METHODS = {
   'self-declared': {
     id: 'self-declared', label: 'Self-declared',
-    verified: false, trustScore: 30, available: true,
-    note: 'Self-declared, not yet cryptographically verified.'
+    verified: false, trustScore: 0, available: true,
+    note: 'Self-declared, not cryptographically verified. Trust-neutral.'
   },
   'eudi-wallet': {
     id: 'eudi-wallet', label: 'EUDI Wallet (PID)',
-    verified: true, trustScore: 99, available: false,  // Phase 3
-    note: 'Age proof via EUDI Wallet (age_over_NN, selective disclosure). Planned.'
+    verified: true, trustScore: 0, available: true,
+    note: 'Age proof via EUDI Wallet (age_over_NN, selective disclosure). Trust-neutral.'
   },
 };
 

@@ -22,6 +22,7 @@ import express from 'express';
 import crypto from 'crypto';
 import {
   initTransaction,
+  initEidTransaction,
   buildWalletLink,
   pollWalletResponse,
   extractAgeClaims,
@@ -74,7 +75,7 @@ function buildUpgradeAssertion(secret, { sessionId, ageOver, nonce, iat }) {
 }
 
 // Call the internal /hhttps/age/upgrade endpoint with the verified age claims.
-async function callAgeUpgrade(ageOver, hhttpsSessionId) {
+async function callAgeUpgrade(ageOver, hhttpsSessionId, currentToken) {
   const secret = process.env.EUDI_VERIFIER_SECRET;
   if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
 
@@ -90,16 +91,50 @@ async function callAgeUpgrade(ageOver, hhttpsSessionId) {
   const r = await fetch(upgradeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId: hhttpsSessionId, ageOver, assertion, nonce, iat })
+    body: JSON.stringify({ sessionId: hhttpsSessionId, ageOver, assertion, nonce, iat, currentToken: currentToken || null })
   });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`age/upgrade failed (${r.status}): ${body.error || ''}`);
   return body; // { hhttps:{token}, ageGroup:{...} }
 }
 
-export function createEudiVerifierRouter() {
+// Call the internal /hhttps/eid/upgrade endpoint after a valid PID presentation.
+// Carries the holder's current token (if any) so orthogonal age claims survive
+// the reissue. Zero-PII: no PID attribute is sent — the proof is the presentation.
+async function callEidUpgrade(hhttpsSessionId, currentToken) {
+  const secret = process.env.EUDI_VERIFIER_SECRET;
+  if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
+
+  const nonce = crypto.randomUUID();
+  const iat = Date.now();
+  const canonical = JSON.stringify({ sessionId: hhttpsSessionId, eidVerified: true, nonce, iat });
+  const assertion = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+
+  const upgradeUrl =
+    (process.env.HHTTPS_INTERNAL_URL || 'http://127.0.0.1:3000') + '/hhttps/eid/upgrade';
+
+  const r = await fetch(upgradeUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: hhttpsSessionId, currentToken: currentToken || null, nonce, iat, assertion
+    })
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`eid/upgrade failed (${r.status}): ${body.error || ''}`);
+  return body; // { hhttps:{token}, eudi:{...} }
+}
+
+export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
   const router = express.Router();
   router.use(express.json());
+
+  // Browser-facing cookie setter. The /eudi/*/status handlers run on requests the
+  // BROWSER makes directly, so this is where the upgraded token must be mirrored
+  // into the httpOnly identity cookie. (The /hhttps/*/upgrade Set-Cookie reaches
+  // only the internal server-to-server response and is discarded — that was the
+  // bug where EUDI claims never reached the browser cookie.)
+  const setCookie = (typeof setIdentityCookie === 'function') ? setIdentityCookie : () => {};
 
   // Health: confirms the module is mounted and shows backend config (no secrets).
   router.get('/age/health', (_req, res) => {
@@ -117,7 +152,7 @@ export function createEudiVerifierRouter() {
   //    minAge ∈ {14,16,18}; defaults to 18. Returns QR (data URL) + deep-link.
   router.post('/age/request', async (req, res) => {
     try {
-      const { hhttpsSession, minAge } = req.body || {};
+      const { hhttpsSession, minAge, currentToken } = req.body || {};
       if (!hhttpsSession) {
         return res.status(400).json({ error: 'hhttpsSession is required.' });
       }
@@ -131,6 +166,7 @@ export function createEudiVerifierRouter() {
         transactionId: tx.transaction_id,
         nonce: tx.nonce,
         hhttpsSession,
+        currentToken: currentToken || null,
         minAge: age,
         status: 'pending'
       });
@@ -161,6 +197,7 @@ export function createEudiVerifierRouter() {
 
       // Already completed in a previous poll — return the cached result.
       if (tx.status === 'verified') {
+        if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // browser cookie
         return res.json({ status: 'verified', ageGroup: tx.ageGroup, hhttps: tx.hhttps });
       }
 
@@ -182,14 +219,81 @@ export function createEudiVerifierRouter() {
       }
 
       // Bridge to HHTTPS: issue a verified token via /hhttps/age/upgrade.
-      const upgrade = await callAgeUpgrade(ageOver, tx.hhttpsSession);
+      const upgrade = await callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken);
       tx.status = 'verified';
       tx.ageGroup = upgrade.ageGroup;
       tx.hhttps = upgrade.hhttps;
 
+      if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
       res.json({ status: 'verified', ageGroup: upgrade.ageGroup, hhttps: upgrade.hhttps });
     } catch (e) {
       console.error('[EUDI-VERIFIER] /age/status error:', e.message);
+      res.status(502).json({ status: 'error', detail: e.message });
+    }
+  });
+
+  // ─── eID identity (orthogonal to age) ───────────────────────────────────────
+
+  // 1. Start an eID identity verification. Body: { hhttpsSession, currentToken? }
+  //    Returns a wallet deep-link (rendered as QR / tappable link by the frontend).
+  router.post('/eid/request', async (req, res) => {
+    try {
+      const { hhttpsSession, currentToken } = req.body || {};
+      if (!hhttpsSession) {
+        return res.status(400).json({ error: 'hhttpsSession is required.' });
+      }
+      const tx = await initEidTransaction();
+      const walletLink = buildWalletLink(tx);
+      const requestId = crypto.randomUUID();
+
+      putTx(requestId, {
+        transactionId: tx.transaction_id,
+        nonce: tx.nonce,
+        hhttpsSession,
+        currentToken: currentToken || null,
+        kind: 'eid',
+        status: 'pending'
+      });
+
+      res.json({
+        requestId,
+        deepLink: walletLink,
+        expiresInMs: TX_TTL_MS,
+        message: 'Scan the QR code with your EUDI wallet, or open it directly on your phone.'
+      });
+    } catch (e) {
+      console.error('[EUDI-VERIFIER] /eid/request error:', e.message);
+      res.status(502).json({ error: 'EU verifier backend unavailable.', detail: e.message });
+    }
+  });
+
+  // 2. Poll eID status. A terminal EUDIPLO session = a valid PID presentation.
+  router.get('/eid/status/:requestId', async (req, res) => {
+    try {
+      const tx = getTx(req.params.requestId);
+      if (!tx) return res.status(404).json({ status: 'expired' });
+
+      if (tx.status === 'verified') {
+        if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // browser cookie
+        return res.json({ status: 'verified', eudi: tx.eudi, hhttps: tx.hhttps });
+      }
+
+      const poll = await pollWalletResponse(tx.transactionId, req.query.response_code);
+      if (poll.status === 'pending') {
+        return res.json({ status: 'pending' });
+      }
+
+      // Terminal session → valid PID presentation. ZERO-PII: we deliberately do
+      // NOT read any disclosed attribute; the validated presentation is the proof.
+      const upgrade = await callEidUpgrade(tx.hhttpsSession, tx.currentToken);
+      tx.status = 'verified';
+      tx.eudi = upgrade.eudi;
+      tx.hhttps = upgrade.hhttps;
+
+      if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
+      res.json({ status: 'verified', eudi: upgrade.eudi, hhttps: upgrade.hhttps });
+    } catch (e) {
+      console.error('[EUDI-VERIFIER] /eid/status error:', e.message);
       res.status(502).json({ status: 'error', detail: e.message });
     }
   });

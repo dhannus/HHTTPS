@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HHTTPS — Deine Rolle im Netz. Mensch verifiziert.</title>
+<title>HHTTPS — Deine Rolle im Netz. Als Mensch oder KI.</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,30..100,0..1&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
@@ -830,7 +830,6 @@ footer{font-size:13px;}
   </div>
   <div class="links">
     <a href="/hhttps/info" target="_blank">API Info</a>
-    <a href="/hhttps/roles" target="_blank" data-i18n="nav.roles">Alle Rollen</a>
     <a href="/spec" target="_blank">Spec</a>
     <a href="https://iamhmn.org" target="_blank">iamhmn.org</a>
     <a href="https://github.com/dhannus/HHTTPS" target="_blank">GitHub</a>
@@ -843,13 +842,13 @@ footer{font-size:13px;}
 
 <!-- Hero -->
 <div class="hero">
-  <h1><span data-i18n="hero.h1a">Deine Rolle im Netz.</span><br><span data-i18n="hero.h1b">Mensch verifiziert.</span></h1>
-  <p><span data-i18n="hero.p1">Wir liefern nur das, was du willst — </span><em data-i18n="hero.q1">deinen Nachweis als Mensch</em><span data-i18n="hero.p2"> und welche Rolle du spielst.</span> <em data-i18n="hero.q2">Kein Konto, keine Überwachung, kein Lock-in.</em> <span data-i18n="hero.p3">HHTTPS ist das Schloss-Symbol deines Browsers — aber für Menschen statt für Server.</span></p>
+  <h1><span data-i18n="hero.h1a">Deine Rolle im Netz.</span><br><span data-i18n="hero.h1b">Als Mensch oder KI verifiziert.</span></h1>
+  <p><span data-i18n="hero.p1">Wir liefern nur das, was du willst — </span><em data-i18n="hero.q1">deinen Nachweis als Mensch</em><span data-i18n="hero.p2">.</span> <em data-i18n="hero.q2">Kein Konto, keine Überwachung, kein Lock-in.</em> <span data-i18n="hero.p3">HHTTPS ist das Schloss-Symbol deines Browsers — aber für Menschen statt für Server.</span></p>
 
   <div class="caps">
     <div class="cap hi">human: true/false</div>
-    <div class="cap hi">role: journalist | student | creative | ...</div>
-    <div class="cap hi">trustScore: 0–100</div>
+    <div class="cap hi">verifiedMethods: email · passkey · eudi · …</div>
+    <div class="cap hi">age: verified (optional)</div>
     <div class="cap">WebAuthn · Zero-Knowledge · Open Protocol</div>
   </div>
 
@@ -863,19 +862,16 @@ footer{font-size:13px;}
 
     <div class="stepper">
       <div class="st active" id="st1"><div class="n">1</div><span class="l" data-i18n="step.email">E-Mail</span></div>
-      <div class="st"        id="st2"><div class="n">2</div><span class="l" data-i18n="step.extras">Pseudonym</span></div>
-      <div class="st"        id="st3"><div class="n">3</div><span class="l">Passkey</span></div>
-      <div class="st"        id="st4"><div class="n">4</div><span class="l" data-i18n="step.role">Rolle</span></div>
-      <div class="st"        id="st5"><div class="n">5</div><span class="l">Token</span></div>
+      <div class="st"        id="st2"><div class="n">2</div><span class="l" data-i18n="step.role">Token</span></div>
     </div>
 
     <div class="msg" id="msgBox"></div>
 
-    <!-- Phase 1: E-Mail (primäre Methode) -->
+    <!-- Screen 1: Anmeldung — E-Mail + Pseudonym + Passkey, dann Token -->
     <div class="phase show" id="p1">
       <div class="desc">
-        <strong data-i18n="p1.strong">Schritt 1 — E-Mail verifizieren (Trust 30)</strong><br>
-        <span data-i18n="p1.body">Gib deine E-Mail-Adresse ein. Du bekommst einen Bestätigungs-Link — kein Passwort, kein Konto. Dein Token wird danach sofort ausgestellt. Passkey ist optional und erhöht den Trust Score.</span>
+        <strong data-i18n="p1.strong">Schritt 1 — Anmelden</strong><br>
+        <span data-i18n="p1.body">E-Mail bestätigen — kein Passwort, kein Konto. Pseudonym und Passkey sind optional. Danach wird dein Token ausgestellt.</span>
       </div>
       <!-- Passkey-gefunden Banner (nur sichtbar wenn userId in localStorage) -->
       <div id="passkeyFoundBanner" style="display:none;margin-bottom:14px;
@@ -921,106 +917,26 @@ footer{font-size:13px;}
           </button>
         </div>
       </div>
-      <!-- Passkey-Buttons entfernt: Email ist primäre Methode, Passkey optional in Phase 3 -->
-      <!-- btnReg + btnSkip bleiben als versteckte Elemente für JS-Kompatibilität -->
+      <!-- Optionale Extras: Pseudonym + Passkey (nach E-Mail-Bestätigung sichtbar) -->
+      <div id="extrasRow" style="display:none;margin-top:16px;border-top:1px solid var(--b1);padding-top:16px;">
+        <label style="font-size:11px;color:var(--muted);letter-spacing:1px;display:block;margin-bottom:6px;" data-i18n="extras.pseudo">PSEUDONYM (OPTIONAL)</label>
+        <input class="vfield" id="pseudonymInput" type="text" placeholder="z. B. SkyWriter42 — erscheint in deiner Kennung" maxlength="32" autocomplete="off" oninput="updatePseudonymPreview(this.value)" style="margin-bottom:6px;">
+        <div id="pseudoPreview" style="font-size:12px;color:var(--text-muted-strong);min-height:16px;"></div>
+        <div class="fp" style="margin-top:12px;"><div class="fpr" id="fp3ef">🔑</div></div>
+        <div class="msg" id="msgPasskey3" style="margin-bottom:8px;"></div>
+        <button class="btn btn-p" id="btnPasskeyOpt" type="button" onclick="doPasskeyOptional()" style="width:100%;" data-i18n="extras.addPasskey">🔑 Passkey hinzufügen (empfohlen)</button>
+        <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled data-i18n="btn.declare" style="width:100%;margin-top:14px;">Token ausstellen →</button>
+      </div>
       <button id="btnReg" style="display:none;" onclick="doRegister()"></button>
       <button id="btnSkip" style="display:none;" onclick="skipToAuth()"></button>
     </div>
 
-    <!-- Phase 2: Pseudonym + Altersgruppe -->
+    <!-- Screen 2: Token + optionale Verifizierungsmethoden + EUDI-Alter -->
     <div class="phase" id="p2">
       <div class="desc">
-        <strong data-i18n="p2.strong">Schritt 2 — Pseudonym &amp; Altersgruppe (optional)</strong><br>
-        <span data-i18n="p2.body1">Beide Felder sind freiwillig. Das Pseudonym erscheint lesbar in deiner Token-Kennung. Die Altersgruppe ist aktuell Eigenangabe — später per EUDI-Wallet kryptografisch verifizierbar.</span>
+        <strong data-i18n="p5.strong">Schritt 2 — Dein Token</strong><br>
+        <span data-i18n="p5.body">Dein HHTTPS-Token ist ausgestellt. Optional kannst du weitere Verifizierungsmethoden bestätigen oder dein Alter per EUDI-Wallet nachweisen.</span>
       </div>
-      <div style="margin-bottom:16px;">
-        <label style="font-size:11px;color:var(--muted);letter-spacing:1px;display:block;margin-bottom:6px;">
-          PSEUDONYM (OPTIONAL, +5 TRUST)
-        </label>
-        <input class="vfield" id="pseudonymInput" type="text"
-          placeholder="z. B. SkyWriter42 — erscheint in deiner Kennung"
-          maxlength="32" autocomplete="off"
-          oninput="updatePseudonymPreview(this.value)"
-          style="margin-bottom:6px;">
-        <div id="pseudoPreview" style="font-size:12px;color:var(--text-muted-strong);min-height:16px;"></div>
-      </div>
-
-      <div style="display:flex;gap:10px;margin-top:16px;">
-        <button class="btn btn-p" style="flex:1;" onclick="setStepEF(3)">Weiter →</button>
-        <button class="btn btn-c" onclick="setStepEF(3)">Überspringen</button>
-      </div>
-    </div>
-
-    <!-- Phase 3: Passkey OPTIONAL -->
-    <div class="phase" id="p3">
-      <div class="desc">
-        <strong data-i18n="p3ef.strong">Schritt 3 — Passkey hinzufügen (optional, Trust 50→60)</strong><br>
-        <span data-i18n="p3ef.body">Fingerabdruck, Face ID oder Gerätesperre — kein Hardware-Schlüssel nötig. Erhöht deinen Trust Score von 30 auf 50 (Passkey allein) oder 60 (E-Mail + Passkey). Du kannst diesen Schritt überspringen.</span>
-      </div>
-      <div class="fp"><div class="fpr" id="fp3ef">🔑</div></div>
-      <div class="msg" id="msgPasskey3" style="margin-bottom:8px;"></div>
-      <div style="display:flex;gap:10px;">
-        <button class="btn btn-p" style="flex:1;" id="btnPasskeyOpt" onclick="doPasskeyOptional()">🔑 Passkey hinzufügen</button>
-        <button class="btn btn-c" onclick="skipPasskeyOpt()">Überspringen →</button>
-      </div>
-    </div>
-
-    <!-- Phase 4 (früher Phase 3): Rolle -->
-    <div class="phase" id="p4">
-      <div class="desc">
-        <strong data-i18n="p3.strong">Rolle deklarieren</strong><br>
-        <span data-i18n="p3.body">Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.</span>
-      </div>
-
-      <div class="role-grid" id="roleGrid"></div>
-
-      <div class="trust-meter">
-        <div class="trust-label"><span data-i18n="trust.label">Trust Score</span><span id="trustVal">60 / 100</span></div>
-        <div class="trust-bar"><div class="trust-fill" id="trustFill" style="width:60%"></div></div>
-      </div>
-
-      <div class="veri-box show" id="veriBox">
-        <h4 id="veriBoxHeader" data-i18n="veri.optional">// OPTIONALE VERIFIKATION</h4>
-        <p class="veri-intro" id="veriIntro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
-          <span data-i18n="veri.intro">Wähle eine Verifikationsmethode, um deinen Trust Score zu erhöhen.</span>
-        </p>
-        <div class="veri-opts" id="veriOpts" role="tablist" data-i18n-aria="aria.veriMethod" aria-label="Verifikationsmethode wählen"></div>
-
-        <!-- Dynamic content area for the chosen method. Filled by JS based on tab selection. -->
-        <div id="veriSlot" style="margin-top:14px;"></div>
-
-        <!-- Status badges (success states, shown after verification completes) -->
-        <div id="emailVerifiedBadge" class="verify-badge-row" style="display:none;" data-i18n="email.verifiedBadge">✓ E-Mail verifiziert — Trust Score erhöht!</div>
-        <div id="githubVerifiedBadge" class="verify-badge-row verify-badge-github" style="display:none;">
-          <span data-i18n="badge.github">✓ GitHub verifiziert — Trust Score</span> <span id="githubTrustValue">—</span>
-        </div>
-      </div>
-
-      <!-- Optional age group (orthogonal to role). Self-declared (trust 30),
-           optionally upgraded to EUDI-verified (trust 99) right here.
-           Buttons keep data-age=<band> (our HHTTPS-header construct, unchanged);
-           labels follow the EUDI threshold scale; data-eudi=<N> is the relation
-           band → age_over_NN threshold that the EUDI verification uses. -->
-      <div class="veri-box show" id="ageBox" style="margin-top:14px;">
-        <h4 data-i18n="age.h4">// ALTERSGRUPPE (OPTIONAL)</h4>
-        <p class="veri-intro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:6px;line-height:1.65;">
-          <span data-i18n="age.intro1">Grobe Altersgruppe statt Geburtsdatum — z. B. für Jugendschutz oder „18+"-Bereiche.</span>
-          <span data-i18n="age.intro2a">Aktuell</span> <strong data-i18n="age.strong">Eigenangabe</strong> <span data-i18n="age.intro2b">(Trust 30). Optional per EUDI-Wallet kryptografisch verifizierbar (Trust 99).</span>
-        </p>
-        <div class="veri-opts" id="ageOpts" role="radiogroup" data-i18n-aria="aria.ageGroup" aria-label="Altersgruppe wählen">
-          <button type="button" class="veri-opt" data-age="" onclick="selectAge('')" aria-pressed="true" data-i18n="age.none">Keine Angabe</button>
-          <button type="button" class="veri-opt" data-age="minor_under_14" data-eudi="" onclick="selectAge('minor_under_14')" aria-pressed="false" data-i18n="age.under14">Unter 14</button>
-          <button type="button" class="veri-opt" data-age="minor_14_to_15" data-eudi="14" onclick="selectAge('minor_14_to_15')" aria-pressed="false">14+</button>
-          <button type="button" class="veri-opt" data-age="minor_16_to_17" data-eudi="16" onclick="selectAge('minor_16_to_17')" aria-pressed="false">16+</button>
-          <button type="button" class="veri-opt" data-age="adult_18_plus" data-eudi="18" onclick="selectAge('adult_18_plus')" aria-pressed="false">18+</button>
-        </div>
-      </div>
-
-      <button class="btn btn-p" id="btnDeclare" onclick="doDeclarRole()" disabled data-i18n="btn.declare">Rolle bestätigen + Token ausstellen →</button>
-    </div>
-
-    <!-- Phase 5: Token -->
-    <div class="phase" id="p5">
       <div class="token-display show" id="tokenDisplay">
         <div class="tk-badge">
           <div class="tk-b" id="tkBadge" data-i18n="tk.badge">✓ HHTTPS-Token ausgestellt</div>
@@ -1035,9 +951,7 @@ footer{font-size:13px;}
         <div class="tk-raw" id="tkRaw"></div>
         <div class="tk-claims">
           <div class="tc"><div class="k">HUMAN</div><div class="v" id="tcH">—</div></div>
-          <div class="tc"><div class="k">ROLE</div><div class="v" id="tcR">—</div></div>
-          <div class="tc"><div class="k">TRUST</div><div class="v" id="tcT">—</div></div>
-          <div class="tc"><div class="k">LEVEL</div><div class="v" id="tcL">—</div></div>
+          <div class="tc"><div class="k">METHODS</div><div class="v" id="tcMethods">—</div></div>
           <div class="tc" id="tcAgeWrap" style="display:none;"><div class="k">AGE GROUP</div><div class="v" id="tcAge">—</div></div>
           <div class="tc" id="tcAgeVerifiedWrap" style="display:none;"><div class="k">AGE VERIFIED</div><div class="v" id="tcAgeVerified">—</div></div>
           <div class="tc" id="tcAgeMethodWrap" style="display:none;"><div class="k">AGE METHOD</div><div class="v" id="tcAgeMethod">—</div></div>
@@ -1045,11 +959,24 @@ footer{font-size:13px;}
         <div id="tokenExpiryHint" style="margin-top:10px;font-size:12px;color:var(--text-muted-strong);min-height:18px;"></div>
       </div>
 
-      <!-- EUDI age verification panel. Auto-appears in Phase 5 when an
-           EUDI-verifiable age band (14+/16+/18+) was chosen in Phase 4. Holds
-           the single matching threshold button (to (re-)start / re-poll), the
-           QR (cross-device), deep-link (same-device) and live status. -->
-      <div class="eudi-panel" id="eudiPanel" style="display:none;">
+      <div class="veri-box show" id="veriBox">
+        <h4 id="veriBoxHeader" data-i18n="veri.optional">// OPTIONALE VERIFIKATION</h4>
+        <p class="veri-intro" id="veriIntro" style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">
+          <span data-i18n="veri.intro">Optional: bestätige weitere Verifizierungsmethoden.</span>
+        </p>
+        <div class="veri-opts" id="veriOpts" role="tablist" data-i18n-aria="aria.veriMethod" aria-label="Verifikationsmethode wählen"></div>
+
+        <!-- Dynamic content area for the chosen method. Filled by JS based on tab selection. -->
+        <div id="veriSlot" style="margin-top:14px;"></div>
+
+        <!-- Status badges (success states, shown after verification completes) -->
+        <div id="emailVerifiedBadge" class="verify-badge-row" style="display:none;" data-i18n="email.verifiedBadge">✓ E-Mail verifiziert</div>
+        <div id="githubVerifiedBadge" class="verify-badge-row verify-badge-github" style="display:none;">
+          <span data-i18n="badge.github">✓ GitHub verifiziert</span>
+        </div>
+      </div>
+
+      <div class="eudi-panel" id="eudiPanel">
         <div class="eudi-burst" id="eudiBurst"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
         <div class="eudi-panel-head">
           <span class="badge-shield" aria-hidden="true">
@@ -1066,11 +993,13 @@ footer{font-size:13px;}
         <div class="eudi-panel-highlight">
           <span class="eudi-hl-chip" data-i18n="eudi.hlNoDob">ohne Geburtsdatum</span>
           <span class="eudi-hl-sep">·</span>
-          <span class="eudi-hl-chip eudi-hl-verified" data-i18n="eudi.hlVerified">verifiziert · Trust 99</span>
+          <span class="eudi-hl-chip eudi-hl-verified" data-i18n="eudi.hlVerified">verifiziert</span>
         </div>
 
         <div class="eudi-thresh-row" id="eudiThreshRow">
-          <!-- single matching threshold button injected by JS (renderEudiThreshold) -->
+          <button type="button" class="veri-opt" onclick="startEudiAge(14)" data-i18n="eudi.btn14">14+ nachweisen</button>
+          <button type="button" class="veri-opt" onclick="startEudiAge(16)" data-i18n="eudi.btn16">16+ nachweisen</button>
+          <button type="button" class="veri-opt" onclick="startEudiAge(18)" data-i18n="eudi.btn18">18+ nachweisen</button>
           <span class="eudi-rehint" id="eudiReHint" style="display:none;" data-i18n="eudi.rehint">Abgelaufen? Erneut starten.</span>
         </div>
 
@@ -1092,6 +1021,49 @@ footer{font-size:13px;}
   </div>
 </div>
 
+<!-- Machine / AI identity (WIMSE-style workload identity) — directly under the human flow -->
+<div class="flow" id="machineFlow" style="margin-top:28px;">
+  <div class="flow-head">
+    <span class="flow-title" data-i18n="machine.title">MASCHINEN-/KI-ANMELDUNG — WIMSE</span>
+  </div>
+  <div class="flow-body">
+    <div class="desc">
+      <strong data-i18n="machine.strong">Für KIs, Agenten &amp; automatisierte Dienste</strong><br>
+      <span data-i18n="machine.body">Maschinen melden sich transparent an (WIMSE-Workload-Identity). Du bekommst einen Maschinen-Token mit <code>actorType: bot</code> — ehrlich gekennzeichnet, keine Tarnung als Mensch.</span>
+    </div>
+    <div class="msg" id="machineMsg" style="margin-bottom:10px;"></div>
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <input class="vfield" id="mOperatorName" type="text" placeholder="Name des Betreibers / der KI — z. B. Claude (Anthropic)" maxlength="80">
+      <input class="vfield" id="mPurpose" type="text" placeholder="Zweck — z. B. Beantwortung von Foren-Fragen" maxlength="120">
+      <input class="vfield" id="mUrl" type="url" placeholder="URL (optional) — https://…">
+      <input class="vfield" id="mContact" type="email" placeholder="Kontakt-E-Mail (optional)">
+    </div>
+    <button class="btn btn-p" id="btnMachineReg" onclick="registerMachine()" style="width:100%;margin-top:14px;" data-i18n="machine.register">🤖 Maschine registrieren →</button>
+
+    <div id="machineResult" style="display:none;margin-top:16px;">
+      <div class="token-display show">
+        <div class="tk-badge"><div class="tk-b" data-i18n="machine.registered">✓ Operator registriert</div></div>
+        <div class="tk-claims">
+          <div class="tc"><div class="k">OPERATOR ID</div><div class="v" id="mOpId" style="word-break:break-all;">—</div></div>
+          <div class="tc"><div class="k">API KEY</div><div class="v" id="mApiKey" style="word-break:break-all;">—</div></div>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--amber);" data-i18n="machine.keyWarn">⚠ API-Key nur EINMAL sichtbar — jetzt sicher speichern.</div>
+      </div>
+      <button class="btn btn-g" id="btnMachineToken" onclick="getMachineToken()" style="width:100%;margin-top:12px;" data-i18n="machine.getToken">🔑 Maschinen-Token holen →</button>
+      <div id="machineTokenBox" style="display:none;margin-top:12px;">
+        <div class="token-display show">
+          <div class="tk-badge"><div class="tk-b">🤖 actorType: bot · HHTTPS-Machine-Token</div></div>
+          <div class="tk-raw" id="mTokenRaw"></div>
+        </div>
+      </div>
+    </div>
+
+    <pre class="usp-code" style="margin-top:16px;">curl -X POST https://hhttps.org/hhttps/machine/register \
+  -H "Content-Type: application/json" \
+  -d '{"operatorName":"Claude","purpose":"forum Q&amp;A"}'</pre>
+  </div>
+</div>
+
 <!-- Live response preview -->
 <div class="resp-preview">
   <div class="rp-bar">
@@ -1101,13 +1073,16 @@ footer{font-size:13px;}
   <div class="rp-body">
     <div class="rp-col">
       <h4>Response Headers</h4>
-      <div class="hline"><span class="hk">HHTTPS-Protocol-Version:</span><span class="hv a">0.3-roles</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Protocol-Version:</span><span class="hv a">0.5</span></div>
       <div class="hline"><span class="hk">HHTTPS-Human:</span><span class="hv m" id="hHuman">false</span></div>
       <div class="hline"><span class="hk">HHTTPS-Actor-Type:</span><span class="hv m" id="hActor">unknown</span></div>
       <div class="hline"><span class="hk">HHTTPS-Status:</span><span class="hv m" id="hStatus">unverified</span></div>
-      <div class="hline"><span class="hk">HHTTPS-Role:</span><span class="hv m" id="hRole">—</span></div>
-      <div class="hline"><span class="hk">HHTTPS-Role-Level:</span><span class="hv m" id="hLevel">—</span></div>
-      <div class="hline"><span class="hk">HHTTPS-Trust-Score:</span><span class="hv m" id="hScore">0</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Verified-Methods:</span><span class="hv m" id="hMethods">—</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Email-Verified:</span><span class="hv m" id="hmEmail">false</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Passkey-Verified:</span><span class="hv m" id="hmPasskey">false</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Github-Verified:</span><span class="hv m" id="hmGithub">false</span></div>
+      <div class="hline"><span class="hk">HHTTPS-Eudi-Verified:</span><span class="hv m" id="hmEudi">false</span></div>
+      <div class="hline" id="hmDomainLine" style="display:none;"><span class="hk">HHTTPS-Domain:</span><span class="hv m" id="hmDomain">—</span></div>
       <div class="hline" id="hAgeGroupLine" style="display:none;"><span class="hk">HHTTPS-Age-Group:</span><span class="hv m" id="hAgeGroup">—</span></div>
       <div class="hline" id="hAgeVerifiedLine" style="display:none;"><span class="hk">HHTTPS-Age-Verified:</span><span class="hv m" id="hAgeVerified">—</span></div>
       <div class="hline" id="hAgeMethodLine" style="display:none;"><span class="hk">HHTTPS-Age-Method:</span><span class="hv m" id="hAgeMethod">—</span></div>
@@ -1117,11 +1092,7 @@ footer{font-size:13px;}
       <h4>JSON Body</h4>
       <div class="hline"><span class="hk">hhttps.human:</span><span class="hv m" id="bHuman">false</span></div>
       <div class="hline"><span class="hk">hhttps.actorType:</span><span class="hv m" id="bActor">unknown</span></div>
-      <div class="hline"><span class="hk">role.id:</span><span class="hv m" id="bRole">—</span></div>
-      <div class="hline"><span class="hk">role.label:</span><span class="hv m" id="bLabel">—</span></div>
-      <div class="hline"><span class="hk">role.level:</span><span class="hv m" id="bLvl">—</span></div>
-      <div class="hline"><span class="hk">role.trustScore:</span><span class="hv m" id="bScore">—</span></div>
-      <div class="hline"><span class="hk">role.privileges:</span><span class="hv m" id="bPriv">—</span></div>
+      <div class="hline"><span class="hk">hhttps.verifiedMethods:</span><span class="hv m" id="bMethods">[]</span></div>
     </div>
   </div>
 </div>
@@ -1176,9 +1147,7 @@ footer{font-size:13px;}
   <span class="ck">const</span> data = <span class="ck">await</span> res.json();
 
   <span class="ck">if</span> (data.hhttps.human) {
-    console.log(<span class="cv">`Human ✓ · role: ${data.role.label}`</span>);
-    console.log(<span class="cv">`Trust Score: ${data.role.trustScore}/100`</span>);
-    console.log(<span class="cv">`Privileges:`, data.role.privileges</span>);
+    console.log(<span class="cv">`Human ✓ · methods: ${data.hhttps.verifiedMethods.join(', ')}`</span>);
   } <span class="ck">else</span> {
     console.log(<span class="cv">'Bot or unknown actor'</span>);
   }
@@ -1186,8 +1155,7 @@ footer{font-size:13px;}
 
 <span class="cc">// Check response headers directly</span>
 <span class="ck">const</span> isHuman = res.headers.get(<span class="cv">'HHTTPS-Human'</span>) === <span class="cv">'true'</span>;
-<span class="ck">const</span> role    = res.headers.get(<span class="cv">'HHTTPS-Role'</span>);    <span class="cc">// e.g. "journalist"</span>
-<span class="ck">const</span> score   = res.headers.get(<span class="cv">'HHTTPS-Trust-Score'</span>); <span class="cc">// e.g. "85"</span></pre>
+<span class="ck">const</span> methods = res.headers.get(<span class="cv">'HHTTPS-Verified-Methods'</span>); <span class="cc">// e.g. "email,passkey,eudi"</span></pre>
   </div>
   <div class="api-pane" id="tab-python">
     <pre class="codeblock"><span class="ck">import</span> requests
@@ -1200,40 +1168,29 @@ footer{font-size:13px;}
     data = res.json()
 
     <span class="cc"># Header-based check (fast)</span>
-    is_human    = res.headers.get(<span class="cv">"HHTTPS-Human"</span>) == <span class="cv">"true"</span>
-    role        = res.headers.get(<span class="cv">"HHTTPS-Role"</span>)
-    trust_score = <span class="ck">int</span>(res.headers.get(<span class="cv">"HHTTPS-Trust-Score"</span>, <span class="cv">0</span>))
+    is_human = res.headers.get(<span class="cv">"HHTTPS-Human"</span>) == <span class="cv">"true"</span>
+    methods  = res.headers.get(<span class="cv">"HHTTPS-Verified-Methods"</span>, <span class="cv">""</span>)
 
     <span class="ck">return</span> {
-        <span class="cv">"human"</span>:       is_human,
-        <span class="cv">"role"</span>:        role,
-        <span class="cv">"trust_score"</span>: trust_score,
-        <span class="cv">"privileges"</span>:  data.get(<span class="cv">"role"</span>, {}).get(<span class="cv">"privileges"</span>, [])
+        <span class="cv">"human"</span>:   is_human,
+        <span class="cv">"methods"</span>: methods.split(<span class="cv">","</span>) <span class="ck">if</span> methods <span class="ck">else</span> []
     }</pre>
   </div>
   <div class="api-pane" id="tab-response">
     <pre class="codeblock" id="sampleResponse">{
   <span class="ck">"hhttps"</span>: {
-    <span class="ck">"version"</span>:    <span class="cv">"0.3-roles"</span>,
-    <span class="ck">"status"</span>:     <span class="cv">"verified"</span>,
-    <span class="ck">"human"</span>:      <span class="cv">true</span>,
-    <span class="ck">"actorType"</span>:  <span class="cv">"human"</span>,
-    <span class="ck">"method"</span>:     <span class="cv">"webauthn-passkey"</span>,
-    <span class="ck">"trustScore"</span>: <span class="cv">85</span>
+    <span class="ck">"version"</span>:         <span class="cv">"0.5"</span>,
+    <span class="ck">"status"</span>:          <span class="cv">"verified"</span>,
+    <span class="ck">"human"</span>:           <span class="cv">true</span>,
+    <span class="ck">"actorType"</span>:       <span class="cv">"human"</span>,
+    <span class="ck">"verifiedMethods"</span>: [<span class="cv">"email"</span>, <span class="cv">"passkey"</span>, <span class="cv">"eudi"</span>]
   },
-  <span class="ck">"role"</span>: {
-    <span class="ck">"id"</span>:          <span class="cv">"journalist"</span>,
-    <span class="ck">"label"</span>:       <span class="cv">"Journalist"</span>,
-    <span class="ck">"icon"</span>:        <span class="cv">"📰"</span>,
-    <span class="ck">"level"</span>:       <span class="cv">"press-card"</span>,
-    <span class="ck">"levelLabel"</span>:  <span class="cv">"Press card"</span>,
-    <span class="ck">"trustScore"</span>:  <span class="cv">85</span>,
-    <span class="ck">"privileges"</span>: [
-      <span class="cv">"Access to HHTTPS-protected press areas"</span>,
-      <span class="cv">"Verified attribution of sources in digital publications"</span>,
-      <span class="cv">"Protection against AI impersonation as a journalist"</span>
-    ],
-    <span class="ck">"userStory"</span>: <span class="cv">"US-012: As a journalist..."</span>
+  <span class="ck">"verification"</span>: {
+    <span class="ck">"methods"</span>: [
+      { <span class="ck">"id"</span>: <span class="cv">"email"</span>,   <span class="ck">"verified"</span>: <span class="cv">true</span> },
+      { <span class="ck">"id"</span>: <span class="cv">"passkey"</span>, <span class="ck">"verified"</span>: <span class="cv">true</span> },
+      { <span class="ck">"id"</span>: <span class="cv">"eudi"</span>,    <span class="ck">"verified"</span>: <span class="cv">true</span> }
+    ]
   }
 }</pre>
   </div>
@@ -1254,7 +1211,7 @@ footer{font-size:13px;}
   </div>
   <div class="verify-body">
     <p class="verify-lead">
-      <span data-i18n="verify.lead1">Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er gültig ist und von welcher Rolle er stammt. Keine Anmeldung nötig.</span>
+      <span data-i18n="verify.lead1">Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er gültig ist. Keine Anmeldung nötig.</span>
     </p>
 
     <div class="verify-input-row">
@@ -1274,19 +1231,7 @@ footer{font-size:13px;}
 </div></div>
 </details>
 
-<!-- Role table -->
-<details class="collapse" open>
-  <summary>
-    <div><div class="collapse-title">👥 Verfügbare Rollen — Vollständiges Verzeichnis</div>
-    <div class="collapse-sub">// AVAILABLE ROLES · 15 Rollen</div></div>
-    <span class="collapse-chev">▼</span>
-  </summary>
-  <div class="collapse-body">
-    <div style="padding:16px 20px;">
-      <table class="role-table" id="roleTableFull"></table>
-    </div>
-  </div>
-</details>
+<!-- v0.5: the role catalogue was removed — roles are no longer a user concept. -->
 
 <!-- Connected Platforms (Phase 3a) -->
 <div class="platforms-block">
@@ -1356,7 +1301,7 @@ footer{font-size:13px;}
         <div class="usp-icon">🤖</div>
         <h3 data-i18n="usp.botH3">Auch Maschinen können hier teilnehmen</h3>
         <p>
-          <span data-i18n="usp.botP1">Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren, eine Rolle wählen, und einen Maschinen-Token bekommen — transparent gekennzeichnet (</span><code>actorType: bot</code><span data-i18n="usp.botP2">). So bleiben Plattformen ehrlich.</span>
+          <span data-i18n="usp.botP1">Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren und einen Maschinen-Token bekommen — transparent gekennzeichnet (</span><code>actorType: bot</code><span data-i18n="usp.botP2">). So bleiben Plattformen ehrlich.</span>
         </p>
         <pre class="usp-code">curl -X POST https://hhttps.org/hhttps/machine/register \
   -H "Content-Type: application/json" \
@@ -1441,7 +1386,7 @@ GET https://hhttps.org/hhttps/oauth/authorize?
   <span class="ck">&quot;id_token&quot;</span>:     <span class="cv">&quot;eyJhbGciOiJFUzI1NiIs...&quot;</span>,
   <span class="ck">&quot;token_type&quot;</span>:   <span class="cv">&quot;Bearer&quot;</span>,
   <span class="ck">&quot;expires_in&quot;</span>:   <span class="co">300</span>,
-  <span class="ck">&quot;scope&quot;</span>:        <span class="cv">&quot;openid role&quot;</span>
+  <span class="ck">&quot;scope&quot;</span>:        <span class="cv">&quot;openid&quot;</span>
 }</div>
   </div>
 
@@ -1452,17 +1397,14 @@ GET https://hhttps.org/hhttps/oauth/authorize?
   <span class="ck">&quot;iss&quot;</span>:           <span class="cv">&quot;https://hhttps.org&quot;</span>,
   <span class="ck">&quot;aud&quot;</span>:           <span class="cv">&quot;your-platform&quot;</span>,
   <span class="ck">&quot;sub&quot;</span>:           <span class="cv">&quot;7K2XQ9NMR3F8...&quot;</span>,    <span class="cc">// pairwise pseudonym</span>
-  <span class="ck">&quot;role&quot;</span>:          <span class="cv">&quot;developer&quot;</span>,
-  <span class="ck">&quot;role_label&quot;</span>:    <span class="cv">&quot;Developer&quot;</span>,
-  <span class="ck">&quot;role_icon&quot;</span>:     <span class="cv">&quot;💻&quot;</span>,
-  <span class="ck">&quot;trust_score&quot;</span>:   <span class="co">72</span>,
+  <span class="ck">&quot;verified_methods&quot;</span>: [<span class="cv">&quot;email&quot;</span>, <span class="cv">&quot;passkey&quot;</span>, <span class="cv">&quot;github&quot;</span>],
   <span class="ck">&quot;iat&quot;</span>:           <span class="co">1715000000</span>,
   <span class="ck">&quot;exp&quot;</span>:           <span class="co">1715003600</span>
 }
 
 <span class="cc">// What you got:</span>
 <span class="cc">//   ✓ Stable pseudonymous user ID (different on every platform)</span>
-<span class="cc">//   ✓ Verified role + trust score</span>
+<span class="cc">//   ✓ Verified human + verification methods</span>
 <span class="cc">// What you did NOT get:</span>
 <span class="cc">//   ✗ Name, email, IP, geolocation</span>
 <span class="cc">//   ✗ Anything correlating user across platforms</span></div>
@@ -1579,7 +1521,7 @@ async function startEudiAge(minAge) {
   try {
     const r = await fetch('/eudi/age/request', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hhttpsSession: sessionId, minAge })
+      body: JSON.stringify({ hhttpsSession: sessionId, minAge, currentToken: hhttpsToken || null })
     });
     const d = await r.json();
     if (!r.ok || !d.deepLink) { msg(d.error || tr('eudi.errRequest'),'e'); return; }
@@ -1596,6 +1538,66 @@ async function startEudiAge(minAge) {
     eudiPoll = setInterval(() => pollEudiStatus(d.requestId), 2000);
   } catch (e) {
     msg(tr('eudi.errBackend') + ' ' + e.message, 'e');
+  }
+}
+
+async function startEudiEid() {
+  if (!sessionId) { msg(tr('eudi.msgNeedStep2'), 'e'); return; }
+  if (eudiPoll) { clearInterval(eudiPoll); eudiPoll = null; }
+  const box = document.getElementById('eidQrBox');
+  const statusEl = document.getElementById('eidStatus');
+  try {
+    const r = await fetch('/eudi/eid/request', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hhttpsSession: sessionId, currentToken: hhttpsToken || null })
+    });
+    const d = await r.json();
+    if (!r.ok || !d.deepLink) { msg(d.error || tr('eudi.errRequest'), 'e'); return; }
+    const qr = qrcode(0, 'L'); qr.addData(d.deepLink); qr.make();
+    const img = document.getElementById('eidQr'); if (img) img.src = qr.createDataURL(4, 8);
+    const dl = document.getElementById('eidDeepLink'); if (dl) dl.href = d.deepLink;
+    if (box) box.style.display = '';
+    if (statusEl) { statusEl.textContent = tr('eid.waiting'); statusEl.style.color = 'var(--text-muted-strong)'; }
+    eudiPoll = setInterval(() => pollEudiEidStatus(d.requestId), 2000);
+  } catch (e) {
+    msg(tr('eudi.errBackend') + ' ' + e.message, 'e');
+  }
+}
+
+async function pollEudiEidStatus(requestId) {
+  let d;
+  try {
+    const r = await fetch('/eudi/eid/status/' + encodeURIComponent(requestId));
+    d = await r.json();
+  } catch (e) { return; }
+  if (d.status === 'pending') return;
+  if (eudiPoll) { clearInterval(eudiPoll); eudiPoll = null; }
+  const statusEl = document.getElementById('eidStatus');
+  if (d.status === 'verified') {
+    if (statusEl) { statusEl.textContent = tr('eid.verified'); statusEl.style.color = 'var(--ok,#34d399)'; }
+    msg(tr('eid.msgVerified'), 's');
+    if (typeof eudiSuccessBurst === 'function') { try { eudiSuccessBurst(); } catch (e) {} }
+    if (d.hhttps && d.hhttps.token) {
+      hhttpsToken = d.hhttps.token;
+      try {
+        const raw = localStorage.getItem('hhttps_identity');
+        if (raw) {
+          const id = JSON.parse(raw);
+          id.token = d.hhttps.token;
+          if (d.hhttps.refreshToken)   id.refreshToken   = d.hhttps.refreshToken;
+          if (d.hhttps.verifiedMethods) id.verifiedMethods = d.hhttps.verifiedMethods;
+          localStorage.setItem('hhttps_identity', JSON.stringify(id));
+          window.postMessage({ source:'hhttps-org', type:'identity-issued', payload:id }, window.location.origin);
+        }
+      } catch (e) {}
+      updateHeaders({ human:true, actorType:'human', status:'verified',
+                      verifiedMethods: d.hhttps.verifiedMethods || [], token: hhttpsToken });
+      const tcM = document.getElementById('tcMethods');
+      if (tcM && d.hhttps.verifiedMethods) tcM.textContent = d.hhttps.verifiedMethods.join(', ');
+    }
+    const bc = document.getElementById('btnCheck'); if (bc) bc.disabled = false;
+  } else {
+    if (statusEl) { statusEl.textContent = tr('eid.failed'); statusEl.style.color = 'var(--red)'; }
   }
 }
 
@@ -1616,8 +1618,9 @@ async function pollEudiStatus(requestId) {
     msg(tr('eudi.msgVerified'),'s');
     eudiSuccessBurst();   // ✦ celebratory sparkle burst
 
-    // Adopt the upgraded token (verified age, trust 99) and persist it so the
-    // browser extension and other tabs see the verified identity.
+    // Adopt the upgraded token (verified age) and persist it so the browser
+    // extension and other tabs see the verified identity. The age upgrade also
+    // reissues the refresh token (so the surface survives access-token expiry).
     if (d.hhttps && d.hhttps.token) {
       hhttpsToken = d.hhttps.token;
       try {
@@ -1625,6 +1628,7 @@ async function pollEudiStatus(requestId) {
         if (raw) {
           const id = JSON.parse(raw);
           id.token = d.hhttps.token;
+          if (d.hhttps.refreshToken) id.refreshToken = d.hhttps.refreshToken;
           id.ageGroup = d.ageGroup || id.ageGroup;
           localStorage.setItem('hhttps_identity', JSON.stringify(id));
           window.postMessage({ source:'hhttps-org', type:'identity-issued', payload:id },
@@ -1649,23 +1653,20 @@ async function pollEudiStatus(requestId) {
       if (tcAgeMethod) tcAgeMethod.textContent = d.ageGroup.methodLabel || d.ageGroup.method || 'EUDI Wallet (PID)';
       if (tcAgeMethodWrap) tcAgeMethodWrap.style.display = '';
 
-      // Refresh the live header box with verified age (trust 99 typically).
-      updateHeaders(true, 'human', 'verified', selRole,
-                    (document.getElementById('hLevel')?.textContent || undefined),
-                    99, hhttpsToken,
-                    { group: d.ageGroup.id, verified: true,
-                      method: d.ageGroup.method || 'eudi-wallet' });
+      // Refresh the live header box with the verified age (orthogonal, trust-neutral).
+      updateHeaders({
+        human: true, actorType: 'human', status: 'verified',
+        verifiedMethods: d.hhttps?.verifiedMethods || [],
+        age: { group: d.ageGroup.id, verified: true, method: d.ageGroup.method || 'eudi-wallet' },
+        token: hhttpsToken
+      });
     }
     // Age is now cryptographically verified and the token is upgraded. The
     // token view was already shown when doDeclarRole issued the token (it ran
     // before this verification). Here we only enable the live check and ensure
     // the result view is visible using the same helper the issuance path uses.
     document.getElementById('btnCheck').disabled = false;
-    if (typeof setStepEF === 'function' && document.getElementById('p5')) {
-      setStepEF(5);
-    } else {
-      setStep(4);
-    }
+    setStepEF(2);
   } else if (d.status === 'expired') {
     statusEl.textContent = tr('eudi.expired');
     statusEl.style.color = 'var(--err,#f87171)';
@@ -1700,6 +1701,7 @@ const VMETHOD_LABELS = {
   'self-declared':       { l:'Selbstdeklariert',   de:'Selbstdeklariert',   en:'Self-declared',        score:30, field:null },
   'email-verified':      { l:'E-Mail verifiziert', de:'E-Mail verifiziert', en:'Email verified',       score:70, field:{p:'E-Mail-Adresse', pDe:'E-Mail-Adresse', pEn:'Email address', key:'email'} },
   'github-verified':     { l:'GitHub verifiziert', de:'GitHub verifiziert', en:'GitHub verified',      score:70, field:null },
+  'eudi-eid':            { l:'EUDI verifiziert',   de:'EUDI verifiziert',   en:'EUDI verified',        score:90, field:null },
   'school-email':        { l:'Schul-E-Mail',       de:'Schul-E-Mail',       en:'School email',         score:75, field:{p:'@*.schule.[bundesland].de', pDe:'@*.schule.[bundesland].de', pEn:'School email address', key:'email'} },
   'medical-email':       { l:'Klinik-E-Mail',      de:'Klinik-E-Mail',      en:'Clinic email',         score:78, field:{p:'Praxis-/Klinik-E-Mail', pDe:'Praxis-/Klinik-E-Mail', pEn:'Practice/clinic email', key:'email'} },
   'lawyer-email':        { l:'Kanzlei-E-Mail',     de:'Kanzlei-E-Mail',     en:'Law-firm email',       score:78, field:{p:'Kanzlei-E-Mail', pDe:'Kanzlei-E-Mail', pEn:'Law-firm email', key:'email'} },
@@ -1844,6 +1846,106 @@ const T = {
   }
 };
 let LANG = 'de';
+Object.assign(T.de, {
+  "eid.intro":"Weise deine staatliche Identität über die EUDI-Wallet nach (PID-Vorlage). Es wird kein Attribut gespeichert — nur die gültige Vorlage zählt.",
+  "eid.btn":"🪪 Mit EUDI-Wallet bestätigen", "eid.waiting":"Warte auf Wallet…",
+  "eid.verified":"✓ EUDI verifiziert", "eid.msgVerified":"EUDI-Identität bestätigt ✓",
+  "eid.failed":"EUDI-Verifizierung fehlgeschlagen.",
+  "p3.strong":"Identität ausstellen",
+  "p3.body":"Du bist als Mensch verifiziert. Optional kannst du weitere Verifizierungsmethoden bestätigen (GitHub, EUDI-Wallet, Alter) — dann den Token ausstellen.",
+  "veri.intro":"Optional: bestätige weitere Verifizierungsmethoden.",
+  "btn.declare":"Token ausstellen →"
+});
+Object.assign(T.en, {
+  "eid.intro":"Prove your state identity via the EUDI wallet (PID presentation). No attribute is stored — only the valid presentation counts.",
+  "eid.btn":"🪪 Verify with EUDI wallet", "eid.waiting":"Waiting for wallet…",
+  "eid.verified":"✓ EUDI verified", "eid.msgVerified":"EUDI identity confirmed ✓",
+  "eid.failed":"EUDI verification failed.",
+  "p3.strong":"Issue identity",
+  "p3.body":"You are verified as human. Optionally confirm more verification methods (GitHub, EUDI wallet, age) — then issue your token.",
+  "veri.intro":"Optional: confirm more verification methods.",
+  "btn.declare":"Issue token →"
+});
+Object.assign(T.de, {
+  "p1.strong":"Schritt 1 — E-Mail verifizieren",
+  "p1.body":"Gib deine E-Mail-Adresse ein. Du bekommst einen Bestätigungs-Code — kein Passwort, kein Konto. Dein Token wird danach sofort ausgestellt. Passkey ist optional.",
+  "p3ef.strong":"Schritt 3 — Passkey hinzufügen (optional)",
+  "p3ef.body":"Fingerabdruck, Face ID oder Gerätesperre — kein Hardware-Schlüssel nötig. Bestätigt dich kryptografisch als Mensch. Du kannst diesen Schritt überspringen.",
+  "age.intro2b":"Optional per EUDI-Wallet kryptografisch verifizierbar.",
+  "eudi.hlVerified":"verifiziert", "eudi.p4":"", "eudi.verifyTrust":"", "eudi.panelSubVerified":"verifiziert",
+  "badge.github":"✓ GitHub verifiziert", "email.verifiedBadge":"✓ E-Mail verifiziert"
+});
+Object.assign(T.en, {
+  "p1.strong":"Step 1 — Email verification",
+  "p1.body":"Enter your email. You will receive a confirmation code — no password, no account. Your token is issued immediately. Passkey is optional.",
+  "p3ef.strong":"Step 3 — Add passkey (optional)",
+  "p3ef.body":"Fingerprint, Face ID or device unlock — no hardware key needed. Cryptographically confirms you as human. You can skip this step.",
+  "age.intro2b":"Optionally verifiable cryptographically via the EUDI wallet.",
+  "eudi.hlVerified":"verified", "eudi.p4":"", "eudi.verifyTrust":"", "eudi.panelSubVerified":"verified",
+  "badge.github":"✓ GitHub verified", "email.verifiedBadge":"✓ Email verified"
+});
+Object.assign(T.de, {
+  "gh.confirmedPre":"✓ GitHub bestätigt!",
+  "slot.ghConnect1":"Verbinde dein GitHub-Konto als zusätzliche Verifizierung.",
+  "slot.ghConnect2":"— nur einen einseitig gehashten Anker, aus dem nichts rückrechenbar ist. Account-Daten werden einmalig geprüft und danach verworfen."
+});
+Object.assign(T.en, {
+  "gh.confirmedPre":"✓ GitHub verified!",
+  "slot.ghConnect1":"Connect your GitHub account as an additional verification.",
+  "slot.ghConnect2":"— only a one-way hashed anchor from which nothing can be reconstructed. Account data is checked once and then discarded."
+});
+Object.assign(T.de, {
+  "slot.ghAlready1":"✓ GitHub bereits verifiziert",
+  "msg.loginGithub1":"✓ Angemeldet — deine GitHub-Verifikation wurde erkannt.", "msg.loginGithub2":"",
+  "eudi.hint2":"Verifiziere sie ohne Geburtsdatum per EUDI-Wallet — Selective Disclosure, nur „über N Jahre: ja/nein\".",
+  "eudi.msgNeedRole":"Bitte zuerst Schritt 2 (Menschsein beweisen) abschließen."
+});
+Object.assign(T.en, {
+  "slot.ghAlready1":"✓ GitHub already verified",
+  "msg.loginGithub1":"✓ Signed in — your GitHub verification was detected.", "msg.loginGithub2":"",
+  "eudi.hint2":"Verify it without your date of birth via your EUDI wallet — selective disclosure, only “over N years: yes/no”.",
+  "eudi.msgNeedRole":"Please complete step 2 (prove humanity) first."
+});
+Object.assign(T.de, {
+  "hero.h1a":"Deine Rolle im Netz.", "hero.h1b":"Als Mensch oder KI verifiziert.", "hero.p2":".", "step.role":"Token",
+  "verify.lead1":"Du hast einen HHTTPS-Token bekommen — von einer E-Mail, einem Forum, einem Chat? Füg ihn hier ein und sieh sofort, ob er gültig ist. Keine Anmeldung nötig.",
+  "usp.botP1":"Bots, KIs und automatisierte Dienste können sich als Maschinen registrieren und einen Maschinen-Token bekommen — transparent gekennzeichnet ("
+});
+Object.assign(T.en, {
+  "hero.h1a":"Your role on the web.", "hero.h1b":"Verified as human or AI.", "hero.p2":".", "step.role":"Token",
+  "verify.lead1":"You received an HHTTPS token — from an email, a forum, a chat? Paste it here and instantly see whether it is valid. No sign-in needed.",
+  "usp.botP1":"Bots, AIs and automated services can register as machines and get a machine token — transparently labelled ("
+});
+Object.assign(T.de, {
+  "step.email":"E-Mail", "step.role":"Token",
+  "p1.strong":"Schritt 1 — Anmelden",
+  "p1.body":"E-Mail bestätigen — kein Passwort, kein Konto. Pseudonym und Passkey sind optional. Danach wird dein Token ausgestellt.",
+  "extras.pseudo":"PSEUDONYM (OPTIONAL)", "extras.addPasskey":"🔑 Passkey hinzufügen (empfohlen)",
+  "p5.strong":"Schritt 2 — Dein Token",
+  "p5.body":"Dein HHTTPS-Token ist ausgestellt. Optional kannst du weitere Verifizierungsmethoden bestätigen oder dein Alter per EUDI-Wallet nachweisen."
+});
+Object.assign(T.en, {
+  "step.email":"Email", "step.role":"Token",
+  "p1.strong":"Step 1 — Sign in",
+  "p1.body":"Confirm your email — no password, no account. Pseudonym and passkey are optional. Your token is issued afterwards.",
+  "extras.pseudo":"PSEUDONYM (OPTIONAL)", "extras.addPasskey":"🔑 Add passkey (recommended)",
+  "p5.strong":"Step 2 — Your token",
+  "p5.body":"Your HHTTPS token is issued. Optionally confirm more verification methods or prove your age via the EUDI wallet."
+});
+Object.assign(T.de, {
+  "machine.title":"MASCHINEN-/KI-ANMELDUNG — WIMSE",
+  "machine.strong":"Für KIs, Agenten & automatisierte Dienste",
+  "machine.body":"Maschinen melden sich transparent an (WIMSE-Workload-Identity). Du bekommst einen Maschinen-Token mit actorType: bot — ehrlich gekennzeichnet, keine Tarnung als Mensch.",
+  "machine.register":"🤖 Maschine registrieren →", "machine.registered":"✓ Operator registriert",
+  "machine.keyWarn":"⚠ API-Key nur EINMAL sichtbar — jetzt sicher speichern.", "machine.getToken":"🔑 Maschinen-Token holen →"
+});
+Object.assign(T.en, {
+  "machine.title":"MACHINE / AI SIGN-IN — WIMSE",
+  "machine.strong":"For AIs, agents & automated services",
+  "machine.body":"Machines sign in transparently (WIMSE workload identity). You receive a machine token with actorType: bot — honestly labelled, no disguise as a human.",
+  "machine.register":"🤖 Register machine →", "machine.registered":"✓ Operator registered",
+  "machine.keyWarn":"⚠ API key shown ONCE — store it securely now.", "machine.getToken":"🔑 Get machine token →"
+});
 function tr(k){ return (T[LANG]||T.de)[k] ?? (T.de[k] ?? k); }
 function setLanguage(lang){
   LANG = T[lang] ? lang : 'de';
@@ -1937,32 +2039,23 @@ async function verifyPastedToken() {
       return;
     }
 
-    // Human verified
-    const role  = data.role || {};
-    const hh    = data.hhttps || {};
-    const icon  = role.icon || '🧑';
-    const label = role.label || role.id || tr('role.fallback');
-    const score = role.trustScore || hh.trustScore || 0;
+    // Human verified — v0.5: methods, no role/score
+    const hh      = data.hhttps || {};
+    const methods = hh.verifiedMethods || (data.verification?.methods || []).map(m => m.id);
 
-    out.innerHTML = renderVerifyHero('valid', icon,
+    out.innerHTML = renderVerifyHero('valid', '🧑',
       tr('vh.humanStatus'),
-      label,
-      score,
-      role.levelLabel || role.level) +
+      methods.length ? methods.join(' · ') : 'human',
+      null) +
       renderVerifyDetails({
-        status:      hh.status,
-        human:       'true',
-        actorType:   'human',
-        role:        role.id,
-        roleLabel:   role.label,
-        roleLevel:   role.level,
-        levelLabel:  role.levelLabel,
-        trustScore:  score,
-        method:      hh.method,
-        issuer:      hh.issuer,
-        issuedAt:    hh.issuedAt,
-        expiresAt:   hh.expiresAt,
-        privileges:  role.privileges
+        status:          hh.status,
+        human:           'true',
+        actorType:       'human',
+        verifiedMethods: methods.length ? methods.join(', ') : null,
+        method:          hh.method,
+        issuer:          hh.issuer,
+        issuedAt:        hh.issuedAt,
+        expiresAt:       hh.expiresAt
       });
 
   } catch (e) {
@@ -1981,13 +2074,6 @@ function renderVerifyHero(state, icon, status, sub, trustScore, levelLabel) {
   html += `<div class="vr-status">${status}</div>`;
   if (sub) html += `<div class="vr-role-label">${sub}</div>`;
   if (levelLabel) html += `<div class="vr-sub">${levelLabel}</div>`;
-  if (trustScore !== null && trustScore !== undefined) {
-    html += `
-      <div class="vr-trust">
-        <div class="vr-trust-label"><span>Trust Score</span><span>${trustScore} / 100</span></div>
-        <div class="vr-trust-bar"><div class="vr-trust-fill" style="width:${trustScore}%"></div></div>
-      </div>`;
-  }
   html += `</div>`;
   return html;
 }
@@ -2004,11 +2090,7 @@ function renderVerifyDetails(d) {
   add('status',     d.status,     d.status === 'verified' ? 'ok' : (d.status === 'invalid' ? 'bad' : ''));
   add('human',      d.human,      d.human === 'true' ? 'ok' : '');
   add('actorType',  d.actorType,  d.actorType === 'human' ? 'ok' : (d.actorType === 'bot' ? 'amber' : ''));
-  add('role',       d.role);
-  add('role.label', d.roleLabel);
-  add('role.level', d.roleLevel);
-  add('verification', d.levelLabel, 'amber');
-  add('trustScore', d.trustScore ? d.trustScore + ' / 100' : null, 'ok');
+  add('verifiedMethods', d.verifiedMethods, 'ok');
   add('method',     d.method);
   add('issuer',     d.issuer);
   add('issuedAt',   d.issuedAt);
@@ -2099,52 +2181,66 @@ function setFp(id, st, em='🫆') {
   el.className = 'fpr ' + ({scanning:'sc',success:'ok',error:'er'}[st]||'');
   el.textContent = {scanning:'🫆',success:'✅',error:'❌'}[st] || em;
 }
-function updateHeaders(h, actor, status, role, level, score, token, age) {
+// v0.5: the trust score and role are NEVER rendered to the user. The panel shows
+// only the confirmed verification METHODS (the official HHTTPS-* fields) + age.
+// opts = { human, actorType, status, verifiedMethods:[], domain, age:{group,verified,method}, token }
+// Tolerant of being called with no/garbage args (legacy callers) — never throws.
+function updateHeaders(opts) {
+  const o = (opts && typeof opts === 'object' && !Array.isArray(opts)) ? opts : {};
+  const human   = !!o.human;
+  const actor   = o.actorType || (human ? 'human' : 'unknown');
+  const status  = o.status || (human ? 'verified' : 'unverified');
+  const methods = Array.isArray(o.verifiedMethods) ? o.verifiedMethods : [];
+  const domain  = o.domain || null;
+  const token   = o.token || null;
+  const a       = o.age || {};
+  const has     = m => methods.includes(m);
+
   const hv = (id, v, cls) => {
     const el = document.getElementById(id);
-    el.textContent = v; el.className = 'hv ' + (cls||'m');
+    if (!el) return;
+    el.textContent = v; el.className = 'hv ' + (cls || 'm');
   };
-  hv('hHuman',  String(h),  h?'g':'m');
-  hv('hActor',  actor,      actor==='human'?'g':'m');
-  hv('hStatus', status,     status==='verified'?'g':'m');
-  hv('hRole',   role||'—',  role?'a':'m');
-  hv('hLevel',  level||'—', level?'a':'m');
-  hv('hScore',  score||'0', +score>60?'g':+score>30?'a':'m');
-  hv('hToken',  token ? token.slice(0,20)+'…' : '—', token?'c':'m');
 
-  // Age headers — shown only when an age group is present. age_verified flips
-  // green once cryptographically verified (EUDI), amber while self-declared, so
-  // the verification is visible directly, not only inferable from the score.
+  // Response Headers column
+  hv('hHuman',   String(human), human ? 'g' : 'm');
+  hv('hActor',   actor,         actor === 'human' ? 'g' : 'm');
+  hv('hStatus',  status,        status === 'verified' ? 'g' : 'm');
+  hv('hMethods', methods.length ? methods.join(',') : '—', methods.length ? 'g' : 'm');
+  hv('hmEmail',   String(has('email')),   has('email')   ? 'g' : 'm');
+  hv('hmPasskey', String(has('passkey')), has('passkey') ? 'g' : 'm');
+  hv('hmGithub',  String(has('github')),  has('github')  ? 'g' : 'm');
+  hv('hmEudi',    String(has('eudi')),    has('eudi')    ? 'g' : 'm');
+
+  const domLine = document.getElementById('hmDomainLine');
+  if (domLine) {
+    if (has('domain') && domain) { domLine.style.display = ''; hv('hmDomain', domain, 'c'); }
+    else domLine.style.display = 'none';
+  }
+
+  // Age lines — shown only when an age group is present (orthogonal, trust-neutral).
   const ageLine = (lineId, valId, val, cls) => {
     const line = document.getElementById(lineId);
     if (!line) return;
     if (val === null || val === undefined || val === '') { line.style.display = 'none'; return; }
-    line.style.display = '';
-    hv(valId, String(val), cls);
+    line.style.display = ''; hv(valId, String(val), cls);
   };
-  const a = age || {};
-  ageLine('hAgeGroupLine',    'hAgeGroup',    a.group || null,  a.group ? 'a' : 'm');
+  ageLine('hAgeGroupLine',    'hAgeGroup',    a.group || null, a.group ? 'a' : 'm');
   ageLine('hAgeVerifiedLine', 'hAgeVerified', (a.group ? String(a.verified === true) : null), a.verified === true ? 'g' : 'a');
   ageLine('hAgeMethodLine',   'hAgeMethod',   a.method || null, a.verified === true ? 'g' : 'm');
 
-  hv('bHuman',  String(h),  h?'g':'m');
-  hv('bActor',  actor,      actor==='human'?'g':'m');
-  const rl = ROLES_LOCAL[role];
-  hv('bRole',   role||'—',  role?'a':'m');
-  hv('bLabel',  rl?rl.label+'  '+rl.icon:'—', role?'c':'m');
-  hv('bLvl',    level||'—', level?'a':'m');
-  hv('bScore',  score||'—', +score>60?'g':+score>30?'a':'m');
-  hv('bPriv',   role ? '→ '+ROLES_LOCAL[role]?.label+' Privilegien' : '—', role?'c':'m');
+  hv('hToken', token ? token.slice(0, 20) + '…' : '—', token ? 'c' : 'm');
+
+  // JSON Body column
+  hv('bHuman',   String(human), human ? 'g' : 'm');
+  hv('bActor',   actor,         actor === 'human' ? 'g' : 'm');
+  hv('bMethods', methods.length ? '[' + methods.map(m => '"' + m + '"').join(',') + ']' : '[]', methods.length ? 'g' : 'm');
 }
 function setTrust(score) {
-  document.getElementById('trustVal').textContent = score + ' / 100';
-  const f = document.getElementById('trustFill');
-  f.style.width = score + '%';
-  f.style.background = score >= 80
-    ? 'linear-gradient(90deg,var(--green),#00ff88)'
-    : score >= 60
-      ? 'linear-gradient(90deg,var(--blue),var(--cyan))'
-      : 'linear-gradient(90deg,var(--red),var(--amber))';
+  // v0.5: the trust score is API-only and is NEVER shown to the user. Kept as a
+  // null-safe no-op so any legacy caller does not throw.
+  const el = document.getElementById('trustVal'); if (el) el.textContent = '';
+  const f  = document.getElementById('trustFill'); if (f) f.style.width = '0%';
 }
 function showTab(id) {
   document.querySelectorAll('.atab').forEach((t,i) => {
@@ -2157,18 +2253,25 @@ function showTab(id) {
 
 // ── Build role grid ────────────────────────────────────────────────────────
 function buildRoleGrid() {
-  const g = document.getElementById('roleGrid');
-  g.innerHTML = Object.entries(ROLES_LOCAL).map(([id, r]) => `
-    <div class="role-card" id="rc-${id}" onclick="selectRole('${id}')">
-      <div class="ri">${r.icon}</div>
-      <div class="rl">${r.label}</div>
-    </div>
-  `).join('');
+  // v0.5: roles are no longer self-selected. The 14-card grid is gone. Instead we
+  // initialise the OPTIONAL verification methods and enable token issuance — the
+  // base identity is simply "human". A professional role arrives only via EUDI EAA.
+  const g = document.getElementById('roleGrid'); if (g) g.innerHTML = '';
+  selRole = null; selVMethod = 'self-declared'; vData = {};
+  const opts = document.getElementById('veriOpts');
+  if (opts) {
+    opts.innerHTML = ['github-verified','eudi-eid'].map(m => {
+      const label = VMETHOD_LABELS[m]?.l || m;
+      return `<div class="vopt" role="tab" tabindex="0" aria-selected="false" data-method="${m}" onclick="selectVMethod(null,'${m}',event)" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectVMethod(null,'${m}',event)}">${label}</div>`;
+    }).join('');
+  }
+  const slot = document.getElementById('veriSlot'); if (slot) slot.innerHTML = '';
 }
 
 // Build role table
 function buildRoleTable() {
   const t = document.getElementById('roleTableFull');
+  if (!t) return;  // v0.5: role catalogue removed
   t.innerHTML = `<tr><th>${tr('roletable.role')}</th><th>ID</th><th>${tr('roletable.methods')}</th></tr>` +
     Object.entries(ROLES_LOCAL).map(([id, r]) => `
       <tr>
@@ -2257,7 +2360,7 @@ function selectVMethod(roleId, method, evt) {
       // Re-login: already verified, show confirmation instead of the button
       slot.innerHTML = `
         <div class="verify-badge-row verify-badge-github" style="display:block;">
-          ${tr('slot.ghAlready1')} ${__githubAlreadyVerified}/100.
+          ${tr('slot.ghAlready1')}.
           <span style="display:block;margin-top:6px;color:var(--text-muted-strong);font-size:12px;">
             ${tr('slot.ghAlready2')}
           </span>
@@ -2275,6 +2378,16 @@ function selectVMethod(roleId, method, evt) {
         </button>
         <div class="msg" id="githubMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
     }
+  } else if (method === 'eudi-eid') {
+    slot.innerHTML = `
+      <p style="font-size:13px;color:var(--text-muted-strong);margin-bottom:14px;line-height:1.65;">${tr('eid.intro')}</p>
+      <button class="btn btn-c" id="btnEudiEid" type="button" onclick="startEudiEid()" style="background:linear-gradient(135deg,#5B8DEF,#3B6FD4);border-color:#5B8DEF;">${tr('eid.btn')}</button>
+      <div id="eidQrBox" style="display:none;margin-top:14px;text-align:center;">
+        <img id="eidQr" alt="EUDI QR" style="width:180px;height:180px;border-radius:8px;background:#fff;padding:8px;">
+        <div style="margin-top:8px;"><a id="eidDeepLink" href="#" style="color:var(--cyan);font-size:13px;">${tr('eudi.deeplink')}</a></div>
+        <div id="eidStatus" style="margin-top:8px;font-size:13px;color:var(--text-muted-strong);"></div>
+      </div>
+      <div class="msg" id="eidMsg" style="margin-top:8px;margin-bottom:0;"></div>`;
   } else if (vm?.field) {
     // Generic field-based verification (press-card, student-id, association-member, etc.)
     slot.innerHTML = `
@@ -2357,7 +2470,7 @@ async function doAuth() {
     }
     setFp(2,'success'); live('on',tr('live.verified'));
     let loginMsg = tr('msg.humanProven');
-    if (d2.githubVerified) loginMsg = tr('msg.loginGithub1') + d2.githubTrustScore + tr('msg.loginGithub2');
+    if (d2.githubVerified) loginMsg = tr('msg.loginGithub1');
     msg(loginMsg,'s');
     buildRoleGrid();
     setTimeout(() => setStep(3), 600);
@@ -2421,11 +2534,9 @@ async function doDeclarRole() {
       `<span style="color:var(--red)">${parts[0]}</span>.` +
       `<span style="color:var(--cyan)">${parts[1]}</span>.` +
       `<span style="color:var(--green)">${parts[2]}</span>`;
-    document.getElementById('tkBadge').textContent = `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
+    document.getElementById('tkBadge').textContent = '✓ Human · HHTTPS-Token';
     document.getElementById('tcH').textContent = 'true ✓';
-    document.getElementById('tcR').textContent = rl.icon+' '+selRole;
-    document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
-    document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+    { const tcM = document.getElementById('tcMethods'); if (tcM) tcM.textContent = (d.hhttps.verifiedMethods || []).join(', ') || '—'; }
 
     // Optional age group (orthogonal claim, self-declared in Phase 1)
     if (d.ageGroup && d.ageGroup.id) {
@@ -2436,11 +2547,11 @@ async function doDeclarRole() {
       document.getElementById('tcAgeWrap').style.display = 'none';
     }
 
-    updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
+    updateHeaders({ human:true, actorType:'human', status:'verified', verifiedMethods:(d.hhttps.verifiedMethods||[]), token:hhttpsToken });
     document.getElementById('btnCheck').disabled = false;
     live('on',tr('live.tokenActive'));
     msg('✓ '+d.message,'s');
-    setStep(4);
+    setStepEF(2);
   } catch(e) {
     msg('Fehler: '+e.message,'e');
     btn.disabled = false;
@@ -2552,11 +2663,16 @@ async function doCheck() {
     });
     const d = await r.json();
 
-    // Update response preview
-    updateHeaders(d.hhttps.human, d.hhttps.actorType, d.hhttps.status,
-      d.role?.id, d.role?.level, d.hhttps.trustScore, hhttpsToken,
-      d.ageGroup ? { group: d.ageGroup.id, verified: d.ageGroup.verified === true,
-                     method: d.ageGroup.method || null } : null);
+    // Update response preview (v0.5: methods, not role/score)
+    const methods = d.hhttps?.verifiedMethods || (d.verification?.methods || []).map(m => m.id);
+    const domainVal = (d.verification?.methods || []).find(m => m.id === 'domain')?.value || null;
+    updateHeaders({
+      human: d.hhttps.human, actorType: d.hhttps.actorType, status: d.hhttps.status,
+      verifiedMethods: methods, domain: domainVal,
+      age: d.ageGroup ? { group: d.ageGroup.id, verified: d.ageGroup.verified === true,
+                          method: d.ageGroup.method || null } : null,
+      token: hhttpsToken
+    });
 
     // Update sample response tab
     document.getElementById('sampleResponse').textContent =
@@ -2566,7 +2682,7 @@ async function doCheck() {
         .replace(/: (true|false)/g, ': <span class="cv">$1</span>')
         .replace(/: (\d+)/g, ': <span class="cv">$1</span>');
 
-    msg('✓ /hhttps/check: human='+d.hhttps.human+', role='+d.role?.label,'s');
+    msg('✓ /hhttps/check: human='+d.hhttps.human+' · '+((d.hhttps?.verifiedMethods||[]).join(', ') || '—'),'s');
     showTab('response');
   } catch(e) {
     msg('Fehler: '+e.message,'e');
@@ -2600,8 +2716,7 @@ function previewEmailDomain(email) {
   if (!el) return;
   if (!email.includes('@')) { el.textContent=''; return; }
   const h = getDomainHint(email);
-  el.innerHTML = `<span style="color:var(--amber)">${tr(h.t)}</span> → Trust Score: <strong style="color:var(--cyan)">${h.s}/100</strong>`;
-  if (selRole) setTrust(Math.max(60, h.s));
+  el.innerHTML = `<span style="color:var(--amber)">${tr(h.t)}</span>`;
 }
 
 async function doSendEmail() {
@@ -2654,10 +2769,9 @@ async function checkEmailStatus() {
     if (badge) {
       badge.style.display = 'block';
       badge.textContent =
-        `✓ ${d.emailDomain} verifiziert · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
+        `✓ ${d.emailDomain} verifiziert · ${d.emailLevel}`;
     }
-    setTrust(Math.max(60, d.trustBonus || 65));
-    msgEmail(`✓ E-Mail-Domain "${d.emailDomain}" verifiziert! Trust Score: ${d.trustBonus}/100`,'s');
+    msgEmail(`✓ E-Mail-Domain "${d.emailDomain}" verifiziert!`,'s');
     const btn = document.getElementById('btnDeclare');
     if (btn) btn.innerHTML = tr('btn.declareEmail');
   }
@@ -2859,8 +2973,7 @@ window.addEventListener('load', () => {
     // Restore state
     document.getElementById('emailVerifiedBadge').style.display = 'block';
     document.getElementById('emailVerifiedBadge').textContent =
-      `✓ ${domain} verifiziert · ${level} · Trust Score: ${score}/100`;
-    setTrust(Math.max(60, score));
+      `✓ ${domain} verifiziert · ${level}`;
     buildRoleGrid();
     setStep(3);
     msg(tr('msg.emailConfirmed'),'s');
@@ -2934,17 +3047,12 @@ function startGithubVerify() {
 
 function onGithubVerified(score) {
   const badge = document.getElementById('githubVerifiedBadge');
-  if (badge) {
-    const v = document.getElementById('githubTrustValue');
-    if (v) v.textContent = score + '/100';
-    badge.style.display = 'block';
-  }
+  if (badge) badge.style.display = 'block';
   const btn = document.getElementById('btnGithubVerify');
   if (btn) { btn.disabled = true; btn.textContent = '✓ GitHub verifiziert'; }
   const ghMsg = document.getElementById('githubMsg');
-  if (ghMsg) { ghMsg.className = 'msg show s'; ghMsg.textContent = tr('gh.confirmedPre') + ' ' + score + '/100.'; }
-  setTrust(Math.max(60, score));
-  msg(tr('gh.confirmedPre') + ' ' + score + '/100.', 's');
+  if (ghMsg) { ghMsg.className = 'msg show s'; ghMsg.textContent = tr('gh.confirmedPre'); }
+  msg(tr('gh.confirmedPre'), 's');
 }
 
 // Poll for email verification every 5 seconds when on step 3
@@ -2964,6 +3072,11 @@ window.setStep = function(n) {
 // Enthält: Pseudonym aus Input, ageGroup, korrekte Token-Phase
 window.doDeclarRole = async function() {
   const btn = document.getElementById('btnDeclare');
+  // Email is the sign-in gate. Never call declare before the address is confirmed.
+  if (!window._emailConfirmed) {
+    msg('Bitte zuerst deine E-Mail bestätigen — gib den 6-stelligen Code ein.', 'e');
+    return;
+  }
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> ' + tr('btn.issuing');
   live('pend', tr('live.issuing'));
 
@@ -2981,16 +3094,26 @@ window.doDeclarRole = async function() {
   }
 
   try {
-    const r = await fetch('/hhttps/role/declare', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionId,
-        role:               selRole,
-        verificationMethod: selVMethod,
-        verificationData:   vData,
-        ageGroup:           selAgeGroup || undefined,
-      })
+    const declareBody = (sid) => JSON.stringify({
+      sessionId:          sid,
+      role:               selRole,
+      verificationMethod: selVMethod,
+      verificationData:   vData,
+      ageGroup:           selAgeGroup || undefined,
     });
+    let r = await fetch('/hhttps/role/declare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: declareBody(sessionId)
+    });
+    // Safety net: if a passkey-merged session lost the email flag, retry once
+    // with the original email-verified session handle.
+    if (r.status === 403 && typeof _emailSessionId !== 'undefined' && _emailSessionId && _emailSessionId !== sessionId) {
+      const r2 = await fetch('/hhttps/role/declare', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: declareBody(_emailSessionId)
+      });
+      if (r2.ok) { sessionId = _emailSessionId; r = r2; }
+    }
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
 
@@ -3020,14 +3143,12 @@ window.doDeclarRole = async function() {
       `<span style="color:var(--cyan)">${parts[1]}</span>.` +
       `<span style="color:var(--green)">${parts[2]}</span>`;
 
-    const badge = d.role.emailVerified
-      ? `✓ ${rl.icon} ${rl.label} · E-Mail ✉ verifiziert`
-      : `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
-    document.getElementById('tkBadge').textContent = badge;
+    const pseudo = (document.getElementById('pseudonymInput')?.value || d.verification?.pseudonym || '').trim();
+    const pseudoTag = pseudo ? ' · ' + pseudo : '';
+    const emailDone = (d.hhttps.verifiedMethods || []).includes('email') || d.verification?.emailVerified;
+    document.getElementById('tkBadge').textContent = '✓ Human' + pseudoTag + (emailDone ? ' · E-Mail ✉ verifiziert' : ' · HHTTPS-Token');
     document.getElementById('tcH').textContent = 'true ✓';
-    document.getElementById('tcR').textContent = rl.icon + ' ' + selRole;
-    document.getElementById('tcT').textContent = d.hhttps.trustScore + '/100';
-    document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+    { const tcM = document.getElementById('tcMethods'); if (tcM) tcM.textContent = (d.hhttps.verifiedMethods || []).join(', ') || '—'; }
 
     // Altersgruppe (falls vorhanden) — Group, Verified-Status und Methode,
     // damit die Verifikation sichtbar ist (nicht nur am Trust-Score ablesbar).
@@ -3057,24 +3178,15 @@ window.doDeclarRole = async function() {
       });
     }
 
-    updateHeaders(true, 'human', 'verified', selRole, d.role.level, d.hhttps.trustScore, hhttpsToken, ageHdr);
+    updateHeaders({ human:true, actorType:'human', status:'verified', verifiedMethods:(d.hhttps.verifiedMethods||[]), age:ageHdr, token:hhttpsToken });
     document.getElementById('btnCheck').disabled = false;
     live('on', tr('live.tokenActive'));
     msg('✓ ' + d.message, 's');
 
     // Token-Phase anzeigen — p5 im Email-First, p4 im Original-Flow
-    // Einheitlich: immer setStepEF(5) wenn p5 existiert, sonst setStep(4)
-    if (document.getElementById('p5')) {
-      setStepEF(5);
-    } else {
-      setStep(4);
-    }
+    setStepEF(2);
 
-    // Auto-reveal the EUDI verification panel in Phase 5 if an EUDI-verifiable
-    // age band (14/16/18) was chosen. No manual button in Phase 4 anymore, and
-    // the QR appears immediately (no click) — the threshold button only serves
-    // to re-poll if the session expires.
-    try { showEudiPanel(true); } catch(e){}
+    // EUDI age panel is shown on screen 2 with direct 14+/16+/18+ buttons.
 
   } catch(e) {
     msg('Fehler: ' + e.message, 'e');
@@ -3104,6 +3216,106 @@ function setStepEF(n) {
   });
   // Email-Polling: nur in Phase 1 aktiv, bei allen anderen stoppen
   if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
+
+// v0.5: reveal the optional extras (pseudonym + passkey) on screen 1 and enable
+// token issuance — called once the e-mail is confirmed. We stay on screen 1.
+function revealExtras() {
+  const ex = document.getElementById('extrasRow'); if (ex) ex.style.display = '';
+  const bd = document.getElementById('btnDeclare'); if (bd) bd.disabled = false;
+}
+
+// v0.5: re-hydrate a stored identity on page refresh so the token does not vanish.
+function restoreTokenScreen(id) {
+  try {
+    window._emailConfirmed = true;
+    hhttpsToken = id.token;
+    if (typeof buildRoleGrid === 'function') buildRoleGrid();
+    const methods = id.verifiedMethods || [];
+    const tcH = document.getElementById('tcH'); if (tcH) tcH.textContent = 'true ✓';
+    const tcM = document.getElementById('tcMethods'); if (tcM) tcM.textContent = methods.length ? methods.join(', ') : '—';
+    const pseudo = (id.pseudonym || '').trim();
+    const tkBadge = document.getElementById('tkBadge'); if (tkBadge) tkBadge.textContent = '✓ Human' + (pseudo ? ' · ' + pseudo : '') + ' · HHTTPS-Token';
+    const parts = (hhttpsToken || '').split('.');
+    const tkRaw = document.getElementById('tkRaw');
+    if (tkRaw && parts.length === 3) tkRaw.innerHTML =
+      `<span style="color:var(--red)">${parts[0]}</span>.<span style="color:var(--cyan)">${parts[1]}</span>.<span style="color:var(--green)">${parts[2]}</span>`;
+    if (id.ageGroup && id.ageGroup.id) {
+      const tcAge = document.getElementById('tcAge'); if (tcAge) tcAge.textContent = (id.ageGroup.label || id.ageGroup.id) + (id.ageGroup.verified ? ' ✓' : '');
+      const w = document.getElementById('tcAgeWrap'); if (w) w.style.display = '';
+    }
+    if (typeof updateHeaders === 'function') updateHeaders({ human:true, actorType:'human', status:'verified', verifiedMethods:methods, token:hhttpsToken });
+    const bc = document.getElementById('btnCheck'); if (bc) bc.disabled = false;
+    if (typeof updateTokenExpiryHint === 'function') updateTokenExpiryHint();
+    setStepEF(2);
+  } catch (e) {}
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const id = (typeof getStoredIdentity === 'function') ? getStoredIdentity() : null;
+    if (id && id.token) {
+      const st = (typeof getTokenLifecycleState === 'function') ? getTokenLifecycleState() : { state: 'active' };
+      if (st.state !== 'expired') restoreTokenScreen(id);
+    }
+  } catch (e) {}
+});
+
+// ── Machine / AI identity (WIMSE workload identity) ──────────────────────────
+function machineMsg(text, type) {
+  const el = document.getElementById('machineMsg');
+  if (!el) return; el.className = 'msg show ' + (type || 'i'); el.textContent = text;
+}
+let _machineCreds = null;
+async function registerMachine() {
+  const name    = (document.getElementById('mOperatorName')?.value || '').trim();
+  const purpose = (document.getElementById('mPurpose')?.value || '').trim();
+  const url     = (document.getElementById('mUrl')?.value || '').trim();
+  const contact = (document.getElementById('mContact')?.value || '').trim();
+  if (!name || !purpose) { machineMsg('Bitte Name und Zweck angeben.', 'e'); return; }
+  const btn = document.getElementById('btnMachineReg');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Registriere…';
+  try {
+    const r = await fetch('/hhttps/machine/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operatorName: name, purpose, operatorUrl: url || undefined, contactEmail: contact || undefined })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || d.detail || 'Registrierung fehlgeschlagen.');
+    _machineCreds = { operatorId: d.operatorId, apiKey: d.apiKey };
+    const oid = document.getElementById('mOpId'); if (oid) oid.textContent = d.operatorId;
+    const key = document.getElementById('mApiKey'); if (key) key.textContent = d.apiKey;
+    const res = document.getElementById('machineResult'); if (res) res.style.display = '';
+    machineMsg('✓ Operator registriert — API-Key jetzt sichern.', 's');
+  } catch (e) {
+    machineMsg('Fehler: ' + e.message, 'e');
+  } finally {
+    btn.disabled = false; btn.innerHTML = tr('machine.register');
+  }
+}
+async function getMachineToken() {
+  if (!_machineCreds) { machineMsg('Bitte zuerst registrieren.', 'e'); return; }
+  const btn = document.getElementById('btnMachineToken');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Hole Token…';
+  try {
+    const r = await fetch('/hhttps/machine/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_machineCreds)
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Token-Ausstellung fehlgeschlagen.');
+    const parts = (d.token || '').split('.');
+    const raw = document.getElementById('mTokenRaw');
+    if (raw && parts.length === 3) raw.innerHTML =
+      `<span style="color:var(--red)">${parts[0]}</span>.<span style="color:var(--cyan)">${parts[1]}</span>.<span style="color:var(--green)">${parts[2]}</span>`;
+    else if (raw) raw.textContent = d.token || '';
+    const box = document.getElementById('machineTokenBox'); if (box) box.style.display = '';
+    machineMsg('✓ Maschinen-Token ausgestellt (actorType: bot).', 's');
+  } catch (e) {
+    machineMsg('Fehler: ' + e.message, 'e');
+  } finally {
+    btn.disabled = false; btn.innerHTML = tr('machine.getToken');
+  }
 }
 
 // Override setStep damit bestehende Callbacks (doRegister etc.) weiterhin funktionieren
@@ -3140,7 +3352,7 @@ function previewEmailDomain1(email) {
   // Account trust = 30 (email baseline) + domain bonus. Passkey is separate (+30).
   const total = 30 + (h.s || 0);
   const bonusTxt = h.s > 0 ? ' <span style="color:var(--muted)">(30 + ' + h.s + ')</span>' : '';
-  el.innerHTML = '<span style="color:var(--amber)">' + tr(h.t) + '</span> → Trust: <strong style="color:var(--cyan)">' + total + '/100</strong>' + bonusTxt;
+  el.innerHTML = '<span style="color:var(--amber)">' + tr(h.t) + '</span>';
 }
 
 // Pseudonym Live-Preview
@@ -3149,7 +3361,7 @@ function updatePseudonymPreview(val) {
   if (!el) return;
   const clean = val.replace(/[^\w\-. äöüÄÖÜß]/gu,'').slice(0,32).trim();
   if (clean) {
-    el.innerHTML = 'Kennung: <code style="color:var(--cyan)">hmn:' + clean + ':…</code> (+5 Trust)';
+    el.innerHTML = 'Kennung: <code style="color:var(--cyan)">hmn:' + clean + ':…</code>';
   } else {
     el.textContent = '';
   }
@@ -3249,12 +3461,11 @@ async function doVerifyEmailCode() {
     if (_efPollTimer) { clearInterval(_efPollTimer); _efPollTimer = null; }
 
     inp.disabled = true; btn.innerHTML = '✓ Bestätigt';
-    msgEl('emailMsg1', '✓ E-Mail bestätigt! Trust: ' + d.accountTrust + '/100', 's');
+    msgEl('emailMsg1', '✓ E-Mail bestätigt!', 's');
     live('on', tr('live.verified'));
+    window._emailConfirmed = true;
     buildRoleGrid();
-
-    // Advance to the next step (pseudonym).
-    setTimeout(() => { if (typeof setStepEF === 'function') setStepEF(2); }, 500);
+    revealExtras();
   } catch (e) {
     msgEl('emailMsg1', 'Fehler: ' + e.message, 'e');
     btn.disabled = false; btn.innerHTML = '✓ Bestätigen';
@@ -3289,10 +3500,11 @@ async function checkEmailStatusEF() {
   const d = await r.json();
   if (d.emailVerified) {
     if (_efPollTimer) { clearInterval(_efPollTimer); _efPollTimer = null; }
-    msgEl('emailMsg1', '✓ E-Mail bestätigt! Trust Score: ' + d.trustBonus + '/100', 's');
+    msgEl('emailMsg1', '✓ E-Mail bestätigt!', 's');
     live('on', tr('live.verified'));
+    window._emailConfirmed = true;
     buildRoleGrid();
-    setStepEF(2); // weiter zu Pseudonym + Alter
+    revealExtras();
   }
 }
 
@@ -3303,8 +3515,9 @@ window.addEventListener('load', () => {
   const p = new URLSearchParams(location.search);
   if (p.get('verified_session')) {
     sessionId = p.get('verified_session');
+    window._emailConfirmed = true;
     buildRoleGrid();
-    setStepEF(4); // direkt zur Rollen-Phase
+    revealExtras();
     msgEl('emailMsg1', tr('msg.emailConfirmed'), 's');
     history.replaceState({}, '', '/');
   }
@@ -3363,9 +3576,9 @@ async function doPasskeyOptional() {
 
     fpr.className = 'fpr ok';
     btn.innerHTML = '✓ Passkey registriert & verifiziert';
-    msgEl('msgPasskey3', '✓ Passkey OK — Trust Score jetzt 60 (E-Mail + Passkey)', 's');
+    msgEl('msgPasskey3', '✓ Passkey hinzugefügt — als Mensch bestätigt.', 's');
     live('on', 'passkey + email ✓');
-    setTimeout(() => setStepEF(4), 600);
+    // passkey done — stay on screen 1; the token can now be issued
   } catch(e) {
     fpr.className = 'fpr er';
     msgEl('msgPasskey3', 'Fehler: ' + e.message, 'e');
@@ -3373,9 +3586,7 @@ async function doPasskeyOptional() {
   }
 }
 
-function skipPasskeyOpt() {
-  setStepEF(4); // direkt zur Rolle ohne Passkey
-}
+function skipPasskeyOpt() { /* no-op: passkey is inline on screen 1 now */ }
 
 // Pseudonym bei role/declare mitschicken (als verificationData.pseudonym)
 // → role/declare schreibt es als pseudonym-Claim in den Token

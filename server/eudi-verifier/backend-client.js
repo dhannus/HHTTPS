@@ -44,6 +44,16 @@ const AUTH_SCHEME   = process.env.EUDI_AUTH_SCHEME    || 'openid4vp://';
 // created manually during bring-up; the others are created on first request.)
 const CONFIG_PREFIX = process.env.EUDIPLO_CONFIG_PREFIX || 'age-over-';
 
+// eID identity verification (v0.5): a SEPARATE, orthogonal PID presentation that
+// proves "this holder presented a valid state PID" → the +40 `eudi` method. We
+// request a single NON-identifying PID attribute purely to trigger a validated
+// presentation; the value is never read or stored (zero-PII). The proof is the
+// validated presentation itself. Both the config id and the claim are env-tunable.
+// **CONFIRM**: the exact minimal claim the German sandbox discloses — success
+// relies on the EUDIPLO session reaching a terminal state, not on the value.
+const EID_CONFIG_ID = process.env.EUDIPLO_EID_CONFIG_ID || 'eid-identity';
+const EID_CLAIM     = process.env.EUDI_EID_CLAIM        || 'issuing_country';
+
 const DEBUG = process.env.EUDI_DEBUG === '1';
 
 // ── Token (client-credentials, cached, re-auth on expiry) ────────────────────
@@ -146,6 +156,62 @@ export async function initTransaction(minAge) {
   if (!r.ok) {
     const text = await r.text().catch(() => '');
     throw new Error(`EUDIPLO offer failed (${r.status}): ${text.slice(0, 200)}`);
+  }
+  const data = await r.json(); // { uri, crossDeviceUri, session }
+  return {
+    transaction_id: data.session,
+    nonce: null,
+    uri: data.uri,
+    crossDeviceUri: data.crossDeviceUri
+  };
+}
+
+// ── 1b. eID identity transaction (orthogonal PID presentation) ───────────────
+
+// DCQL requesting one NON-identifying PID attribute, purely to obtain a validated
+// PID presentation. The value is never read (zero-PII) — see EID_CLAIM note above.
+function buildPidDcqlQuery() {
+  return {
+    credentials: [
+      {
+        id: 'pid',
+        format: 'mso_mdoc',
+        meta: { doctype_value: AV_DOCTYPE },
+        claims: [{ path: [AV_DOCTYPE, EID_CLAIM] }]
+      }
+    ]
+  };
+}
+
+async function ensureEidConfig() {
+  const id = EID_CONFIG_ID;
+  if (ensuredConfigs.has(id)) return id;
+  const r = await authed('/verifier/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      id,
+      description: 'HHTTPS EUDI identity (PID presentation)',
+      dcql_query: buildPidDcqlQuery()
+    })
+  });
+  if (r.ok) { ensuredConfigs.add(id); return id; }
+  const text = await r.text().catch(() => '');
+  if (r.status === 409 || /exist|duplicate|already/i.test(text)) { ensuredConfigs.add(id); return id; }
+  throw new Error(`EUDIPLO eid config create failed (${r.status}): ${text.slice(0, 200)}`);
+}
+
+// Init an eID identity presentation. Same offer mechanism as initTransaction;
+// poll the result with the SAME pollWalletResponse (a terminal session = a valid
+// PID presentation). Returns the index.js-compatible transaction shape.
+export async function initEidTransaction() {
+  const requestId = await ensureEidConfig();
+  const r = await authed('/verifier/offer', {
+    method: 'POST',
+    body: JSON.stringify({ response_type: 'uri', requestId })
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`EUDIPLO eid offer failed (${r.status}): ${text.slice(0, 200)}`);
   }
   const data = await r.json(); // { uri, crossDeviceUri, session }
   return {
