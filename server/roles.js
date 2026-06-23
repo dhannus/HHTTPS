@@ -12,8 +12,10 @@
  * verification methods, exposed in the JWT and the HHTTPS-Trust-Score header, and
  * is NEVER rendered in the UI (we do not rank the human — we only confirm methods).
  *
- * `ROLES` below is RETAINED as protocol vocabulary only: it is the canonical
- * target an EUDI role-EAA maps onto. It is no longer offered for self-selection.
+ * `ROLES` below is REDUCED to the single base identity `citizen` (the "verified
+ * human, no role" floor). Professions are no longer hard-coded — they resolve
+ * dynamically via ./roles.taxonomy.js (ESCO) and arrive only as an EUDI (Q)EAA
+ * or an HHTTPS-issued iamhmn-card. It is no longer offered for self-selection.
  *
  * CANONICAL LANGUAGE: English.
  * This module is the protocol layer. Every human-readable string here is the
@@ -41,10 +43,17 @@
  *   official-email → 90 · eudi-wallet-role → 95 · bundestag → 98
  */
 
+// ─── Base identity vocabulary (v0.5: ESCO-only) ───────────────────────────────
+//
+// v0.5: there is NO fixed catalogue of professions any more. A professional role
+// is resolved dynamically against ESCO (see roles.taxonomy.resolveRole) and
+// arrives ONLY as an EUDI (Q)EAA or an HHTTPS-issued iamhmn-card. The 14
+// hard-coded professions were removed.
+//
+// ROLES retains exactly ONE entry: `citizen` — the base "verified human" identity
+// that is the default fallback across the codebase (`ROLES[x] || ROLES.citizen`).
+// It is not a profession; it is the floor of "a human, no specific role".
 export const ROLES = {
-
-  // ─── Basic / Universal ─────────────────────────────────────────────────────
-
   citizen: {
     id: 'citizen', label: 'Citizen', icon: '🧑',
     description: 'Verified human with no specific professional role.',
@@ -55,239 +64,6 @@ export const ROLES = {
       'Right to anonymous communication carrying an HHTTPS marker'
     ],
     userStory: 'US-001: As a citizen, I want to be able to prove that I am a human without revealing my identity.'
-  },
-
-  // ─── Media & Public Discourse ──────────────────────────────────────────────
-
-  journalist: {
-    id: 'journalist', label: 'Journalist', icon: '📰',
-    description: 'Member of the press with journalistic privileges in the digital sphere.',
-    verificationMethods: ['self-declared', 'press-card', 'email-verified'],
-    verificationHints: {
-      'press-card':     'Press-card number (DJV, dju, VDZ)',
-      'email-verified': 'Editorial / newsroom email address'
-    },
-    privileges: [
-      'Access to HHTTPS-protected press areas',
-      'Verified attribution of sources in digital publications',
-      'Protection against AI impersonation as a journalist'
-    ],
-    userStory: 'US-012: As a journalist, I want to be able to verify that my digital identity is not compromised by AI deepfakes.'
-  },
-
-  // ─── Education ─────────────────────────────────────────────────────────────
-
-  student: {
-    id: 'student', label: 'Student', icon: '🎓',
-    description: 'Pupil or student at an educational institution.',
-    verificationMethods: ['self-declared', 'email-verified', 'student-id'],
-    verificationHints: {
-      'email-verified': 'Educational email (.edu, .ac.de, uni-*, hs-*, fh-*)',
-      'student-id':     'Matriculation number + institution'
-    },
-    privileges: [
-      'Access to HHTTPS-protected educational platforms',
-      'Verified participation in online examinations',
-      'Protection against AI-generated exam answers submitted by peers'
-    ],
-    userStory: 'US-023: As a student, I want my online exam submissions to be unambiguously marked as originating from me.'
-  },
-
-  teacher: {
-    id: 'teacher', label: 'Teacher', icon: '👨‍🏫',
-    description: 'Schoolteacher or pedagogical professional.',
-    verificationMethods: ['self-declared', 'school-email', 'teacher-id'],
-    verificationHints: {
-      'school-email': 'School email (.schule.[state].de, *.bbs.*)',
-      'teacher-id':   'State-issued teacher ID'
-    },
-    privileges: [
-      'Verified parent–teacher communication',
-      'Authentic announcements, grades, and report cards',
-      'Protection against fake teacher identities in school chats'
-    ],
-    userStory: 'US-089: As a teacher, I want parents to reliably recognise that a message genuinely comes from me — not from an AI in the school chat.'
-  },
-
-  // ─── Professionals: Knowledge & Creative ───────────────────────────────────
-
-  researcher: {
-    id: 'researcher', label: 'Researcher', icon: '🔬',
-    description: 'Researcher, professor, or academic staff member.',
-    verificationMethods: ['self-declared', 'email-verified', 'orcid'],
-    verificationHints: {
-      'email-verified': 'University email (.uni-*, .tu-*, .lmu.de, etc.)',
-      'orcid':          'ORCID identifier (https://orcid.org/...)'
-    },
-    privileges: [
-      'Verified authorship of academic publications',
-      'HHTTPS proof for peer-review processes',
-      'Protection of academic reputation against AI fakes'
-    ],
-    userStory: 'US-045: As a researcher, I want my publications to be unambiguously provable as authored by me.'
-  },
-
-  creative: {
-    id: 'creative', label: 'Creative Professional', icon: '🎭',
-    description: 'Artist, voice actor, author, musician, or other creative professional.',
-    verificationMethods: ['self-declared', 'association-member', 'email-verified'],
-    verificationHints: {
-      'association-member': 'Membership number (VDS, BFFS, Die Gilde, BSD, GEMA, VG Wort)'
-    },
-    privileges: [
-      "Protection of one's voice and face against unauthorised AI cloning",
-      'Proof of human authorship for AI-like works',
-      'Verified identity on creative platforms'
-    ],
-    userStory: 'US-034: As a voice actor, I want my voice not to be used for AI training without my consent.'
-  },
-
-  developer: {
-    id: 'developer', label: 'Developer', icon: '💻',
-    description: 'Software developer or technical professional.',
-    verificationMethods: ['self-declared', 'github-verified', 'email-verified'],
-    verificationHints: {
-      'github-verified': 'GitHub account with commit history'
-    },
-    privileges: [
-      'API access with raised rate limits',
-      'Access to HHTTPS test environments',
-      'Verified code authorship'
-    ],
-    userStory: 'US-056: As a developer, I want to integrate HHTTPS into my application and offer human verification to my users.'
-  },
-
-  // ─── Healthcare ────────────────────────────────────────────────────────────
-
-  medical_professional: {
-    id: 'medical_professional', label: 'Medical Professional', icon: '🩺',
-    description: 'Licensed physician, dentist, veterinarian, or pharmacist.',
-    verificationMethods: ['self-declared', 'approbation-id', 'medical-email'],
-    verificationHints: {
-      'approbation-id': 'Medical licence number (German Medical Association register)',
-      'medical-email':  'Practice or clinic email address'
-    },
-    privileges: [
-      'Verified medical information online',
-      'Protection against fake physicians in patient forums and telemedicine',
-      'Authentic telemedicine communication with patients'
-    ],
-    userStory: 'US-101: As a patient, I want to be sure that medical information online genuinely comes from a licensed physician — not from an AI or a layperson.'
-  },
-
-  caregiver: {
-    id: 'caregiver', label: 'Care Professional', icon: '🤝',
-    description: 'Certified care professional, geriatric nurse, registered nurse, or therapeutic professional.',
-    verificationMethods: ['self-declared', 'care-chamber-id', 'email-verified'],
-    verificationHints: {
-      'care-chamber-id': 'Care-chamber membership number (NRW, Lower Saxony, RLP)',
-      'email-verified':  'Clinic or care-facility email'
-    },
-    privileges: [
-      'Verified communication with patients and relatives',
-      'Protection against identity misuse on care platforms',
-      'Authentic information on care levels, benefits, and therapies'
-    ],
-    userStory: 'US-102: As a caring relative, I want to reliably tell whether advice comes from genuine care staff — especially for vulnerable patients.'
-  },
-
-  // ─── Legal & Public Authority ──────────────────────────────────────────────
-
-  lawyer: {
-    id: 'lawyer', label: 'Attorney', icon: '⚖️',
-    description: 'Admitted attorney-at-law.',
-    verificationMethods: ['self-declared', 'bar-association-id', 'lawyer-email'],
-    verificationHints: {
-      'bar-association-id': 'Entry in the bar association register',
-      'lawyer-email':       'Law-firm email address'
-    },
-    privileges: [
-      'Verified legal advice in the digital sphere',
-      "Protection against AI-generated pseudo-legal advice in one's own name",
-      'Authentic client communication, attorney–client privilege made digital'
-    ],
-    userStory: 'US-103: As a client, I want to be sure that legal advice online comes from an admitted attorney — for life-changing legal questions.'
-  },
-
-  notary: {
-    id: 'notary', label: 'Notary', icon: '📜',
-    description: 'Appointed notary holding a public office.',
-    verificationMethods: ['self-declared', 'notary-chamber-id'],
-    verificationHints: {
-      'notary-chamber-id': 'Entry in the notary chamber register'
-    },
-    privileges: [
-      'Verified notarial information',
-      'HHTTPS authentication for digital notarisation',
-      'Highest trust level in matters of property law'
-    ],
-    userStory: 'US-104: As a citizen, I want to be sure during online notarisation that the notary is genuinely appointed and in office.'
-  },
-
-  civil_servant: {
-    id: 'civil_servant', label: 'Civil Servant', icon: '🏛️',
-    description: 'Civil servant, administrative staff member, or public authority (police, tax office, social services, etc.).',
-    verificationMethods: ['self-declared', 'official-email', 'service-id'],
-    verificationHints: {
-      'official-email': 'Government email (.bund.de, [state].de)',
-      'service-id':     'Service-ID number'
-    },
-    privileges: [
-      'Verified authority communication against phishing',
-      'Authentic notices, letters, and information',
-      "Protection against AI-generated false notices in an authority's name"
-    ],
-    userStory: 'US-105: As a citizen, I want to recognise whether an email genuinely comes from the tax office or social services — not from a phishing bot with a deceptively real layout.'
-  },
-
-  politician: {
-    id: 'politician', label: 'Politician', icon: '🗳️',
-    description: 'Elected representative or political office holder.',
-    verificationMethods: ['self-declared', 'official-email', 'bundestag-verified'],
-    verificationHints: {
-      'official-email':     'Official email (@bundestag.de, @landtag.*, @bundesregierung.de)',
-      'bundestag-verified': 'Member-of-parliament ID (Bundestag.de profile)'
-    },
-    privileges: [
-      'Verified political communication — no deepfake possible',
-      "Protection against AI-generated false statements in one's own name",
-      'Highest trust level on political discussion platforms'
-    ],
-    userStory: 'US-067: As a member of parliament, I want statements in my name to be unambiguously recognisable as authentic or as forgery.'
-  },
-
-  // ─── Business & Trades ─────────────────────────────────────────────────────
-
-  business: {
-    id: 'business', label: 'Business', icon: '🏢',
-    description: 'Company representative or legal entity with a human point of contact.',
-    verificationMethods: ['self-declared', 'domain-verified', 'handelsregister'],
-    verificationHints: {
-      'domain-verified': 'Company domain ownership',
-      'handelsregister': 'Commercial-register number (HRB/HRA)'
-    },
-    privileges: [
-      'Verified corporate communication',
-      'HHTTPS certificate for websites ("genuine human point of contact")',
-      "Protection against AI phishing in a company's name"
-    ],
-    userStory: 'US-078: As a business, I want to prove to my customers that communication comes from genuine employees.'
-  },
-
-  craftsman: {
-    id: 'craftsman', label: 'Skilled Tradesperson', icon: '🔧',
-    description: 'Master craftsperson, journeyman, or trade business.',
-    verificationMethods: ['self-declared', 'craft-chamber-id', 'master-certificate'],
-    verificationHints: {
-      'craft-chamber-id':   'Entry in the trade register (chamber of skilled crafts)',
-      'master-certificate': 'Master-craftsman certificate number'
-    },
-    privileges: [
-      'Verified tradesperson identity on comparison portals',
-      'Protection against fake reviews and identity theft',
-      'Authentic quotes and invoices'
-    ],
-    userStory: 'US-106: As a customer, I want to tell on tradesperson platforms whether a provider is genuinely a registered master craftsperson — not a fake profile with stolen images.'
   }
 };
 

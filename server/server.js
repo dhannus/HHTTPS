@@ -45,6 +45,13 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 
+// Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
+import {
+  resolveRole, resolveEsco, buildRoleClaim, sanitizeCustomRole,
+  guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery, CUSTOM_ROLE_ID
+} from './roles.taxonomy.js';
+import { issueIamhmnCard } from './eudi-verifier/backend-client.js';
+
 // Privacy Pass module (additive, RFC 9576-9578)
 import { initPrivacyPass, privacyPassRouter, privacyPassWellKnownRouter }
   from './privacy-pass/index.js';
@@ -711,6 +718,37 @@ app.get('/.well-known/jwks.json', (req, res) => {
     title:    'JWKS — Public Keys',
     subtitle: 'Public keys used to verify HHTTPS tokens issued by this server (RFC 7517).'
   });
+});
+
+// Role-assurance discovery: RAL tiers, claim format, reserved registry.
+app.get('/.well-known/hhttps-role-assurance', (req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.json(roleAssuranceDiscovery(RP_ID));
+});
+
+// ESCO occupation typeahead (server-side proxy → avoids CORS, keeps the browser
+// dependency-free). Returns up to 8 { label, isco08, escoUri, reserved } hits.
+app.get('/hhttps/esco/suggest', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const lang = (String(req.query.lang || 'de') === 'en') ? 'en' : 'de';
+  if (q.length < 2) return res.json({ results: [] });
+  try {
+    const url = `https://ec.europa.eu/esco/api/search?type=occupation&language=${lang}` +
+                `&text=${encodeURIComponent(q)}&full=false&limit=8`;
+    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!r.ok) return res.json({ results: [] });
+    const j = await r.json();
+    const hits = j?._embedded?.results || [];
+    const results = hits.map(h => {
+      const label = h.title || h.preferredLabel || '';
+      const isco08 = h.code || null;
+      const g = guardReservedRole(label, isco08);
+      return { label, isco08, escoUri: h.uri || null, reserved: g.reserved, reservedKey: g.key || null };
+    }).filter(x => x.label);
+    res.json({ results });
+  } catch (e) {
+    res.json({ results: [], error: 'esco_unreachable' });
+  }
 });
 
 // ─── Info ─────────────────────────────────────────────────────────────────────
@@ -2831,6 +2869,93 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
   }
 });
 
+// ─── iamhmn-card issuance (HHTTPS as issuer → role INTO the wallet) ───────────
+//
+// The "create a role yourself" path. The user defines a role (ESCO dropdown or
+// free text) and optionally provides a document; HHTTPS issues an iamhmn-card
+// EAA into their wallet via EUDIPLO with an HONEST RAL:
+//   • no document            → RAL0 (self-declared)
+//   • document provided       → RAL1 (accredited; pilot: self-asserted, live: reviewed)
+//   • reserved profession     → RAL0 is REFUSED (needs document or external (Q)EAA).
+//
+// Returns an offer URI the frontend renders as a QR / deep-link. Zero-PII: no
+// document is persisted; the role + RAL travel inside the issued card only.
+//
+// Body: { sessionId, esco?:{label,isco08,escoUri}, customRole?, documentProvided?, locale? }
+app.post('/hhttps/role/card', async (req, res) => {
+  try {
+    const { sessionId, esco = null, customRole = null, documentProvided = false } = req.body || {};
+    const session = await db.sessions.get(sessionId);
+    if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
+    if (!session.emailVerified) return res.status(403).json({ error: 'Email verification required first.' });
+
+    let roleInput = null, custom = false, customLabel = null, reservedKey = null;
+    if (customRole) {
+      const c = sanitizeCustomRole(customRole);
+      if (!c.ok) return res.status(400).json({
+        error: c.reason === 'reserved'
+          ? 'This profession is protected and cannot be self-declared. Provide a document or present a qualified attestation.'
+          : 'Please provide a job title.',
+        reason: c.reason, matched: c.matched || null, reservedKey: c.key || null
+      });
+      custom = true; customLabel = c.label;
+    } else if (esco && (esco.label || esco.isco08 || esco.escoUri)) {
+      roleInput = { label: esco.label || null, isco08: esco.isco08 || null, escoUri: esco.escoUri || null };
+      const g = guardReservedRole(esco.label || '', esco.isco08 || null);
+      reservedKey = g.key;
+      if (g.reserved && !documentProvided) {
+        const hint = reservedKey && RESERVED_REGISTRY[reservedKey] ? RESERVED_REGISTRY[reservedKey].sourceHint : 'a qualified source';
+        return res.status(400).json({
+          error: `"${esco.label || esco.isco08}" is a protected profession. Self-declaration (RAL0) is not allowed.`,
+          reason: 'reserved', reservedKey,
+          remedy: `Upload a document for RAL1, or present a qualified attestation from ${hint} (RAL2).`
+        });
+      }
+    } else {
+      return res.status(400).json({ error: 'Provide either an ESCO role or a customRole.' });
+    }
+
+    const method = documentProvided ? 'document-checked' : 'self-declared';
+    const verificationStatus = documentProvided ? 'verified' : 'self-declared';
+    const humanVerified = !!(session.hasPasskey || session.credentialId);
+
+    const built = buildRoleClaim({ roleInput, custom, customLabel, verificationStatus, method, humanVerified });
+
+    const cardClaims = {
+      userId:     session.userId,
+      role:       built.role.id,
+      roleLabel:  built.role.label,
+      ral:        built.ral,
+      human:      humanVerified,
+      method,
+      issuer:     `hhttps://${RP_ID}`,
+      ...(built.role.taxonomy?.isco08  ? { isco08:  built.role.taxonomy.isco08 }  : {}),
+      ...(built.role.taxonomy?.uri     ? { escoUri: built.role.taxonomy.uri }     : {}),
+      ...(built.role.reserved          ? { reserved: 'true' }                     : {})
+    };
+
+    const offer = await issueIamhmnCard(cardClaims);
+
+    fireEvent('card.issued', { ral: built.ral, role: built.role.id, reserved: !!built.role.reserved });
+
+    res.json({
+      hhttps: { version: '0.5.0' },
+      card: {
+        role: built.role, ral: built.ral,
+        ...(built.verification ? { verification: built.verification } : {}),
+        note: documentProvided
+          ? 'Document accepted (pilot: self-asserted, verified against registers in live operation) → RAL1.'
+          : 'Self-declared role → RAL0.'
+      },
+      offer: { uri: offer.uri, crossDeviceUri: offer.crossDeviceUri || offer.uri },
+      message: `iamhmn-card ready to load into the wallet · RAL ${built.ral}`
+    });
+  } catch (e) {
+    console.error('[ROLE-CARD] error:', e.message);
+    res.status(502).json({ error: 'Card issuance failed.', detail: e.message });
+  }
+});
+
 // ─── Token Revocation ─────────────────────────────────────────────────────────
 
 app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
@@ -2928,21 +3053,25 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   if (!operatorName || !purpose)
     return res.status(400).json({ error: 'operatorName and purpose are required.' });
 
-  // Optional self-declared role for the bot. Must be one of the existing
-  // HHTTPS roles. No verification — pilot mode (see migration-phase-4 docs).
+  // Optional self-declared role for the bot. v0.5: roles are ESCO-dynamic, so a
+  // bot may declare a free-form role — EXCEPT a reserved profession (doctor/
+  // lawyer/notary/police/…), which a machine can never self-declare.
   let normalizedRole = null;
   let roleLabel = null;
   let roleIcon = null;
   if (role) {
-    if (!ROLES[role]) {
+    const g = guardReservedRole(role);
+    if (g.reserved) {
       return res.status(400).json({
         error: 'invalid_role',
-        detail: `Unknown role "${role}". Allowed roles: ${Object.keys(ROLES).join(', ')}.`,
+        detail: `"${role}" is a protected profession and cannot be self-declared by a machine.`,
+        reservedKey: g.key || null
       });
     }
-    normalizedRole = role;
-    roleLabel      = ROLES[role].label;
-    roleIcon       = ROLES[role].icon;
+    const desc = resolveRole({ label: role });
+    normalizedRole = desc.id;
+    roleLabel      = desc.label;
+    roleIcon       = '🤖';
   }
 
   const operatorId = 'op-' + crypto.randomBytes(8).toString('hex');

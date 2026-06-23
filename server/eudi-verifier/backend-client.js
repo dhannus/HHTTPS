@@ -311,4 +311,82 @@ export function extractAgeClaims(walletResponse) {
   return out;
 }
 
-export const config = { BACKEND, AV_DOCTYPE, AUTH_SCHEME };
+// ── iamhmn-card ISSUANCE (OID4VCI) ───────────────────────────────────────────
+//
+// HHTTPS as an ISSUER: we mint our own attestation — the "iamhmn-card" — INTO the
+// user's wallet via EUDIPLO's issuer offer. This is the "create a role yourself"
+// path proven manually at the hackathon, now as code. The card carries the role
+// the user defined plus its honest RAL (0 self-declared / 1 document-checked).
+// Later the card is presented back (OID4VP) and read like any other attestation.
+//
+// Proven flow (hackathon):
+//   POST /api/issuer/offer
+//     { response_type:'uri', flow:'pre_authorized_code',
+//       credentialConfigurationIds:['iamhmn-card'],
+//       claims:{ 'iamhmn-card':{ type:'inline', claims:{ …string-valued… } } } }
+//   → { uri, crossDeviceUri }
+// Notes baked in: NO tx_code (Android-friendly); inline claims are STRING-typed
+// (mdoc); the EUDIPLO issuer config for 'iamhmn-card' must have
+// refreshTokenEnabled:false and ECDH-ES response encryption (server-side config).
+
+const CARD_CONFIG_ID = process.env.EUDIPLO_CARD_CONFIG_ID || 'iamhmn-card';
+let cardConfigEnsured = false;
+
+// Best-effort: ensure the issuer config exists with the hackathon-proven flags.
+// Tolerant of "already exists" exactly like ensureVerifierConfig. If your
+// instance manages the config out-of-band, this simply no-ops on conflict.
+export async function ensureIamhmnCardConfig() {
+  if (cardConfigEnsured) return CARD_CONFIG_ID;
+  const r = await authed('/issuer/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      id: CARD_CONFIG_ID,
+      description: 'iamhmn human/role card (HHTTPS-issued EAA)',
+      refreshTokenEnabled: false        // hackathon fix: avoid session.consumed on retry
+    })
+  }).catch(() => null);
+  if (r && (r.ok)) { cardConfigEnsured = true; return CARD_CONFIG_ID; }
+  const text = r ? await r.text().catch(() => '') : '';
+  if (!r || r.status === 409 || /exist|duplicate|already/i.test(text)) {
+    cardConfigEnsured = true;            // assume pre-provisioned / present
+    return CARD_CONFIG_ID;
+  }
+  throw new Error(`EUDIPLO card-config failed (${r.status}): ${text.slice(0, 200)}`);
+}
+
+// Coerce every inline claim value to a string (mdoc inline claims are strings).
+function stringifyClaims(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) {
+    if (v === undefined || v === null) continue;
+    out[k] = typeof v === 'string' ? v : String(v);
+  }
+  return out;
+}
+
+/**
+ * Issue an iamhmn-card offer. Returns the wallet-ready offer URI.
+ * @param {object} claims  inline card claims, e.g.
+ *   { userId, role, roleLabel, isco08, escoUri, ral, human, method, trustScore }
+ * @returns {Promise<{ uri:string, crossDeviceUri?:string, session?:string }>}
+ */
+export async function issueIamhmnCard(claims) {
+  await ensureIamhmnCardConfig();
+  const r = await authed('/issuer/offer', {
+    method: 'POST',
+    body: JSON.stringify({
+      response_type: 'uri',
+      flow: 'pre_authorized_code',                 // no tx_code → Android-friendly
+      credentialConfigurationIds: [CARD_CONFIG_ID],
+      claims: { [CARD_CONFIG_ID]: { type: 'inline', claims: stringifyClaims(claims) } }
+    })
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`EUDIPLO card offer failed (${r.status}): ${text.slice(0, 200)}`);
+  }
+  const data = await r.json();   // { uri, crossDeviceUri, session }
+  return { uri: data.uri, crossDeviceUri: data.crossDeviceUri || null, session: data.session || null };
+}
+
+export const config = { BACKEND, AV_DOCTYPE, AUTH_SCHEME, CARD_CONFIG_ID };

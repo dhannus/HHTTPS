@@ -1,0 +1,107 @@
+{
+  "issuer": "https://hhttps.org",
+  "spec": "https://hhttps.org/docs/protocol/role-assurance",
+  "version": "0.5",
+  "model": "esco-dynamic",
+  "ral_levels": [
+    {
+      "ral": 0,
+      "key": "self-declared",
+      "label": "Self-declared",
+      "note": "Role chosen by the user. Not checked by any authority."
+    },
+    {
+      "ral": 1,
+      "key": "accredited",
+      "label": "Confirmed by an accredited authority (document/domain)",
+      "note": "Backed by a checked document or a verified domain/account."
+    },
+    {
+      "ral": 2,
+      "key": "qualified",
+      "label": "Confirmed by a qualified eIDAS source",
+      "note": "Confirmed via EUDI Wallet (QEAA/PuB-EAA) from a qualified source."
+    }
+  ],
+  "role_claim": {
+    "top_level_claims": [
+      "ral"
+    ],
+    "role_object": [
+      "id",
+      "label",
+      "self_declared",
+      "human_verified",
+      "kind",
+      "group",
+      "taxonomy",
+      "reserved"
+    ],
+    "verification_object": [
+      "trust_framework",
+      "assurance_level",
+      "evidence_type",
+      "authoritative_source",
+      "verified_at"
+    ],
+    "taxonomy_schemes": [
+      "ESCO",
+      "ISCO-08"
+    ],
+    "custom_role": {
+      "id": "custom",
+      "max_label_len": 48,
+      "always_ral": 0
+    }
+  },
+  "reserved_registry": {
+    "medical": {
+      "label": "Medical professional",
+      "iscoPrefixes": [
+        "221",
+        "2212",
+        "2211"
+      ],
+      "sourceHint": "Ärztekammer / medical chamber"
+    },
+    "nursing": {
+      "label": "Nurse / care professional",
+      "iscoPrefixes": [
+        "2221",
+        "3221",
+        "532"
+      ],
+      "sourceHint": "Pflegekammer / care chamber"
+    },
+    "lawyer": {
+      "label": "Attorney",
+      "iscoPrefixes": [
+        "2611"
+      ],
+      "sourceHint": "Rechtsanwaltskammer / bar association"
+    },
+    "notary": {
+      "label": "Notary",
+      "iscoPrefixes": [
+        "2619",
+        "261"
+      ],
+      "sourceHint": "Notarkammer / notary chamber"
+    },
+    "police": {
+      "label": "Police / law enforcement",
+      "iscoPrefixes": [
+        "5412",
+        "335"
+      ],
+      "sourceHint": "state police authority"
+    },
+    "judge": {
+      "label": "Judge / prosecutor",
+      "iscoPrefixes": [
+        "2612"
+      ],
+      "sourceHint": "state judicial authority"
+    }
+  }
+}

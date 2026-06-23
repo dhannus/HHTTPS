@@ -1433,7 +1433,6 @@ const { startRegistration, startAuthentication } = SimpleWebAuthnBrowser;
 let userId     = localStorage.getItem('hhttps_uid') || null;
 let sessionId  = null;
 let hhttpsToken = null;
-let selRole    = null;
 let __githubAlreadyVerified = null;  // trust score if user re-logged in with existing GitHub anchor
 let selVMethod = 'self-declared';
 let vData      = {};
@@ -1679,23 +1678,6 @@ async function pollEudiStatus(requestId) {
   }
 }
 
-const ROLES_LOCAL = {
-  citizen:              { icon:'🧑',   label:'Bürger',               de:'Bürger',               en:'Citizen',              methods:['self-declared'] },
-  journalist:           { icon:'📰',   label:'Journalist',           de:'Journalist',           en:'Journalist',           methods:['self-declared','press-card','email-verified'] },
-  student:              { icon:'🎓',   label:'Schüler / Student',    de:'Schüler / Student',    en:'Student',              methods:['self-declared','email-verified','student-id'] },
-  teacher:              { icon:'👨‍🏫', label:'Lehrer / Pädagoge',   de:'Lehrer / Pädagoge',    en:'Teacher',              methods:['self-declared','school-email','teacher-id'] },
-  researcher:           { icon:'🔬',   label:'Wissenschaftler',      de:'Wissenschaftler',      en:'Researcher',           methods:['self-declared','email-verified','orcid'] },
-  creative:             { icon:'🎭',   label:'Kreativschaffender',   de:'Kreativschaffender',   en:'Creative',             methods:['self-declared','association-member','email-verified'] },
-  developer:            { icon:'💻',   label:'Entwickler',           de:'Entwickler',           en:'Developer',            methods:['self-declared','email-verified','github-verified'] },
-  medical_professional: { icon:'🩺',   label:'Arzt / Medizinerin',   de:'Arzt / Medizinerin',   en:'Medical Professional', methods:['self-declared','approbation-id','medical-email'] },
-  caregiver:            { icon:'🤝',   label:'Pflegekraft',          de:'Pflegekraft',          en:'Caregiver',            methods:['self-declared','care-chamber-id','email-verified'] },
-  lawyer:               { icon:'⚖️',  label:'Anwalt / Anwältin',    de:'Anwalt / Anwältin',    en:'Lawyer',               methods:['self-declared','bar-association-id','lawyer-email'] },
-  notary:               { icon:'📜',   label:'Notar',                de:'Notar',                en:'Notary',               methods:['self-declared','notary-chamber-id'] },
-  civil_servant:        { icon:'🏛️',  label:'Beamte / Behörde',     de:'Beamte / Behörde',     en:'Civil Servant',        methods:['self-declared','official-email','service-id'] },
-  politician:           { icon:'🗳️',  label:'Politiker',            de:'Politiker',            en:'Politician',           methods:['self-declared','official-email','bundestag-verified'] },
-  business:             { icon:'🏢',   label:'Unternehmen',          de:'Unternehmen',          en:'Business',             methods:['self-declared','domain-verified','handelsregister'] },
-  craftsman:            { icon:'🔧',   label:'Handwerker / Meister', de:'Handwerker / Meister', en:'Craftsperson',         methods:['self-declared','craft-chamber-id','master-certificate'] }
-};
 
 const VMETHOD_LABELS = {
   'self-declared':       { l:'Selbstdeklariert',   de:'Selbstdeklariert',   en:'Self-declared',        score:30, field:null },
@@ -1757,7 +1739,7 @@ const T = {
     "vh.humanStatus":"Mensch verifiziert","vh.errorStatus":"Verbindungsfehler","vh.errorSub":"Server nicht erreichbar.",
     "role.fallback":"Bürger","banner.wants":"möchte deine HHTTPS-Identität verifizieren.","banner.login":"Bitte logge dich unten ein — du wirst danach automatisch zurückgeleitet.",
     "msg.confirmBio":"Bitte Fingerabdruck / Face ID / PIN bestätigen…","msg.passkeyReg":"✓ Passkey registriert!","msg.humanProven":"✓ Menschsein kryptografisch bewiesen! Bitte Rolle wählen.",
-    "msg.doWebauthn":"Bitte erst WebAuthn durchführen.","msg.validEmail":"Bitte gültige E-Mail eingeben.","msg.emailConfirmed":"✓ E-Mail bestätigt! Bitte Rolle wählen und Token ausstellen.",
+    "msg.doWebauthn":"Bitte erst WebAuthn durchführen.","msg.validEmail":"Bitte gültige E-Mail eingeben.","msg.emailConfirmed":"✓ E-Mail bestätigt! Du kannst jetzt deinen Token ausstellen.",
     "msg.webauthnUnsupported":"⚠ WebAuthn wird von diesem Browser nicht unterstützt.","msg.passkeyFound":"Passkey gefunden.",
     "btn.declareEmail":"Rolle + verifizierte E-Mail → Token ausstellen →","err.prefix":"Fehler: ","veri.header":"// OPTIONALE VERIFIKATION",
     "msg.emailSent1":"✓ E-Mail gesendet! Bitte prüfe dein Postfach","msg.emailSent2":"Link gültig","msg.verified":"verifiziert","msg.domainVerifiedPre":"✓ E-Mail-Domain","msg.verifiedExcl":"verifiziert!",
@@ -1819,7 +1801,7 @@ const T = {
     "vh.humanStatus":"Human verified","vh.errorStatus":"Connection error","vh.errorSub":"Server not reachable.",
     "role.fallback":"Citizen","banner.wants":"wants to verify your HHTTPS identity.","banner.login":"Please log in below — you'll be redirected automatically afterwards.",
     "msg.confirmBio":"Please confirm fingerprint / Face ID / PIN…","msg.passkeyReg":"✓ Passkey registered!","msg.humanProven":"✓ Humanity proven cryptographically! Please choose a role.",
-    "msg.doWebauthn":"Please complete WebAuthn first.","msg.validEmail":"Please enter a valid email.","msg.emailConfirmed":"✓ Email confirmed! Please choose a role and issue the token.",
+    "msg.doWebauthn":"Please complete WebAuthn first.","msg.validEmail":"Please enter a valid email.","msg.emailConfirmed":"✓ Email confirmed! You can now issue your token.",
     "msg.webauthnUnsupported":"⚠ WebAuthn is not supported by this browser.","msg.passkeyFound":"Passkey found.",
     "btn.declareEmail":"Role + verified email → issue token →","err.prefix":"Error: ","veri.header":"// OPTIONAL VERIFICATION",
     "msg.emailSent1":"✓ Email sent! Please check your inbox","msg.emailSent2":"Link valid","msg.verified":"verified","msg.domainVerifiedPre":"✓ Email domain","msg.verifiedExcl":"verified!",
@@ -1950,7 +1932,6 @@ function tr(k){ return (T[LANG]||T.de)[k] ?? (T.de[k] ?? k); }
 function setLanguage(lang){
   LANG = T[lang] ? lang : 'de';
   document.documentElement.lang = LANG;
-  Object.values(ROLES_LOCAL).forEach(r => { r.label = (LANG==='en') ? r.en : r.de; });
   Object.values(VMETHOD_LABELS).forEach(m => { m.l = (LANG==='en') ? m.en : m.de; if (m.field) m.field.p = (LANG==='en') ? m.field.pEn : m.field.pDe; });
   document.querySelectorAll('[data-i18n]').forEach(e => { const v = tr(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
   document.querySelectorAll('[data-i18n-ph]').forEach(e => { const v = tr(e.getAttribute('data-i18n-ph')); if (v != null) e.placeholder = v; });
@@ -1958,7 +1939,6 @@ function setLanguage(lang){
   document.querySelectorAll('[data-i18n-aria]').forEach(e => { const v = tr(e.getAttribute('data-i18n-aria')); if (v != null) e.setAttribute('aria-label', v); });
   document.querySelectorAll('[data-i18n-alt]').forEach(e => { const v = tr(e.getAttribute('data-i18n-alt')); if (v != null) e.setAttribute('alt', v); });
   try { buildRoleGrid(); } catch(e){}
-  try { buildRoleTable(); } catch(e){}
   document.querySelectorAll('.lang-toggle button').forEach(b => b.classList.toggle('active', b.dataset.lang === LANG));
   try { localStorage.setItem('iamhmn-lang', LANG); } catch(e){}
 }
@@ -2257,7 +2237,7 @@ function buildRoleGrid() {
   // initialise the OPTIONAL verification methods and enable token issuance — the
   // base identity is simply "human". A professional role arrives only via EUDI EAA.
   const g = document.getElementById('roleGrid'); if (g) g.innerHTML = '';
-  selRole = null; selVMethod = 'self-declared'; vData = {};
+  selVMethod = 'self-declared'; vData = {};
   const opts = document.getElementById('veriOpts');
   if (opts) {
     opts.innerHTML = ['github-verified','eudi-eid'].map(m => {
@@ -2268,56 +2248,6 @@ function buildRoleGrid() {
   const slot = document.getElementById('veriSlot'); if (slot) slot.innerHTML = '';
 }
 
-// Build role table
-function buildRoleTable() {
-  const t = document.getElementById('roleTableFull');
-  if (!t) return;  // v0.5: role catalogue removed
-  t.innerHTML = `<tr><th>${tr('roletable.role')}</th><th>ID</th><th>${tr('roletable.methods')}</th></tr>` +
-    Object.entries(ROLES_LOCAL).map(([id, r]) => `
-      <tr>
-        <td>${r.icon} ${r.label}</td>
-        <td><span class="badge-role">${id}</span></td>
-        <td>${r.methods.map(m => VMETHOD_LABELS[m]?.l || m).join(' · ')}</td>
-      </tr>
-    `).join('');
-}
-
-function selectRole(id) {
-  selRole = id; selVMethod = 'self-declared'; vData = {};
-  document.querySelectorAll('.role-card').forEach(c => c.classList.remove('sel'));
-  document.getElementById('rc-'+id).classList.add('sel');
-  document.getElementById('btnDeclare').disabled = false;
-
-  // Update header to show the chosen role
-  const header = document.getElementById('veriBoxHeader');
-  if (header) header.textContent = `${tr('veri.header')} — ${ROLES_LOCAL[id].label.toUpperCase()}`;
-
-  // Build tab options for this role. github-verified appears only for developer.
-  let methods = (ROLES_LOCAL[id]?.methods || ['self-declared']).slice();
-  if (id === 'developer' && !methods.includes('github-verified')) {
-    methods.push('github-verified');
-  }
-
-  const opts = document.getElementById('veriOpts');
-  opts.innerHTML = methods.map(m => {
-    const label = VMETHOD_LABELS[m]?.l || m;
-    const selected = m === 'self-declared' ? 'true' : 'false';
-    return `<div class="vopt" role="tab"
-              tabindex="0"
-              aria-selected="${selected}"
-              data-method="${m}"
-              onclick="selectVMethod('${id}','${m}', event)"
-              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();selectVMethod('${id}','${m}',event)}">${label}</div>`;
-  }).join('');
-
-  // Show the box, clear the slot, default to self-declared
-  document.getElementById('veriBox').classList.add('show');
-  document.getElementById('veriSlot').innerHTML = '';
-  // Mark the self-declared tab as selected by default
-  const first = opts.querySelector('.vopt[data-method="self-declared"]');
-  if (first) first.setAttribute('aria-selected', 'true');
-  setTrust(60);
-}
 
 function selectVMethod(roleId, method, evt) {
   selVMethod = method; vData = {};
@@ -2463,7 +2393,7 @@ async function doAuth() {
 
     sessionId = d2.sessionId;
     // Re-login persistence: server tells us if this user already has a
-    // GitHub verification on file. Remember it so selectRole('developer')
+    // GitHub verification on file. Remember it so the GitHub method tab
     // can show the badge + apply the score without a fresh OAuth roundtrip.
     if (d2.githubVerified && d2.githubTrustScore) {
       __githubAlreadyVerified = d2.githubTrustScore;
@@ -2482,83 +2412,9 @@ async function doAuth() {
 }
 
 // ── Role Declaration ───────────────────────────────────────────────────────
-async function doDeclarRole() {
-  if (!selRole || !sessionId) return;
-  const btn = document.getElementById('btnDeclare');
-  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> ' + tr('btn.issuing');
-  live('pend',tr('live.issuing'));
-
-  // Gather vData from input if present
-  const inp = document.getElementById('vfInput');
-  if (inp) {
-    const key = selVMethod !== 'self-declared'
-      ? Object.values(VMETHOD_LABELS).find(v=>v?.field)?.field?.key
-      : null;
-    if (key) vData[key] = inp.value;
-  }
-
-  try {
-    const r = await fetch('/hhttps/role/declare', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        sessionId, role: selRole,
-        verificationMethod: selVMethod,
-        verificationData: vData,
-        ageGroup: selAgeGroup || undefined
-      })
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
-
-    hhttpsToken = d.hhttps.token;
-    const rl = ROLES_LOCAL[selRole];
-
-    // Publish identity to the browser extension + other tabs
-    publishIdentity({
-      token:            d.hhttps.token,
-      refreshToken:     d.hhttps.refreshToken,
-      role:             selRole,
-      roleLabel:        rl?.label || selRole,
-      roleIcon:         rl?.icon || '🧑',
-      roleLevel:        d.role?.level,
-      levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
-      trustScore:       d.hhttps.trustScore,
-      method:           d.role?.level || 'webauthn-passkey',
-      expiresAt:        d.hhttps.expiresAt,
-      refreshExpiresAt: d.hhttps.refreshExpiresAt
-    });
-
-    // Token display
-    const parts = hhttpsToken.split('.');
-    document.getElementById('tkRaw').innerHTML =
-      `<span style="color:var(--red)">${parts[0]}</span>.` +
-      `<span style="color:var(--cyan)">${parts[1]}</span>.` +
-      `<span style="color:var(--green)">${parts[2]}</span>`;
-    document.getElementById('tkBadge').textContent = '✓ Human · HHTTPS-Token';
-    document.getElementById('tcH').textContent = 'true ✓';
-    { const tcM = document.getElementById('tcMethods'); if (tcM) tcM.textContent = (d.hhttps.verifiedMethods || []).join(', ') || '—'; }
-
-    // Optional age group (orthogonal claim, self-declared in Phase 1)
-    if (d.ageGroup && d.ageGroup.id) {
-      const verifiedMark = d.ageGroup.verified ? ' ✓' : ' (Eigenangabe)';
-      document.getElementById('tcAge').textContent = d.ageGroup.label + verifiedMark;
-      document.getElementById('tcAgeWrap').style.display = '';
-    } else {
-      document.getElementById('tcAgeWrap').style.display = 'none';
-    }
-
-    updateHeaders({ human:true, actorType:'human', status:'verified', verifiedMethods:(d.hhttps.verifiedMethods||[]), token:hhttpsToken });
-    document.getElementById('btnCheck').disabled = false;
-    live('on',tr('live.tokenActive'));
-    msg('✓ '+d.message,'s');
-    setStepEF(2);
-  } catch(e) {
-    msg('Fehler: '+e.message,'e');
-    btn.disabled = false;
-    btn.innerHTML = tr('btn.declare');
-    live('err',tr('live.error'));
-  }
-}
+// v0.5: the live token-issuing path is window.doDeclarRole (defined below as
+// the single clean override). The earlier self-declared-role version was
+// removed — roles are no longer self-picked (they arrive only via EUDI (Q)EAA).
 
 // ── Identity Broadcasting (for browser extension and other tools) ────────
 // When a user receives a token here, we publish it so the HHTTPS extension
@@ -2732,7 +2588,7 @@ async function doSendEmail() {
   try {
     const r = await fetch('/hhttps/email/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ sessionId, email, role: selRole || 'citizen' })
+      body: JSON.stringify({ sessionId, email })
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error);
@@ -2823,7 +2679,6 @@ function performLogout() {
   // Reset in-memory state
   hhttpsToken = null;
   sessionId   = null;
-  selRole     = null;
   selVMethod  = 'self-declared';
   vData       = {};
 
@@ -3096,7 +2951,6 @@ window.doDeclarRole = async function() {
   try {
     const declareBody = (sid) => JSON.stringify({
       sessionId:          sid,
-      role:               selRole,
       verificationMethod: selVMethod,
       verificationData:   vData,
       ageGroup:           selAgeGroup || undefined,
@@ -3118,15 +2972,16 @@ window.doDeclarRole = async function() {
     if (!r.ok) throw new Error(d.error);
 
     hhttpsToken = d.hhttps.token;
-    const rl = ROLES_LOCAL[selRole];
 
-    // Publish identity (Browser-Extension + andere Tabs)
+    // Publish identity (Browser-Extension + andere Tabs). v0.5: there is no
+    // self-selected role; a role (if any) comes from the server's role_claim
+    // (EUDI (Q)EAA / iamhmn-card). Base identity is simply "human".
     publishIdentity({
       token:            d.hhttps.token,
       refreshToken:     d.hhttps.refreshToken,
-      role:             selRole,
-      roleLabel:        rl?.label || selRole,
-      roleIcon:         rl?.icon || '🧑',
+      role:             d.role?.id || d.role_claim?.id || null,
+      roleLabel:        d.role?.label || d.role_claim?.label || null,
+      roleIcon:         '🧑',
       roleLevel:        d.role?.level,
       levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
       trustScore:       d.hhttps.trustScore,
@@ -3650,7 +3505,6 @@ function deletePasskey() {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-buildRoleTable();
 if (!window.PublicKeyCredential) {
   msg(tr('msg.webauthnUnsupported'),'e');
   document.getElementById('btnReg').disabled = true;
