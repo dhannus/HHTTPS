@@ -2058,7 +2058,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
   // is merged into the new passkey session. Email-flow continues uninterrupted,
   // and the final session carries BOTH the passkey credential and the email
   // verification info, so /role/declare sees the full picture.
-  const { sessionId, response, emailSessionId } = req.body;
+  const { sessionId, response, emailSessionId, priorSessionId } = req.body;
   const stored = await db.challenges.get(sessionId);
   if (!stored) return res.status(400).json({ error: 'Session expired.' });
 
@@ -2082,29 +2082,31 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     await db.credentials.updateCounter(cred.credentialId, v.authenticationInfo.newCounter);
     await db.challenges.delete(sessionId);
 
-    // ── Merge in the email-first session, if the client passed one. ─────────
-    // We pull emailVerified / emailDomain / emailLevel / emailTrustBonus from
-    // the old session, then delete it so the user has exactly ONE active
-    // session afterwards.
-    let emailMerge = {};
-    if (emailSessionId) {
-      const prior = await db.sessions.get(emailSessionId);
-      // `emailSessionId` is a same-tab handle the client just email-verified, so
-      // we merge whenever that prior session is genuinely email-verified. We do
-      // NOT require prior.userId === cred.userId: register/start can mint a fresh
-      // WebAuthn user handle for the new passkey, so the email-session userId and
-      // the credential userId legitimately differ. Requiring them to match
-      // silently dropped emailVerified, which made /role/declare 403 right after
-      // a passkey was added (the new session was not email-verified).
-      if (prior && prior.emailVerified) {
-        emailMerge = {
-          emailVerified:    true,
-          emailDomain:      prior.emailDomain      || null,
-          emailLevel:       prior.emailLevel       || null,
-          emailTrustBonus:  prior.emailTrustBonus  || 0,
-          pseudonym:        prior.pseudonym        || null,
+    // ── Merge in the PRIOR session, if the client passed one. ──────────────
+    // v0.5 (method-neutral): passkey can be added after email, GitHub OR EUDI in
+    // any order. We carry over EVERY verified method from the prior session into
+    // the new passkey session so none of those confirmations are lost, then
+    // delete the old session so the user keeps exactly ONE active session.
+    // `emailSessionId` is kept as a backward-compatible alias for `priorSessionId`.
+    let priorMerge = {};
+    const priorId = priorSessionId || emailSessionId;
+    if (priorId) {
+      const prior = await db.sessions.get(priorId);
+      if (prior) {
+        priorMerge = {
+          ...(prior.emailVerified ? {
+            emailVerified:   true,
+            emailDomain:     prior.emailDomain     || null,
+            emailLevel:      prior.emailLevel      || null,
+            emailTrustBonus: prior.emailTrustBonus || 0,
+          } : {}),
+          ...(prior.githubVerified ? { githubVerified: true } : {}),
+          ...(prior.eudiVerified   ? { eudiVerified:   true } : {}),
+          ...(prior.pseudonym      ? { pseudonym: prior.pseudonym } : {}),
         };
-        try { await db.sessions.delete(emailSessionId); } catch (e) {}
+        if (Object.keys(priorMerge).length) {
+          try { await db.sessions.delete(priorId); } catch (e) {}
+        }
       }
     }
 
@@ -2123,14 +2125,14 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       // We seed with 50 — the human-confirmed threshold (email+passkey) — so a
       // caller that reads the session before /role/declare sees a sane number.
       trustScore:   50,
-      ...emailMerge,
+      ...priorMerge,
     }, 1800_000); // 30 min
     await db.stats.increment('verifications');
 
     res.json({
       verified:  true,
       sessionId: sid,
-      merged:    !!emailMerge.emailVerified,
+      merged:    Object.keys(priorMerge).length > 0,
       message:   'WebAuthn OK. Please declare a role.'
     });
   } catch (e) { res.status(400).json({ error: e.message }); }
@@ -2247,6 +2249,48 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
     });
   } catch (e) {
     console.error('[session/email/start]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Method-neutral session bootstrap (v0.5) ────────────────────────────────
+// Any of the equal entry methods (email, passkey, EUDI Wallet, GitHub) may open
+// a session FIRST and then run its own real verification against it. Same
+// primitive as /hhttps/session/email/start, but without the email label: the
+// session carries NO verified method yet (trust 0) until one really lands. The
+// token gate in /hhttps/role/declare requires ≥1 genuinely verified method, so
+// an empty bootstrap session can never mint a token on its own.
+app.post('/hhttps/session/start', limit.email, async (req, res) => {
+  try {
+    const { pseudonym } = req.body || {};
+    const cleanPseudo = pseudonym
+      ? String(pseudonym).replace(/[^\w\-. äöüÄÖÜß]/gu, '').slice(0, 32).trim() || null
+      : null;
+
+    const userId = uuid();
+    const sid    = uuid();
+
+    await db.sessions.create(sid, {
+      userId,
+      credentialId: null,
+      deviceType:   'pending',   // neutral: the confirmed method(s) describe the identity
+      backedUp:     false,
+      verified:     true,        // "session exists" — NOT a trust statement (trust stays 0)
+      trustScore:   0,
+    }, 900_000); // 15 min
+
+    await db.stats.increment('verifications');
+
+    res.json({
+      sessionId:  sid,
+      userId,
+      trustScore: 0,
+      method:     'session-pending',
+      pseudonym:  cleanPseudo,
+      message:    'Session created. Verify with any method.',
+    });
+  } catch (e) {
+    console.error('[session/start]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2487,13 +2531,10 @@ app.post('/hhttps/role/declare', async (req, res) => {
 
   // v0.5: roles are no longer self-declared. The base identity is simply "human".
   // A professional role arrives ONLY via an EUDI (Q)EAA (handled by eudi-verifier),
-  // so we do not take a role from the request. Email is the sign-in gate — without
-  // a verified email there is no valid logged-in identity (trust 0 is not a state).
-  if (!session.emailVerified) {
-    return res.status(403).json({
-      error: 'Email verification required to establish a human identity.'
-    });
-  }
+  // so we do not take a role from the request. The sign-in gate is no longer email-
+  // specific: ANY one genuinely verified method (email, passkey, EUDI Wallet, GitHub)
+  // establishes a human identity. It is enforced below, after the verification
+  // surface is computed (see "Sign-in gate" near computeVerification).
 
   // Optional age_group (orthogonal to role). Phase 1: self-declared only —
   // honestly labelled, low trust, age_verified:false. Phase 3 will set this
@@ -2530,6 +2571,17 @@ app.post('/hhttps/role/declare', async (req, res) => {
   };
   const v = computeVerification(flags);
   const trustScore = v.trust;
+
+  // Sign-in gate (v0.5, method-neutral): at least ONE genuinely verified method
+  // must be present. Age is self-declared / trust-neutral and never counts; the
+  // honesty gate lives in computeVerification (only real checks add trust), so a
+  // trust-bearing method == a real method. An empty bootstrap session is refused.
+  const realMethods = v.methods.filter(m => m !== 'age');
+  if (realMethods.length === 0) {
+    return res.status(403).json({
+      error: 'At least one verified method (email, passkey, EUDI Wallet or GitHub) is required.'
+    });
+  }
 
   // Issue access + refresh token. The access token carries the human identity,
   // the verified_methods[] array and (optional, orthogonal) age claims. No role.
@@ -2892,7 +2944,11 @@ app.post('/hhttps/role/card', async (req, res) => {
     const { sessionId, esco = null, customRole = null, documentProvided = false } = req.body || {};
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
-    if (!session.emailVerified) return res.status(403).json({ error: 'Email verification required first.' });
+    // Method-neutral human gate (v0.5): any one genuinely verified method qualifies,
+    // not email specifically (consistent with /hhttps/role/declare).
+    const hasMethod = !!(session.emailVerified || session.hasPasskey || session.credentialId
+                         || session.githubVerified || session.eudiVerified);
+    if (!hasMethod) return res.status(403).json({ error: 'At least one verified method is required first.' });
 
     let roleInput = null, custom = false, customLabel = null, reservedKey = null;
     if (customRole) {
