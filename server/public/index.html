@@ -8,6 +8,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..800,30..100,0..1&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
 <script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
+<script type="module" src="/iamhmn-card-issuer.js"></script>
 <style>
 
 :root {
@@ -1012,6 +1013,24 @@ footer{font-size:13px;}
             <a id="eudiDeepLink" class="eudi-deeplink" href="#" rel="noopener" data-i18n="eudi.deeplink">Auf diesem Gerät mit Wallet öffnen →</a>
           </div>
           <div class="eudi-status" id="eudiStatus" style="text-align:center;"></div>
+        </div>
+      </div>
+
+      <!-- iamhmn-card: create a role yourself and load it into the wallet (v0.5) -->
+      <div class="eudi-panel" id="cardPanel" style="margin-top:18px;">
+        <div class="eudi-panel-head">
+          <div class="eudi-panel-title" id="cardTitle">Rolle als Karte fürs Wallet</div>
+          <div class="eudi-panel-sub" id="cardSub">Optional: Beruf wählen oder frei definieren und ins Wallet laden.</div>
+        </div>
+        <iamhmn-card-issuer id="cardIssuer" locale="de"></iamhmn-card-issuer>
+        <div id="cardQrBox" style="display:none;text-align:center;margin-top:14px;">
+          <div class="eudi-qr-wrap">
+            <span class="sp s1">✦</span><span class="sp s2">✦</span><span class="sp s3">✦</span><span class="sp s4">✦</span>
+            <img id="cardQr" alt="iamhmn-card QR-Code" />
+          </div>
+          <div style="text-align:center;">
+            <a id="cardDeepLink" class="eudi-deeplink" href="#" rel="noopener">Auf diesem Gerät im Wallet öffnen →</a>
+          </div>
         </div>
       </div>
 
@@ -3555,6 +3574,47 @@ document.querySelectorAll('.api-demo').forEach(demo => {
     });
   });
 });
+
+// ── iamhmn-card issuer wiring (v0.5) ─────────────────────────────────────────
+// Keeps the component's session-id + locale in sync with the page, and renders
+// the wallet offer URI as a QR using the same generator as the EUDI flow.
+(function () {
+  const ci = document.getElementById('cardIssuer');
+  if (!ci) return;
+
+  const setCardLabels = () => {
+    const en = (typeof LANG !== 'undefined' && LANG === 'en');
+    ci.setAttribute('locale', en ? 'en' : 'de');
+    const ti = document.getElementById('cardTitle');
+    const su = document.getElementById('cardSub');
+    if (ti) ti.textContent = en ? 'Role card for your wallet' : 'Rolle als Karte fürs Wallet';
+    if (su) su.textContent = en
+      ? 'Optional: pick a profession or define your own, then load it into your wallet.'
+      : 'Optional: Beruf wählen oder frei definieren und ins Wallet laden.';
+  };
+
+  // Keep session-id current (sessionId is a page global set during verification).
+  // Capture-phase click refreshes it before any click reaches the component button.
+  const sync = () => {
+    if (typeof sessionId !== 'undefined' && sessionId) ci.setAttribute('session-id', sessionId);
+    setCardLabels();
+  };
+  document.addEventListener('click', sync, true);
+  setCardLabels();
+  sync();
+
+  // Render the wallet offer as a QR (same generator the EUDI flow uses).
+  ci.addEventListener('card-offer', (e) => {
+    const uri = e.detail && e.detail.uri;
+    if (!uri) return;
+    try {
+      const qr = qrcode(0, 'L'); qr.addData(uri); qr.make();
+      const img = document.getElementById('cardQr'); if (img) img.src = qr.createDataURL(4, 8);
+      const dl = document.getElementById('cardDeepLink'); if (dl) dl.href = uri;
+      const box = document.getElementById('cardQrBox'); if (box) box.style.display = '';
+    } catch (err) { console.error('card QR render failed', err); }
+  });
+})();
 </script>
 </body>
 </html>

@@ -704,7 +704,10 @@ app.get('/.well-known/hhttps-configuration', (req, res) => {
     token_ttl:               ACCESS_TTL,
     refresh_ttl:             REFRESH_TTL,
     supported_algorithms:    ['ES256'],
-    supported_roles:         Object.keys(ROLES),
+    supported_roles:         'esco-dynamic (no fixed catalogue)',
+    roles_model:             { base_identity: ROLES.citizen.id,
+                               esco_suggest: `${BASE_URL}/hhttps/esco/suggest`,
+                               discovery:    `${BASE_URL}/.well-known/hhttps-role-assurance` },
     supported_verification:  Object.keys(VERIFICATION_LEVELS)
   }, {
     title:    'Discovery',
@@ -765,7 +768,7 @@ app.get('/hhttps/info', async (req, res) => {
     protocol: 'HHTTPS — Human-verified HTTPS', version: '0.5.0',
     initiative: 'iamhmn', contact: 'daniel.hannuschka@tweakz.de',
     github: 'github.com/dhannus/HHTTPS', demo: 'https://hhttps.org',
-    features: ['webauthn', 'roles-15', 'email-verification', 'refresh-tokens',
+    features: ['webauthn', 'roles-esco-dynamic', 'email-verification', 'refresh-tokens',
                'token-revocation', 'machine-tokens', 'webhooks', 'jwks',
                'discovery', 'postgres-persistence'],
     security: { algorithm: 'ES256', helmet: true, rateLimiting: true,
@@ -778,7 +781,8 @@ app.get('/hhttps/info', async (req, res) => {
       revokedTokens:       counts[4],
       machineOperators:    counts[5]
     },
-    roles: Object.values(ROLES).map(r => ({ id: r.id, label: r.label, icon: r.icon })),
+    roles_model: 'esco-dynamic',
+    base_identity: { id: ROLES.citizen.id, label: ROLES.citizen.label, icon: ROLES.citizen.icon },
     endpoints: {
       'GET  /.well-known/hhttps-configuration': 'Discovery',
       'GET  /.well-known/jwks.json':            'Public key (JWKS)',
@@ -1944,16 +1948,17 @@ function escapeHtml(s) {
 app.get('/hhttps/roles', (req, res) => {
   sendJson(req, res, {
     hhttps: { version: '0.5.0' },
-    roles: Object.values(ROLES).map(r => ({
-      id: r.id, label: r.label, icon: r.icon,
-      description: r.description, verificationMethods: r.verificationMethods,
-      verificationHints: r.verificationHints || {},
-      privileges: r.privileges, userStory: r.userStory
-    })),
+    model: 'esco-dynamic',
+    note: 'v0.5: roles are no longer a fixed catalogue. Occupations resolve dynamically against ESCO; a professional role arrives only as an EUDI (Q)EAA or an HHTTPS-issued iamhmn-card. Use /hhttps/esco/suggest to look up occupations.',
+    base_identity: { id: ROLES.citizen.id, label: ROLES.citizen.label, icon: ROLES.citizen.icon },
+    reserved_registry: RESERVED_REGISTRY,
+    ralLevels: roleAssuranceDiscovery().ral_levels,
+    esco_suggest: '/hhttps/esco/suggest?q=',
+    discovery: '/.well-known/hhttps-role-assurance',
     verificationLevels: VERIFICATION_LEVELS
   }, {
-    title:    'Role Registry',
-    subtitle: '15 supported roles with verification methods, trust levels, and user stories.'
+    title:    'Role Registry (ESCO-dynamic)',
+    subtitle: 'v0.5: no fixed role list — occupations resolve via ESCO; roles arrive as EUDI (Q)EAA or iamhmn-card.'
   });
 });
 
@@ -3872,7 +3877,7 @@ async function main() {
     console.log(`   ORIGIN:  ${ORIGIN}`);
     console.log(`   Signing: ES256 (asymmetric)`);
     console.log(`   Storage: PostgreSQL (persistent)`);
-    console.log(`   Roles:   ${Object.keys(ROLES).length} (citizen, ..., craftsman)`);
+    console.log(`   Roles:   ESCO-dynamic (base: citizen; professions via ESCO + reserved registry)`);
     console.log(`\n   ✓ All v4 live bugs fixed   ✓ trust proxy + Helmet CSP`);
     console.log(`   ✓ JWKS / .well-known       ✓ Refresh + Machine Tokens`);
     console.log(`   ✓ Token Revocation         ✓ Webhooks (DB-backed)\n`);
