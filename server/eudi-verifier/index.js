@@ -284,7 +284,14 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       const age = [14, 16, 18].includes(Number(minAge)) ? Number(minAge) : 18;
 
       const tx = await initAvTransaction(age);
-      const walletLink = buildWalletLink(tx);
+      // The EU AV app's intent filter binds the openid4vp scheme to host
+      // `authorize` (verified in av-app-android-wallet-ui: openid4VpHost =
+      // "authorize" in AndroidLibraryConventionPlugin.kt). EUDIPLO emits an
+      // empty-host link, which Android then fails to resolve. Inserting the
+      // host is semantically neutral in OID4VP (wallets read only the query
+      // params); the replace targets exactly the empty-host form.
+      const walletLink = buildWalletLink(tx)
+        .replace(/^openid4vp:\/\/\?/, 'openid4vp://authorize?');
       const requestId = crypto.randomUUID();
 
       putTx(requestId, {
