@@ -196,23 +196,39 @@ function buildAvDcqlQuery(minAge) {
   };
 }
 
-// Ensure the verifier config `av-age-over-{minAge}` exists (same tolerant
-// "already exists" handling as ensureVerifierConfig).
+// Ensure the verifier config `av-age-over-{minAge}` exists AND is current.
+// EUDIPLO persists configs — a config created by an older deploy keeps its old
+// DCQL forever (this is how the trusted_authorities binding silently went
+// missing from live requests). Therefore: if the config already exists, PATCH
+// it with the current DCQL instead of silently reusing the stored one.
 async function ensureAvVerifierConfig(minAge) {
   const id = `${AV_CONFIG_PREFIX}${minAge}`;
   if (ensuredConfigs.has(id)) return id;
 
+  const desired = {
+    id,
+    description: `HHTTPS direct AV attestation (EU AV Profile, >=${minAge})`,
+    dcql_query: buildAvDcqlQuery(minAge)
+  };
+
   const r = await authed('/verifier/config', {
     method: 'POST',
-    body: JSON.stringify({
-      id,
-      description: `HHTTPS direct AV attestation (EU AV Profile, >=${minAge})`,
-      dcql_query: buildAvDcqlQuery(minAge)
-    })
+    body: JSON.stringify(desired)
   });
   if (r.ok) { ensuredConfigs.add(id); return id; }
   const text = await r.text().catch(() => '');
   if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
+    const u = await authed(`/verifier/config/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        description: desired.description,
+        dcql_query: desired.dcql_query
+      })
+    });
+    if (!u.ok) {
+      const utext = await u.text().catch(() => '');
+      throw new Error(`EUDIPLO AV config update failed (${u.status}): ${utext.slice(0, 200)}`);
+    }
     ensuredConfigs.add(id);
     return id;
   }
