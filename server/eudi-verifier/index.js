@@ -22,6 +22,7 @@ import express from 'express';
 import crypto from 'crypto';
 import {
   initTransaction,
+  initAvTransaction,
   initEidTransaction,
   buildWalletLink,
   pollWalletResponse,
@@ -98,6 +99,40 @@ async function callAgeUpgrade(ageOver, hhttpsSessionId, currentToken) {
   return body; // { hhttps:{token}, ageGroup:{...} }
 }
 
+// Call the internal /hhttps/age/direct endpoint — DIRECT acceptance of an EU AV
+// Profile Proof of Age attestation, with NO prior HHTTPS session. The canonical
+// deliberately differs from the upgrade canonical (direct:true instead of a
+// sessionId), so an assertion can never be replayed across the two endpoints.
+async function callAgeDirect(ageOver) {
+  const secret = process.env.EUDI_VERIFIER_SECRET;
+  if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
+
+  const nonce = crypto.randomUUID();
+  const iat = Date.now();
+  const canonical = JSON.stringify({
+    direct: true,
+    ageOver: {
+      age_over_14: ageOver.age_over_14 === true,
+      age_over_16: ageOver.age_over_16 === true,
+      age_over_18: ageOver.age_over_18 === true
+    },
+    nonce, iat
+  });
+  const assertion = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+
+  const directUrl =
+    (process.env.HHTTPS_INTERNAL_URL || 'http://127.0.0.1:3000') + '/hhttps/age/direct';
+
+  const r = await fetch(directUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ageOver, assertion, nonce, iat })
+  });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`age/direct failed (${r.status}): ${body.error || ''}`);
+  return body; // { hhttps:{token, refreshToken, sessionId, userId}, ageGroup:{...} }
+}
+
 // Call the internal /hhttps/eid/upgrade endpoint after a valid PID presentation.
 // Carries the holder's current token (if any) so orthogonal age claims survive
 // the reissue. Zero-PII: no PID attribute is sent — the proof is the presentation.
@@ -143,6 +178,7 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       status: 'ok',
       backend: backendConfig.BACKEND,
       doctype: backendConfig.AV_DOCTYPE,
+      avProfileDoctype: backendConfig.AV_PROFILE_DOCTYPE,
       scheme: backendConfig.AUTH_SCHEME,
       secretConfigured: !!process.env.EUDI_VERIFIER_SECRET
     });
@@ -228,6 +264,93 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       res.json({ status: 'verified', ageGroup: upgrade.ageGroup, hhttps: upgrade.hhttps });
     } catch (e) {
       console.error('[EUDI-VERIFIER] /age/status error:', e.message);
+      res.status(502).json({ status: 'error', detail: e.message });
+    }
+  });
+
+  // ─── DIRECT AV Profile acceptance (no prior session required) ────────────────
+  //
+  // Accepts the EU AV Profile Proof of Age attestation (eu.europa.ec.av.1)
+  // DIRECTLY: the attestation itself bootstraps the HHTTPS identity. If the
+  // caller DOES have a session (hhttpsSession supplied), we route through the
+  // existing /hhttps/age/upgrade path instead, so the verified age lands on
+  // that identity and its established methods are preserved — one surface,
+  // both entry orders.
+
+  // 1. Start a direct AV verification. Body: { minAge?, hhttpsSession?, currentToken? }
+  router.post('/av/request', async (req, res) => {
+    try {
+      const { minAge, hhttpsSession, currentToken } = req.body || {};
+      const age = [14, 16, 18].includes(Number(minAge)) ? Number(minAge) : 18;
+
+      const tx = await initAvTransaction(age);
+      const walletLink = buildWalletLink(tx);
+      const requestId = crypto.randomUUID();
+
+      putTx(requestId, {
+        transactionId: tx.transaction_id,
+        nonce: tx.nonce,
+        hhttpsSession: hhttpsSession || null,   // OPTIONAL — null ⇒ direct bootstrap
+        currentToken: currentToken || null,
+        minAge: age,
+        kind: 'av',
+        status: 'pending'
+      });
+
+      res.json({
+        requestId,
+        minAge: age,
+        deepLink: walletLink,
+        expiresInMs: TX_TTL_MS,
+        message: 'Scan the QR code with your EU Age Verification app or EUDI wallet, or open it directly on your phone.'
+      });
+    } catch (e) {
+      console.error('[EUDI-VERIFIER] /av/request error:', e.message);
+      res.status(502).json({ error: 'EU verifier backend unavailable.', detail: e.message });
+    }
+  });
+
+  // 2. Poll direct AV status.
+  router.get('/av/status/:requestId', async (req, res) => {
+    try {
+      const tx = getTx(req.params.requestId);
+      if (!tx) return res.status(404).json({ status: 'expired' });
+
+      if (tx.status === 'verified') {
+        if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // browser cookie
+        return res.json({ status: 'verified', ageGroup: tx.ageGroup, hhttps: tx.hhttps });
+      }
+
+      const poll = await pollWalletResponse(tx.transactionId, req.query.response_code);
+      if (poll.status === 'pending') {
+        return res.json({ status: 'pending' });
+      }
+
+      const ageOver = extractAgeClaims(poll.walletResponse);
+      if (process.env.EUDI_DEBUG === '1') {
+        console.log(`[EUDI-DEBUG] AV walletResponse=${JSON.stringify(poll.walletResponse).slice(0, 1500)}`);
+        console.log(`[EUDI-DEBUG] AV extracted ageOver=${JSON.stringify(ageOver)}`);
+      }
+      const proven = Object.values(ageOver).some(v => v === true);
+      if (!proven) {
+        tx.status = 'failed';
+        return res.json({ status: 'failed', reason: 'no_age_claim_disclosed' });
+      }
+
+      // Session supplied → verified age lands on the EXISTING identity (upgrade
+      // path, unchanged). No session → the attestation bootstraps a NEW one.
+      const result = tx.hhttpsSession
+        ? await callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken)
+        : await callAgeDirect(ageOver);
+
+      tx.status = 'verified';
+      tx.ageGroup = result.ageGroup;
+      tx.hhttps = result.hhttps;
+
+      if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
+      res.json({ status: 'verified', ageGroup: result.ageGroup, hhttps: result.hhttps });
+    } catch (e) {
+      console.error('[EUDI-VERIFIER] /av/status error:', e.message);
       res.status(502).json({ status: 'error', detail: e.message });
     }
   });

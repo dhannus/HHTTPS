@@ -166,6 +166,81 @@ export async function initTransaction(minAge) {
   };
 }
 
+// ── 1a. AV Profile transaction (EU Age Verification attestation, DIRECT) ─────
+//
+// DIRECT acceptance of the EU AV Profile Proof of Age attestation (doctype
+// eu.europa.ec.av.1) — the attestation the EU Age Verification App ("mini
+// wallet", announced 2026-04-15) carries. Unlike the PID age path above, this
+// does NOT require any prior HHTTPS session: the attestation IS the entry point.
+// Same OpenID4VP/mso_mdoc rails, different doctype and namespace (for mdoc the
+// namespace equals the doctype). EUDIPLO does presentation validation exactly
+// as for PID.
+//
+// **CONFIRM** on the live instance: EUDIPLO must know the AV trust anchors
+// (Commission AV Trusted List / eIDAS Dashboard) to validate eu.europa.ec.av.1
+// signatures — check EUDIPLO's trust-anchor config before go-live. Testing
+// needs the EU AV demo app (the SPRIND sandbox wallet presents PID, not AV).
+const AV_PROFILE_DOCTYPE = process.env.EUDI_AV_PROFILE_DOCTYPE  || 'eu.europa.ec.av.1';
+const AV_CONFIG_PREFIX   = process.env.EUDIPLO_AV_CONFIG_PREFIX || 'av-age-over-';
+
+function buildAvDcqlQuery(minAge) {
+  return {
+    credentials: [
+      {
+        id: 'proof_of_age',
+        format: 'mso_mdoc',
+        meta: { doctype_value: AV_PROFILE_DOCTYPE },
+        claims: [{ path: [AV_PROFILE_DOCTYPE, `age_over_${minAge}`] }]
+      }
+    ]
+  };
+}
+
+// Ensure the verifier config `av-age-over-{minAge}` exists (same tolerant
+// "already exists" handling as ensureVerifierConfig).
+async function ensureAvVerifierConfig(minAge) {
+  const id = `${AV_CONFIG_PREFIX}${minAge}`;
+  if (ensuredConfigs.has(id)) return id;
+
+  const r = await authed('/verifier/config', {
+    method: 'POST',
+    body: JSON.stringify({
+      id,
+      description: `HHTTPS direct AV attestation (EU AV Profile, >=${minAge})`,
+      dcql_query: buildAvDcqlQuery(minAge)
+    })
+  });
+  if (r.ok) { ensuredConfigs.add(id); return id; }
+  const text = await r.text().catch(() => '');
+  if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
+    ensuredConfigs.add(id);
+    return id;
+  }
+  throw new Error(`EUDIPLO AV config create failed (${r.status}): ${text.slice(0, 200)}`);
+}
+
+// Init a DIRECT AV Profile presentation. Same offer mechanism and return shape
+// as initTransaction; poll with the SAME pollWalletResponse / extractAgeClaims
+// (the defensive age_over_* scan is doctype-agnostic by design).
+export async function initAvTransaction(minAge) {
+  const requestId = await ensureAvVerifierConfig(minAge);
+  const r = await authed('/verifier/offer', {
+    method: 'POST',
+    body: JSON.stringify({ response_type: 'uri', requestId })
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`EUDIPLO AV offer failed (${r.status}): ${text.slice(0, 200)}`);
+  }
+  const data = await r.json(); // { uri, crossDeviceUri, session }
+  return {
+    transaction_id: data.session,
+    nonce: null,
+    uri: data.uri,
+    crossDeviceUri: data.crossDeviceUri
+  };
+}
+
 // ── 1b. eID identity transaction (orthogonal PID presentation) ───────────────
 
 // DCQL requesting one NON-identifying PID attribute, purely to obtain a validated
@@ -389,4 +464,4 @@ export async function issueIamhmnCard(claims) {
   return { uri: data.uri, crossDeviceUri: data.crossDeviceUri || null, session: data.session || null };
 }
 
-export const config = { BACKEND, AV_DOCTYPE, AUTH_SCHEME, CARD_CONFIG_ID };
+export const config = { BACKEND, AV_DOCTYPE, AV_PROFILE_DOCTYPE, AUTH_SCHEME, CARD_CONFIG_ID };

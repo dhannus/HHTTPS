@@ -2807,6 +2807,148 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
   }
 });
 
+// ─── DIRECT AV attestation acceptance (EU AV Profile) ────────────────────────
+//
+// INTERNAL endpoint (called by the eudi-verifier, HMAC-asserted like
+// /hhttps/age/upgrade). DIRECT acceptance of an EU AV Profile Proof of Age
+// attestation (doctype eu.europa.ec.av.1): NO prior session is required — the
+// validated attestation itself bootstraps a fresh HHTTPS identity. This is the
+// entry path for users of the EU Age Verification App ("mini wallet") who have
+// no HHTTPS account yet: verify age first, add methods (email/passkey/…) later.
+//
+// The canonical DIFFERS from the upgrade canonical (direct:true instead of a
+// sessionId) so assertions cannot be replayed across the two endpoints.
+//
+// ZERO-PII: no attestation attribute beyond the age_over_NN booleans is read;
+// nothing about the person is stored — session row carries only opaque UUIDs,
+// and the verified age group rides in the SIGNED token (client-driven design).
+// Age is TRUST-NEUTRAL: verified_methods = ['age'], trust stays 0.
+//
+// Body: { ageOver, assertion, nonce, iat }
+//   assertion = HMAC-SHA256 over canonical { direct:true, ageOver, nonce, iat }
+app.post('/hhttps/age/direct', async (req, res) => {
+  try {
+    const { ageOver, assertion, nonce, iat } = req.body || {};
+
+    if (typeof ageOver !== 'object' || ageOver === null || !assertion) {
+      return res.status(400).json({ error: 'ageOver and assertion are required.' });
+    }
+
+    const secret = process.env.EUDI_VERIFIER_SECRET;
+    if (!secret) {
+      console.error('[AGE-DIRECT] EUDI_VERIFIER_SECRET not configured — refusing.');
+      return res.status(503).json({ error: 'Age verification not configured.' });
+    }
+
+    // Recompute the HMAC over the canonical, sorted representation (constant-
+    // time compare). MUST match callAgeDirect in eudi-verifier/index.js exactly.
+    const canonical = JSON.stringify({
+      direct: true,
+      ageOver: {
+        age_over_14: ageOver.age_over_14 === true,
+        age_over_16: ageOver.age_over_16 === true,
+        age_over_18: ageOver.age_over_18 === true
+      },
+      nonce: nonce || null,
+      iat:   iat   || null
+    });
+    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+
+    const a = Buffer.from(String(assertion), 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      console.warn('[AGE-DIRECT] invalid assertion — rejected.');
+      return res.status(401).json({ error: 'Invalid verifier assertion.' });
+    }
+
+    // Reject stale assertions (replay window: 5 min) when iat is provided.
+    if (iat) {
+      const ageMs = Date.now() - Number(iat);
+      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
+        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
+      }
+    }
+
+    // At least one age boolean must actually be proven.
+    const proven = ['age_over_14', 'age_over_16', 'age_over_18']
+      .some(k => ageOver[k] === true);
+    if (!proven) {
+      return res.status(400).json({ error: 'No age claim proven in the attestation.' });
+    }
+
+    // Bootstrap a fresh method-neutral identity (mirrors /hhttps/session/start):
+    // the attestation is the FIRST thing this identity ever proved. The session
+    // lets the holder continue immediately (add email/passkey, declare a role).
+    const userId = uuid();
+    const sid    = uuid();
+    await db.sessions.create(sid, {
+      userId,
+      credentialId: null,
+      deviceType:   'pending',   // neutral: confirmed method(s) describe the identity
+      backedUp:     false,
+      verified:     true,        // "session exists" — NOT a trust statement (trust stays 0)
+      trustScore:   0,
+    }, 900_000); // 15 min
+
+    // Map the disclosed booleans to the narrowest band and issue the token with
+    // VERIFIED age claims. Age is TRUST-NEUTRAL (trust stays 0, no role).
+    const ageGroupId = ageGroupFromEudiClaims(ageOver);
+    const ag = AGE_GROUPS[ageGroupId];
+    const avMethod = AGE_VERIFICATION_METHODS['av-app'];
+
+    const v = computeVerification({ age: true });
+
+    const { token } = await issueAccessToken({
+      userId,
+      role:       null,
+      roleLabel:  null,
+      roleLevel:  null,
+      trustScore: v.trust,                          // 0 — age is trust-neutral by design
+      method:     'verification-methods',
+      deviceType: 'pending',
+      verified_methods:        v.methods,           // ['age']
+      verification_status:     'verified',
+      age_group:               ag.id,
+      age_verified:            true,                // cryptographically verified
+      age_verification_method: avMethod.id          // 'av-app'
+    });
+    const refresh = await issueRefreshToken(userId, null, null, {
+      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: null
+    });
+
+    // Server-to-server response: this Set-Cookie reaches the eudi-verifier, NOT
+    // the browser. The browser cookie is set by the /eudi/av/status handler,
+    // which adopts this token (same pattern as age/upgrade — see note there).
+    setIdentityCookie(res, token);
+
+    console.log(`[AGE-DIRECT] new identity ${userId.slice(0,8)}… → ${ag.id} (av-app, verified, no prior session)`);
+    await db.stats.increment('age_verifications');
+    fireEvent('age.verified', { ageGroup: ag.id, method: 'av-app', direct: true });
+
+    res.json({
+      hhttps: {
+        version: '0.5.0',
+        token,
+        refreshToken: refresh,
+        sessionId: sid,
+        userId,
+        trustScore: v.trust,
+        verifiedMethods: v.methods
+      },
+      ageGroup: {
+        id:       ag.id,
+        label:    ag.label,
+        verified: true,
+        method:   avMethod.id
+      },
+      message: `✓ Age verified: ${ag.label} (EU AV attestation, direct)`
+    });
+  } catch (e) {
+    console.error('[AGE-DIRECT] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── EUDI eID identity upgrade (v0.5) ─────────────────────────────────────────
 //
 // INTERNAL endpoint (127.0.0.1 only, like /hhttps/age/upgrade). Called by the

@@ -348,6 +348,11 @@ export const AGE_VERIFICATION_METHODS = {
     verified: true, trustScore: 0, available: true,
     note: 'Age proof via EUDI Wallet (age_over_NN, selective disclosure). Trust-neutral.'
   },
+  'av-app': {
+    id: 'av-app', label: 'EU Age Verification App (Proof of Age)',
+    verified: true, trustScore: 0, available: true,
+    note: 'Proof of Age attestation per the EU AV Profile (doctype eu.europa.ec.av.1), presented via OpenID4VP and validated by the verifier backend. Trust-neutral.'
+  },
 };
 
 // ─── Phase 3 bridge: EUDI age_over_NN booleans → age_group (reverse mapping) ──
