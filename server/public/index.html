@@ -135,6 +135,58 @@ a{color:inherit}
   display:flex;gap:16px;justify-content:center;font-family:var(--font-mono)}
 .foot a{text-decoration:none;opacity:.8}.foot a:hover{opacity:1}
 @media (prefers-reduced-motion:reduce){*{animation-duration:0ms!important;transition-duration:0ms!important}}
+/* ── Section 2: professional role (iamhmn-card · ESCO + role/card) ─────────── */
+.rolesec{margin:10px auto 0;width:100%;max-width:1500px;
+  background:radial-gradient(130% 150% at 50% 0%,#181818 0%,#0A0A0A 62%);
+  color:#fff;border-radius:30px;padding:clamp(30px,5vw,60px) clamp(20px,5vw,64px) clamp(34px,5vw,60px)}
+.rolesec .inner{max-width:1080px;margin:0 auto}
+.rolesec h2{font-family:var(--font-display);font-weight:800;
+  font-size:clamp(2rem,4.6vw,3.3rem);line-height:1.05;letter-spacing:-.02em;margin:0 0 14px;text-align:center}
+.rolesec h2 .em{background:linear-gradient(100deg,#1C6CA8 0%,#0A7C99 20%,#93C5FD 40%,#FFD9A8 56%,#B05A1E 76%,#6E5AA8 100%);
+  background-size:220% auto;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  animation:shimmer 6.5s ease-in-out infinite}
+.rolesec .sub{color:#C9C9C9;text-align:center;max-width:640px;margin:0 auto 28px;font-size:1.02rem;line-height:1.6}
+.role-btns{display:grid;gap:14px;max-width:760px;margin:0 auto}
+@media(min-width:680px){.role-btns{grid-template-columns:1fr 1fr}}
+.role-btn{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;
+  background:rgba(255,255,255,.04);border:1.5px solid rgba(255,255,255,.18);color:#fff;
+  border-radius:20px;padding:20px 22px;cursor:pointer;transition:all .3s var(--ease);font-family:inherit}
+.role-btn:hover{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.4);transform:translateY(-2px)}
+.role-btn .rt{font-weight:700;font-size:1.08rem}
+.role-btn .rd{font-size:.85rem;color:#B8B8B8;line-height:1.45}
+.role-btn.active{background:#fff;color:#0A0A0A;border-color:#fff}
+.role-btn.active .rd{color:#5C5C5C}
+.role-panel{max-width:560px;margin:20px auto 0;background:rgba(255,255,255,.05);
+  border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:20px}
+.role-panel.hidden{display:none}
+.role-panel>label{display:block;font-size:.82rem;color:#C9C9C9;margin:0 0 6px}
+.esco-wrap{position:relative}
+.esco-input{width:100%;background:#fff;color:#0A0A0A;border:none;border-radius:14px;padding:14px 16px;font-size:1rem;font-family:inherit;box-sizing:border-box}
+.esco-list{position:absolute;left:0;right:0;top:calc(100% + 6px);background:#fff;color:#0A0A0A;border-radius:14px;box-shadow:var(--sh-lg);overflow:hidden;z-index:20;max-height:288px;overflow-y:auto}
+.esco-list.hidden{display:none}
+.esco-item{display:flex;align-items:center;gap:8px;padding:11px 14px;cursor:pointer;font-size:.94rem;border-bottom:1px solid var(--line-subtle)}
+.esco-item:last-child{border-bottom:none}
+.esco-item:hover{background:#F4F4F3}
+.esco-item .isco{margin-left:auto;font-family:var(--font-mono);font-size:.72rem;color:#8A8A8A}
+.role-chips{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 14px}
+.role-chip{background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.22);color:#fff;border-radius:999px;padding:9px 15px;cursor:pointer;font-size:.9rem;font-family:inherit;transition:all .25s var(--ease)}
+.role-chip:hover{border-color:#fff}
+.role-chip.on{background:#fff;color:#0A0A0A;border-color:#fff}
+.file-row{display:flex;align-items:center;gap:10px;margin:14px 0;font-size:.84rem;color:#C9C9C9}
+.file-row input[type=file]{display:none}
+.file-btn{background:rgba(255,255,255,.08);border:1.5px solid rgba(255,255,255,.25);color:#fff;border-radius:12px;padding:9px 14px;cursor:pointer;font-size:.84rem;font-family:inherit;white-space:nowrap}
+.file-btn:hover{border-color:#fff}
+.role-go{width:100%;background:#fff;color:#0A0A0A;border:none;border-radius:999px;padding:15px;font-weight:700;font-size:1rem;cursor:pointer;font-family:inherit;margin-top:4px;transition:opacity .2s}
+.role-go:disabled{opacity:.4;cursor:not-allowed}
+.role-warn{color:#FFB78A;font-size:.84rem;margin-top:10px;line-height:1.45}
+.role-hint{color:#9A9A9A;font-size:.78rem;margin-top:10px;line-height:1.45}
+.ral-badge{display:inline-flex;align-items:center;gap:7px;border:1.5px solid;border-radius:999px;padding:6px 13px;font-size:.8rem;font-weight:600;margin-top:14px}
+.ral-badge .dot{width:8px;height:8px;border-radius:50%}
+.ral-0{border-color:#9CA3AF;color:#C9C9C9}.ral-0 .dot{border:2px solid #9CA3AF}
+.ral-1{border-color:#60A5FA;color:#93C5FD;background:rgba(37,99,235,.12)}.ral-1 .dot{background:#60A5FA}
+.ral-2{border-color:#34D399;color:#6EE7B7;background:rgba(16,185,129,.12)}.ral-2 .dot{background:#34D399}
+.role-result .ready{color:#E6E6E4;font-size:.9rem;margin-top:10px}
+.role-result .openbtn{display:inline-block;margin-top:12px;background:#fff;color:#0A0A0A;border-radius:999px;padding:11px 20px;font-weight:700;font-size:.92rem;text-decoration:none}
 </style>
 </head>
 <body>
@@ -264,6 +316,54 @@ a{color:inherit}
   </div>
 
   </div></div>
+  <section class="rolesec">
+    <div class="inner">
+      <h2><span data-i18n="role.h2a"></span> <span class="em" data-i18n="role.h2em"></span></h2>
+      <p class="sub" data-i18n="role.sub"></p>
+      <div class="role-btns">
+        <button class="role-btn" id="rb-self" onclick="rolePick('self')">
+          <span class="rt" data-i18n="role.self"></span>
+          <span class="rd" data-i18n="role.self.sub"></span>
+        </button>
+        <button class="role-btn" id="rb-qual" onclick="rolePick('qual')">
+          <span class="rt" data-i18n="role.qual"></span>
+          <span class="rd" data-i18n="role.qual.sub"></span>
+        </button>
+      </div>
+
+      <div class="role-panel hidden" id="rolep-self">
+        <label data-i18n="role.search.label"></label>
+        <div class="esco-wrap">
+          <input class="esco-input" id="escoInput" autocomplete="off" oninput="escoSuggest(this.value)" onblur="setTimeout(escoHide,180)">
+          <div class="esco-list hidden" id="escoList"></div>
+        </div>
+        <div class="file-row">
+          <label class="file-btn" for="roleFile" data-i18n="role.file"></label>
+          <input type="file" id="roleFile" accept="image/*,.pdf" onchange="roleFile('self',this)">
+          <span id="roleFileName" data-i18n="role.file.none"></span>
+        </div>
+        <button class="role-go" id="roleGoSelf" onclick="roleIssue('self')" disabled data-i18n="role.issue"></button>
+        <div class="role-warn" id="roleWarnSelf" hidden></div>
+        <div class="role-hint" data-i18n="role.hint.self"></div>
+        <div class="role-result" id="roleResultSelf"></div>
+      </div>
+
+      <div class="role-panel hidden" id="rolep-qual">
+        <label data-i18n="role.qual.pick"></label>
+        <div class="role-chips" id="qualChips"></div>
+        <div class="file-row">
+          <label class="file-btn" for="qualFile" data-i18n="role.file.req"></label>
+          <input type="file" id="qualFile" accept="image/*,.pdf" onchange="roleFile('qual',this)">
+          <span id="qualFileName" data-i18n="role.file.none"></span>
+        </div>
+        <button class="role-go" id="roleGoQual" onclick="roleIssue('qual')" disabled data-i18n="role.issue"></button>
+        <div class="role-warn" id="roleWarnQual" hidden></div>
+        <div class="role-hint" data-i18n="role.hint.qual"></div>
+        <div class="role-result" id="roleResultQual"></div>
+      </div>
+    </div>
+  </section>
+
   <div class="foot">
     <a href="https://hhttps.org" data-i18n="foot.about"></a>
     <a href="https://github.com/dhannus/HHTTPS">GitHub</a>
@@ -306,6 +406,19 @@ const T={
    'github.hint':'Du wirst kurz zu GitHub weitergeleitet und kommst bestätigt zurück.','github.go':'Weiter zu GitHub',
    'issue.btn':'Token ausstellen →','token.done':'Du bist als Mensch bestätigt',
    'privacy':'Nur das, was du erlaubst, wird in deiner Rolle freigeschaltet — alles andere bleibt lokal.',
+   'role.h2a':'Zeig deine','role.h2em':'berufliche Rolle.',
+   'role.sub':'Optional. Verknüpfe einen Beruf mit deiner Rolle — selbst angegeben oder mit Nachweis. Die Karte landet in deinem EUDI-Wallet, deine Person bleibt pseudonym.',
+   'role.self':'Mit Beruf anmelden','role.self.sub':'Selbst angegeben, optional mit Zertifikats-Upload',
+   'role.qual':'Qualifikation abfragen','role.qual.sub':'Geschützte Berufe: Arzt, Anwalt, Pflege …',
+   'role.search.label':'Beruf suchen (ESCO)','role.search.ph':'z. B. Softwareentwickler, Journalistin …',
+   'role.file':'Nachweis anhängen (optional)','role.file.req':'Nachweis anhängen (erforderlich)','role.file.none':'Keine Datei gewählt',
+   'role.issue':'iamhmn-Karte erstellen','role.qual.pick':'Geschützten Beruf wählen',
+   'role.hint.self':'Ohne Nachweis: selbst angegeben (RAL 0). Mit Nachweis: RAL 1 — im Pilot Selbstangabe, live gegen Register geprüft.',
+   'role.hint.qual':'Geschützte Berufe können nicht selbst angegeben werden. Mit Nachweis → RAL 1. Live-Ziel ist die qualifizierte (Q)EAA bzw. Kammer-Registerprüfung (RAL 2).',
+   'role.needmethod':'Bitte verifiziere dich zuerst oben mit mindestens einer Methode.',
+   'role.ready':'Karte bereit — in dein EUDI-Wallet laden.','role.open':'Im Wallet öffnen',
+   'role.ral0':'Selbst angegeben (RAL 0) · von keiner Stelle geprüft',
+   'role.ral1':'Mit Nachweis (RAL 1) · im Pilot Selbstangabe, live gegen Register geprüft',
    'foot.about':'Über iamhmn','foot.proto':'Protokoll',
    'progress.one':'1 Weg bestätigt','progress.more':' Wege bestätigt','codeSent':'Code gesendet — prüfe dein Postfach.','err':'Hat nicht geklappt — bitte erneut versuchen.'},
  en:{'hero.a':'Prove you are a','hero.em':'human','hero.b':' or AI bot.',
@@ -328,6 +441,19 @@ const T={
    'github.hint':'You will be briefly redirected to GitHub and return confirmed.','github.go':'Continue to GitHub',
    'issue.btn':'Issue token →','token.done':'You are confirmed as human',
    'privacy':'Only what you allow is unlocked in your role — everything else stays local.',
+   'role.h2a':'Show your','role.h2em':'professional role.',
+   'role.sub':'Optional. Link an occupation to your role — self-declared or with proof. The card lands in your EUDI Wallet; your person stays pseudonymous.',
+   'role.self':'Register a profession','role.self.sub':'Self-declared, optionally with a certificate upload',
+   'role.qual':'Request a qualification','role.qual.sub':'Protected professions: doctor, lawyer, nurse …',
+   'role.search.label':'Search occupation (ESCO)','role.search.ph':'e.g. software developer, journalist …',
+   'role.file':'Attach proof (optional)','role.file.req':'Attach proof (required)','role.file.none':'No file selected',
+   'role.issue':'Create iamhmn card','role.qual.pick':'Choose a protected profession',
+   'role.hint.self':'Without proof: self-declared (RAL 0). With proof: RAL 1 — pilot: self-asserted, verified against registers in production.',
+   'role.hint.qual':'Protected professions cannot be self-declared. With proof → RAL 1. The live target is a qualified (Q)EAA or chamber-register check (RAL 2).',
+   'role.needmethod':'Please verify yourself with at least one method above first.',
+   'role.ready':'Card ready — load it into your EUDI Wallet.','role.open':'Open in wallet',
+   'role.ral0':'Self-declared (RAL 0) · not checked by any authority',
+   'role.ral1':'With proof (RAL 1) · pilot: self-asserted, verified against registers in production',
    'foot.about':'About iamhmn','foot.proto':'Protocol',
    'progress.one':'1 way confirmed','progress.more':' ways confirmed','codeSent':'Code sent — check your inbox.','err':'That did not work — please try again.'}
 };
@@ -338,6 +464,8 @@ function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.getAttribute('data-i18n'))});
   document.querySelector('.hero h1').innerHTML=tr('hero.a')+' <span class="em">'+tr('hero.em')+'</span>'+tr('hero.b');
   const mr=document.getElementById('machineRole'); if(mr) mr.placeholder=tr('machine.role.ph');
+  const ei=document.getElementById('escoInput'); if(ei) ei.placeholder=tr('role.search.ph');
+  renderQualChips();
   renderProgress();
 }
 function toggleLang(){LANG=LANG==='de'?'en':'de';localStorage.setItem('iamhmn-lang',LANG);applyLang()}
@@ -516,6 +644,96 @@ async function issueToken(){
     if(tok){const p=tok.split('.');document.getElementById('tokenRaw').textContent=p[0]+'.'+p[1]+'.'+(p[2]||'').slice(0,16)+'\u2026'}
     card.scrollIntoView({behavior:'smooth',block:'center'});
   }catch(e){btn.disabled=false}
+}
+
+/* ── Section 2: professional role → iamhmn-card (esco/suggest + role/card) ───
+   Real contracts only. role/card needs ≥1 verified method (ORDER), so the
+   section is gated on hasAnyMethod(). RAL0 self-declared / RAL1 with proof;
+   reserved professions block RAL0. RAL2 (qualified (Q)EAA / register) is the
+   live target, honestly labelled, not faked here. */
+const RESERVED=[
+  {key:'medical',de:'Arzt / Ärztin',en:'Doctor',isco08:'2212'},
+  {key:'nursing',de:'Pflegefachkraft',en:'Nurse',isco08:'2221'},
+  {key:'lawyer', de:'Rechtsanwalt/-anwältin',en:'Lawyer',isco08:'2611'},
+  {key:'notary', de:'Notar/-in',en:'Notary',isco08:'2619'},
+  {key:'police', de:'Polizei',en:'Police officer',isco08:'5412'},
+  {key:'judge',  de:'Richter/-in',en:'Judge',isco08:'2612'}
+];
+let roleSel=null, qualSel=null, roleDocs={self:false,qual:false}, escoTimer=null;
+function hasAnyMethod(){return ORDER.some(m=>confirmed[m]);}
+function rolePick(which){
+  ['self','qual'].forEach(w=>{
+    document.getElementById('rb-'+w).classList.toggle('active',w===which);
+    document.getElementById('rolep-'+w).classList.toggle('hidden',w!==which);
+  });
+}
+function renderQualChips(){
+  const box=document.getElementById('qualChips'); if(!box)return;
+  box.innerHTML=RESERVED.map((r,i)=>`<button type="button" class="role-chip${qualSel===i?' on':''}" onclick="qualPick(${i})">${LANG==='de'?r.de:r.en}</button>`).join('');
+}
+function qualPick(i){qualSel=i;renderQualChips();refreshQual();}
+function escHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function escoSuggest(text){
+  const list=document.getElementById('escoList'); roleSel=null; refreshSelf();
+  if(escoTimer)clearTimeout(escoTimer);
+  if(text.trim().length<2){list.classList.add('hidden');list.innerHTML='';return;}
+  escoTimer=setTimeout(async()=>{
+    try{
+      const r=await fetch(API+'/hhttps/esco/suggest?q='+encodeURIComponent(text.trim())+'&lang='+LANG);
+      const d=await r.json(); const hits=d.results||[];
+      if(!hits.length){list.classList.add('hidden');list.innerHTML='';return;}
+      list.innerHTML=hits.map((s,i)=>`<div class="esco-item" onmousedown="escoPick(${i})">${s.reserved?'🔒 ':''}<span>${escHtml(s.label)}</span>${s.isco08?`<span class="isco">ISCO ${escHtml(s.isco08)}</span>`:''}</div>`).join('');
+      list._hits=hits; list.classList.remove('hidden');
+    }catch(e){list.classList.add('hidden');}
+  },180);
+}
+function escoPick(i){
+  const list=document.getElementById('escoList'); const s=(list._hits||[])[i]; if(!s)return;
+  roleSel=s; document.getElementById('escoInput').value=s.label; escoHide(); refreshSelf();
+}
+function escoHide(){const l=document.getElementById('escoList');if(l)l.classList.add('hidden');}
+function roleFile(which,input){
+  const has=!!(input.files&&input.files.length); roleDocs[which]=has;
+  document.getElementById(which==='self'?'roleFileName':'qualFileName').textContent=has?input.files[0].name:tr('role.file.none');
+  which==='self'?refreshSelf():refreshQual();
+}
+function refreshSelf(){
+  const q=document.getElementById('escoInput').value.trim();
+  const reserved=roleSel?!!roleSel.reserved:false;
+  const warn=document.getElementById('roleWarnSelf'),go=document.getElementById('roleGoSelf');
+  if(reserved&&!roleDocs.self){warn.textContent=tr('role.hint.qual');warn.hidden=false;go.disabled=true;return;}
+  warn.hidden=true; go.disabled=q.length<2;
+}
+function refreshQual(){
+  const go=document.getElementById('roleGoQual'),warn=document.getElementById('roleWarnQual');
+  if(qualSel===null){go.disabled=true;return;}
+  if(!roleDocs.qual){warn.textContent=tr('role.hint.qual');warn.hidden=false;go.disabled=true;return;}
+  warn.hidden=true; go.disabled=false;
+}
+async function roleIssue(which){
+  const warn=document.getElementById(which==='self'?'roleWarnSelf':'roleWarnQual');
+  const go=document.getElementById(which==='self'?'roleGoSelf':'roleGoQual');
+  const result=document.getElementById(which==='self'?'roleResultSelf':'roleResultQual');
+  if(!hasAnyMethod()){warn.textContent=tr('role.needmethod');warn.hidden=false;return;}
+  go.disabled=true;
+  const body={sessionId,documentProvided:which==='self'?roleDocs.self:true};
+  if(which==='self'){
+    if(roleSel)body.esco={label:roleSel.label,isco08:roleSel.isco08,escoUri:roleSel.escoUri};
+    else body.customRole=document.getElementById('escoInput').value.trim();
+  }else{const r=RESERVED[qualSel];body.esco={label:LANG==='de'?r.de:r.en,isco08:r.isco08};}
+  try{
+    const r=await fetch(API+'/hhttps/role/card',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok){warn.textContent=d.remedy||d.error||tr('err');warn.hidden=false;go.disabled=false;return;}
+    warn.hidden=true;
+    const ral=(d.card&&d.card.ral)||0, uri=d.offer&&d.offer.uri, cross=(d.offer&&d.offer.crossDeviceUri)||uri;
+    let qrHtml='';
+    if(cross){const qr=qrcode(0,'L');qr.addData(cross);qr.make();
+      qrHtml=`<div class="qr" style="margin-top:14px"><div class="qr-frame"><span class="sp s1">✦</span><span class="sp s2">✦</span><span class="sp s3">✦</span><span class="sp s4">✦</span><img src="${qr.createDataURL(4,8)}" alt="iamhmn-card QR"></div></div>`;}
+    const ralLabel=ral>=2?'RAL 2':(ral===1?tr('role.ral1'):tr('role.ral0'));
+    result.innerHTML=`<div class="ral-badge ral-${ral}"><span class="dot"></span><span>${ralLabel}</span></div>`+qrHtml+`<div class="ready">${tr('role.ready')}</div>`+(uri?`<a class="openbtn" href="${escHtml(uri)}">${tr('role.open')}</a>`:'');
+    go.disabled=false;
+  }catch(e){warn.textContent=tr('err');warn.hidden=false;go.disabled=false;}
 }
 
 applyLang();
