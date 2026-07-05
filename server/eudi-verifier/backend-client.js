@@ -183,17 +183,31 @@ export async function initTransaction(minAge) {
 const AV_PROFILE_DOCTYPE = process.env.EUDI_AV_PROFILE_DOCTYPE  || 'eu.europa.ec.av.1';
 const AV_CONFIG_PREFIX   = process.env.EUDIPLO_AV_CONFIG_PREFIX || 'av-age-over-';
 
+// Trust list for DIRECT AV acceptance. EUDIPLO validates issuer trust ONLY when
+// the DCQL credential query carries `trusted_authorities` (type `etsi_tl`,
+// values = URLs of signed LoTE JWTs) — WITHOUT it, trust validation is SKIPPED
+// (confirmed in EUDIPLO docs/source). We therefore always attach our own
+// EUDIPLO-hosted LoTE (id `av-trusted-list`), populated from the EU AV Trusted
+// List by scripts/install-av-trustlist.sh. `<TENANT_URL>` is resolved by
+// EUDIPLO at runtime to `${PUBLIC_URL}/issuers/${tenantId}`.
+// Escape hatch for local development WITHOUT trust validation:
+//   EUDI_AV_TRUST_LIST=off   (never use in production — fail-open)
+const AV_TRUST_LIST_URL = process.env.EUDI_AV_TRUST_LIST
+  || '<TENANT_URL>/trust-list/av-trusted-list';
+
 function buildAvDcqlQuery(minAge) {
-  return {
-    credentials: [
-      {
-        id: 'proof_of_age',
-        format: 'mso_mdoc',
-        meta: { doctype_value: AV_PROFILE_DOCTYPE },
-        claims: [{ path: [AV_PROFILE_DOCTYPE, `age_over_${minAge}`] }]
-      }
-    ]
+  const credential = {
+    id: 'proof_of_age',
+    format: 'mso_mdoc',
+    meta: { doctype_value: AV_PROFILE_DOCTYPE },
+    claims: [{ path: [AV_PROFILE_DOCTYPE, `age_over_${minAge}`] }]
   };
+  if (AV_TRUST_LIST_URL !== 'off') {
+    credential.trusted_authorities = [
+      { type: 'etsi_tl', values: [AV_TRUST_LIST_URL] }
+    ];
+  }
+  return { credentials: [credential] };
 }
 
 // Ensure the verifier config `av-age-over-{minAge}` exists AND is current.
