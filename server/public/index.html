@@ -632,6 +632,52 @@ async function machineRun(){
   }catch(e){hint.textContent=tr('err')}
 }
 
+/* ── Identity publication + OAuth return ────────────────────────────────────
+   The OAuth consent page reads localStorage['hhttps_identity'] to find the
+   signed-in human; without it, it bounces the user here with ?returnTo=<url>.
+   After a token is issued we therefore (1) publish the identity in exactly the
+   format the consent page and the browser extension expect, and (2) send the
+   user back where they came from. */
+function publishIdentity(d){
+  const h=(d&&d.hhttps)||{};
+  if(!h.token)return;
+  const identity={
+    token:            h.token,
+    refreshToken:     h.refreshToken||null,
+    role:             (d.role&&(d.role.id||d.role.role))||h.role||null,
+    roleLabel:        (d.role&&d.role.label)||null,
+    roleIcon:         (d.role&&d.role.icon)||null,
+    roleLevel:        (d.role&&d.role.level)||null,
+    levelLabel:       (d.role&&d.role.levelLabel)||null,
+    trustScore:       h.trustScore||0,
+    method:           ORDER.filter(m=>confirmed[m]).join(',')||'email',
+    issuer:           'hhttps://hhttps.org',
+    issuedAt:         new Date().toISOString(),
+    expiresAt:        h.expiresAt||null,
+    refreshExpiresAt: h.refreshExpiresAt||null
+  };
+  try{localStorage.setItem('hhttps_identity',JSON.stringify(identity));}catch(e){}
+  try{window.postMessage({source:'hhttps-org',type:'identity-issued',payload:identity},window.location.origin);}catch(e){}
+}
+
+/* Return to the OAuth consent page (or whoever sent us here). */
+function maybeReturnTo(){
+  let returnTo=null;
+  try{returnTo=new URL(window.location.href).searchParams.get('returnTo');}catch(e){return;}
+  if(!returnTo)return;
+  let target;
+  try{target=new URL(returnTo);}catch(e){return;}
+  const ok=target.protocol==='https:'||(target.protocol==='http:'&&target.hostname==='localhost');
+  if(!ok)return;
+  const t=document.createElement('div');
+  t.textContent=(LANG==='de'?'Angemeldet \u2713 \u2014 zur\u00fcck zu ':'Signed in \u2713 \u2014 returning to ')+target.host+' \u2026';
+  t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;'
+    +'background:#111;color:#fff;padding:12px 20px;border-radius:10px;font-weight:600;'
+    +'font-family:inherit;box-shadow:0 8px 30px rgba(0,0,0,.25);';
+  document.body.appendChild(t);
+  setTimeout(function(){window.location.href=returnTo;},1200);
+}
+
 /* ISSUE TOKEN — role/declare {sessionId} once >=1 human method confirmed */
 async function issueToken(){
   const btn=document.getElementById('issueBtn');btn.disabled=true;
@@ -642,7 +688,9 @@ async function issueToken(){
     document.getElementById('tokenMethods').textContent=(LANG==='de'?'Methoden: ':'Methods: ')+ORDER.filter(m=>confirmed[m]).join(' \u00b7 ');
     const tok=d.hhttps&&d.hhttps.token;
     if(tok){const p=tok.split('.');document.getElementById('tokenRaw').textContent=p[0]+'.'+p[1]+'.'+(p[2]||'').slice(0,16)+'\u2026'}
+    publishIdentity(d);
     card.scrollIntoView({behavior:'smooth',block:'center'});
+    maybeReturnTo();
   }catch(e){btn.disabled=false}
 }
 

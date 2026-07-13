@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { mountWpPluginRegistration } from './wp-plugin-registration.js'; // WP-PLUGIN-REG
 /**
  * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
  * iamhmn Initiative · daniel.hannuschka@tweakz.de
@@ -352,6 +353,12 @@ async function copyJson() {
 }
 
 app.use(express.json({ limit: '2mb' }));
+// RFC 6749 §4.1.3 / OIDC Core: the token endpoint MUST accept
+// application/x-www-form-urlencoded. Every standard OAuth/OIDC client sends
+// the code exchange that way. Without this parser req.body is empty there and
+// the endpoint answers 'unsupported_grant_type'. Each parser only engages on
+// its own Content-Type, so JSON endpoints are unaffected.
+app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
 app.use(cors({
   exposedHeaders: [
@@ -1469,9 +1476,12 @@ app.post('/hhttps/oauth/approve', async (req, res) => {
       pkceChallenge:      code_challenge,
       pkceMethod:         code_challenge_method || 'plain',
       state, nonce,
-      role:               d.role,
-      trustScore:         d.trustScore,
-      verificationMethod: d.roleLevel,
+      // v0.5: a role is OPTIONAL (only a EUDI (Q)EAA grants a professional
+      // role). authorization_codes.role/trust_score are NOT NULL (phase-3a
+      // schema), so fall back to the documented base identity.
+      role:               d.role || 'citizen',
+      trustScore:         d.trustScore ?? 0,
+      verificationMethod: d.roleLevel || null,
       ageGroup:               d.age_group || null,
       ageVerified:            d.age_verified ?? null,
       ageVerificationMethod:  d.age_verification_method || null,
@@ -2311,7 +2321,9 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   const classification = classifyDomain(email);
 
   try {
-    const result = await sendVerificationEmail({ email, role, sessionId, baseUrl: BASE_URL });
+    // v0.5: the sign-in page no longer declares a role here — fall back to the
+    // base identity so the mail does not read: role "undefined".
+    const result = await sendVerificationEmail({ email, role: role || 'citizen', sessionId, baseUrl: BASE_URL });
     const resp   = {
       sent: result.sent || result.devMode, devMode: result.devMode || false,
       domain: classification.domain, expectedLevel: classification.level,
@@ -3607,13 +3619,29 @@ app.get('/hhttps/developers/confirm-email', async (req, res) => {
   }
 
   await db.oauthClients.confirmEmail(client.client_id);
+
+  // Platforms registered through a CMS plugin continue in the plugin's own
+  // setup wizard, not in the developer portal.
+  const isWpPlugin = client.owner_user_id === 'wp-plugin' && !!client.homepage_url;
+  const wpSetupUrl = isWpPlugin
+    ? String(client.homepage_url).replace(/\/+$/, '') +
+      '/wp-admin/options-general.php?page=iamhmn-verify-setup'
+    : null;
+
   res.type('html').send(renderSimplePage(
     'Email confirmed ✓ · Email bestätigt ✓',
-    `Your platform <strong>${escapeHtml(client.name)}</strong> is now in status <code>unverified</code>. ` +
-    `You can now log in at <a href="${BASE_URL}/developers">developers</a> and set the DNS TXT record to request verification.` +
-    `<br><br><span lang="de">Deine Plattform <strong>${escapeHtml(client.name)}</strong> ist jetzt im Status <code>unverified</code>. ` +
-    `Du kannst dich jetzt einloggen unter <a href="${BASE_URL}/developers">developers</a> und ` +
-    `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.</span>`
+    isWpPlugin
+      ? `Your platform <strong>${escapeHtml(client.name)}</strong> is confirmed. ` +
+        `Go back to your WordPress admin — <a href="${escapeHtml(wpSetupUrl)}">Settings → iamhmn Setup</a> — ` +
+        `and continue with <strong>step 3 (DNS TXT record)</strong>. Once the record is verified, your site is approved automatically.` +
+        `<br><br><span lang="de">Deine Plattform <strong>${escapeHtml(client.name)}</strong> ist bestätigt. ` +
+        `Gehe zurück in dein WordPress-Backend — <a href="${escapeHtml(wpSetupUrl)}">Einstellungen → iamhmn Setup</a> — ` +
+        `und mache mit <strong>Schritt 3 (DNS-TXT-Record)</strong> weiter. Sobald der Record verifiziert ist, wird deine Seite automatisch freigeschaltet.</span>`
+      : `Your platform <strong>${escapeHtml(client.name)}</strong> is now in status <code>unverified</code>. ` +
+        `You can now log in at <a href="${BASE_URL}/developers">developers</a> and set the DNS TXT record to request verification.` +
+        `<br><br><span lang="de">Deine Plattform <strong>${escapeHtml(client.name)}</strong> ist jetzt im Status <code>unverified</code>. ` +
+        `Du kannst dich jetzt einloggen unter <a href="${BASE_URL}/developers">developers</a> und ` +
+        `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.</span>`
   ));
 });
 
@@ -4069,6 +4097,7 @@ async function main() {
     process.exit(1);
   }
 
+mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
   app.listen(PORT, () => {
     console.log(`\n🔐 HHTTPS v4.1 · Port ${PORT}`);
     console.log(`   RP_ID:   ${RP_ID}`);

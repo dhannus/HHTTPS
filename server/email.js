@@ -324,9 +324,20 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
  * @returns {Promise<{sent: boolean, devMode: boolean}>}
  */
 export async function sendPlatformRegistrationEmail({
-  to, platformName, homepageUrl, confirmUrl, kind = 'registration'
+  to, platformName, homepageUrl, confirmUrl, kind = 'registration', setupUrl = null
 }) {
   const isChange = kind === 'email_change';
+
+  // When a CMS plugin (WordPress) registered the platform, the next step is
+  // NOT the developer portal — it is step 3 of the plugin's own setup wizard,
+  // after which the site is approved automatically.
+  const isPlugin = !!setupUrl;
+  const nextParaEn = isPlugin
+    ? `<p>After confirmation, go back to your WordPress admin — <a href="${setupUrl}" style="color:#a0b8d8">Settings → iamhmn Setup</a> — and continue with <strong>step 3 (DNS TXT record)</strong>. Once the record is verified, your site is approved <strong>automatically</strong>. No further action needed.</p>`
+    : `<p>After confirmation your platform moves to status <code>unverified</code> and can immediately be used by users for login. For <code>verified</code> status (green badge on the consent screen) you additionally need to set a DNS TXT record and request a review.</p>`;
+  const nextParaDe = isPlugin
+    ? `<p>Gehe nach der Bestätigung zurück in dein WordPress-Backend — <a href="${setupUrl}" style="color:#a0b8d8">Einstellungen → iamhmn Setup</a> — und mache mit <strong>Schritt 3 (DNS-TXT-Record)</strong> weiter. Sobald der Record verifiziert ist, wird deine Seite <strong>automatisch</strong> freigeschaltet. Mehr ist nicht zu tun.</p>`
+    : `<p>Nach der Bestätigung wechselt deine Plattform in den Status <code>unverified</code> und kann sofort von Usern für den Login genutzt werden. Für den <code>verified</code>-Status (grüner Badge auf der Consent-Seite) musst du zusätzlich einen DNS-TXT-Record setzen und einen Review beantragen.</p>`;
 
   const titleEn = isChange ? 'Confirm new contact email' : 'Confirm platform registration';
   const titleDe = isChange ? 'Neue Kontakt-Email bestätigen' : 'Plattform-Anmeldung bestätigen';
@@ -348,10 +359,10 @@ export async function sendPlatformRegistrationEmail({
       <div class="ib-key">Homepage</div>
       <div class="ib-val">${escapeHtml(homepageUrl)}</div>
     </div>
-    <p>After confirmation your platform moves to status <code>unverified</code> and can immediately be used by users for login. For <code>verified</code> status (green badge on the consent screen) you additionally need to set a DNS TXT record and request a review.</p>
+    ${nextParaEn}
     <p style="font-size:11px;color:#4a6080;">The link is valid for <strong style="color:#a0b8d8">48 hours</strong>.</p>`,
     `${introDe}
-    <p>Nach der Bestätigung wechselt deine Plattform in den Status <code>unverified</code> und kann sofort von Usern für den Login genutzt werden. Für den <code>verified</code>-Status (grüner Badge auf der Consent-Seite) musst du zusätzlich einen DNS-TXT-Record setzen und einen Review beantragen.</p>
+    ${nextParaDe}
     <p style="font-size:11px;color:#4a6080;">Der Link ist <strong style="color:#a0b8d8">48 Stunden</strong> gültig.</p>`
   );
 
