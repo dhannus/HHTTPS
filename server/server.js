@@ -1321,6 +1321,7 @@ app.get('/s/:slug', (req, res) => {
 
 const OAUTH_CODE_TTL  = 60;         // seconds
 const OAUTH_TOKEN_TTL = 5 * 60;     // 5 min for third-party access tokens
+const OAUTH_REFRESH_TTL = 30 * 24 * 3600; // 30 days — RFC 6749 §6 refresh grant
 const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method', 'age_group']);
 
 // Discovery (RFC 8414 / OpenID Connect Discovery 1.0)
@@ -1334,7 +1335,7 @@ app.get('/.well-known/openid-configuration', (req, res) => {
     jwks_uri:                         `${BASE_URL}/.well-known/jwks.json`,
     scopes_supported:                 ['openid', 'role', 'verification_method', 'age_group'],
     response_types_supported:         ['code'],
-    grant_types_supported:            ['authorization_code'],
+    grant_types_supported:            ['authorization_code', 'refresh_token'],
     subject_types_supported:          ['pairwise', 'public'],
     id_token_signing_alg_values_supported: ['ES256'],
     code_challenge_methods_supported: ['S256', 'plain'],
@@ -1513,6 +1514,77 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     code_verifier
   } = req.body || {};
 
+  // ── RFC 6749 §6: refresh_token grant ──────────────────────────────────
+  if (grant_type === 'refresh_token') {
+    const { refresh_token } = req.body || {};
+    if (!refresh_token || !client_id) {
+      return res.status(400).json({ error: 'invalid_request' });
+    }
+    const rClient = await db.oauthClients.get(client_id);
+    if (!rClient) return res.status(401).json({ error: 'invalid_client' });
+    if (rClient.client_secret_hash) {
+      if (!client_secret) return res.status(401).json({ error: 'invalid_client' });
+      const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
+      if (expected !== rClient.client_secret_hash) {
+        return res.status(401).json({ error: 'invalid_client' });
+      }
+    }
+    let rd;
+    try { rd = await verifyToken(refresh_token); }
+    catch { return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token invalid' }); }
+    if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
+      return res.status(400).json({ error: 'invalid_grant' });
+    }
+    const active = await db.refreshTokens.get(rd.jti);
+    if (!active || active.credential_id !== `oauth:${client_id}`) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
+    }
+
+    // Rotation: alte jti entwerten, neue ausstellen.
+    await db.refreshTokens.delete(rd.jti);
+    const newJti = uuid();
+    await db.refreshTokens.create({
+      jti: newJti, userId: rd.ouid, credentialId: `oauth:${client_id}`,
+      role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
+    });
+    const newRefresh = signToken({
+      sub: 'oauth_refresh', jti: newJti, client_id,
+      ouid: rd.ouid, scope: rd.scope || 'openid',
+      role: rd.role || null, trust_score: rd.trust_score ?? 0,
+      verification_method: rd.verification_method || null,
+      ...(rd.age_group ? { age_group: rd.age_group,
+        age_verified: rd.age_verified ?? false,
+        age_verification_method: rd.age_verification_method || 'self-declared' } : {})
+    }, { expiresIn: OAUTH_REFRESH_TTL });
+
+    // Frischer Access-Token — dieselben Claims wie im Code-Zweig.
+    const rPairwise = pairwiseSubjectId(rd.ouid, client_id, rClient.subject_type);
+    const rScopes = String(rd.scope || 'openid').split(' ').filter(Boolean);
+    const newAccess = signToken({
+      iss:        `https://${RP_ID}`,
+      hhttps_iss: `hhttps://${RP_ID}`,
+      sub:        rPairwise,
+      aud:        client_id,
+      client_id,
+      scope:      rScopes.join(' '),
+      role:       rd.role || null,
+      trustScore: rd.trust_score ?? 0,
+      ...(rScopes.includes('age_group') && rd.age_group ? {
+        age_group:               rd.age_group,
+        age_verified:            rd.age_verified ?? false,
+        age_verification_method: rd.age_verification_method || 'self-declared'
+      } : {})
+    }, { expiresIn: OAUTH_TOKEN_TTL });
+
+    return res.json({
+      access_token:  newAccess,
+      token_type:    'Bearer',
+      expires_in:    OAUTH_TOKEN_TTL,
+      refresh_token: newRefresh,
+      scope:         rScopes.join(' ')
+    });
+  }
+
   if (grant_type !== 'authorization_code') {
     return res.status(400).json({ error: 'unsupported_grant_type' });
   }
@@ -1632,12 +1704,29 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     console.warn('[STATS] recordLogin failed:', err.message);
   }
 
+  // Refresh-Token für die stille Erneuerung (RFC 6749 §6), rotierend.
+  const refreshJti = uuid();
+  await db.refreshTokens.create({
+    jti: refreshJti, userId: claimed.user_id, credentialId: `oauth:${client_id}`,
+    role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
+  });
+  const oauthRefreshToken = signToken({
+    sub: 'oauth_refresh', jti: refreshJti, client_id,
+    ouid: claimed.user_id, scope: claimed.scopes.join(' '),
+    role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
+    verification_method: claimed.verification_method || null,
+    ...(claimed.age_group ? { age_group: claimed.age_group,
+      age_verified: claimed.age_verified ?? false,
+      age_verification_method: claimed.age_verification_method || 'self-declared' } : {})
+  }, { expiresIn: OAUTH_REFRESH_TTL });
+
   return res.json({
-    access_token: accessToken,
-    token_type:   'Bearer',
-    expires_in:   OAUTH_TOKEN_TTL,
-    id_token:     idToken,
-    scope:        claimed.scopes.join(' ')
+    access_token:  accessToken,
+    token_type:    'Bearer',
+    expires_in:    OAUTH_TOKEN_TTL,
+    id_token:      idToken,
+    refresh_token: oauthRefreshToken,
+    scope:         claimed.scopes.join(' ')
   });
 });
 
@@ -1717,8 +1806,8 @@ a{color:#A86246;text-decoration:none}
 
 function renderConsentPage({ client, scopes, params }) {
   const verifiedBadge = client.verified
-    ? `<span class="badge badge-verified" data-i18n="consent.verified">✓ Verifizierte Plattform</span>`
-    : `<span class="badge badge-unverified" data-i18n="consent.unverified">⚠ Nicht verifiziert</span>`;
+    ? `<span class="badge badge-ok" data-i18n="consent.verified">✓ Verifizierte Plattform</span>`
+    : `<span class="badge badge-warn" data-i18n="consent.unverified">⚠ Nicht verifiziert</span>`;
 
   const unverifiedWarning = client.verified ? '' : `
     <div class="warning">
@@ -1730,11 +1819,11 @@ function renderConsentPage({ client, scopes, params }) {
   const scopeRows = scopes.map(s => {
     const label = {
       'openid':              { icon: '🆔', title: 'Anonyme Identität',  desc: 'Eine pseudonyme Kennung, die nur diese Plattform sieht.' },
-      'role':                { icon: '🎭', title: 'Rolle + Trust-Score', desc: 'Deine gesellschaftliche Rolle (z. B. Entwickler) und dein Vertrauenswert.' },
+      'role':                { icon: '🎭', title: 'Berufsrolle', desc: 'Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).' },
       'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' },
       'age_group':           { icon: '🔞', title: 'Altersgruppe', desc: 'Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.' }
     }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
-    return `<div class="scope-row">
+    return `<div class="scope-row" data-scope="${s}">
       <span class="scope-icon">${label.icon}</span>
       <div><div class="scope-title" data-i18n="scope.${s}.title">${label.title}</div>
            <div class="scope-desc" data-i18n="scope.${s}.desc">${label.desc}</div></div>
@@ -1745,63 +1834,102 @@ function renderConsentPage({ client, scopes, params }) {
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Login bei ${escapeHtml(client.name)} · HHTTPS</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..600,30..100,0..1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --cream:#F8F1E4; --paper:#FCFAF5; --sand:#EDE0C8;
-    --terra:#C97D5B; --terra-dp:#A86246; --apricot:#F2B894;
-    --sage:#A8B89E; --green-v:#5BAF6B;
-    --ink:#2D2823; --ink-soft:#4A413A; --ink-mute:#7A6F62;
-    --line:rgba(45,40,35,0.1);
-    --red:#C97D5B;
+  :root{
+    --bg:#F9F9F8; --surface:#FFFFFF; --ink:#0A0A0A; --ink-2:#5C5C5C;
+    --line:#8A8A8A; --line-subtle:#E6E6E4;
+    --ok:#1C6B3F; --ok-bg:#EDF6F0;
+    --warn:#8A4A12; --warn-bg:#FDF3E8;
+    --font-display:'Syne',system-ui,sans-serif;
+    --font-ui:'Inter',system-ui,sans-serif;
+    --font-mono:'JetBrains Mono',ui-monospace,monospace;
+    --r-card:24px; --r-pill:999px;
+    --sh-md:0 4px 16px rgba(10,10,10,.08);
+    --sh-lg:0 12px 40px rgba(10,10,10,.10);
+    --ease:cubic-bezier(.22,1,.36,1);
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'Inter', system-ui, sans-serif; background: var(--cream); color: var(--ink); min-height: 100vh; display:flex; align-items:center; justify-content:center; padding: 40px 16px; line-height:1.55; }
-  .wrap { max-width: 540px; width:100%; }
-  .header { text-align: center; margin-bottom: 24px; }
-  .logo { display:inline-flex; align-items:center; gap:10px; }
-  .logo-mark { width:40px; height:40px; border-radius:11px; background: linear-gradient(135deg, var(--terra), var(--apricot)); position:relative; }
-  .logo-mark::after { content:'H'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:'Fraunces',serif; font-weight:600; font-size:22px; color: var(--paper); }
-  .logo-text { font-family:'Fraunces',serif; font-variation-settings:"SOFT" 100,"WONK" 1; font-weight:500; font-size:22px; }
-  .card { background: var(--paper); border-radius: 18px; box-shadow: 0 8px 28px rgba(45,40,35,0.1); border: 1px solid var(--line); overflow:hidden; }
-  .card-head { padding: 28px 28px 20px; border-bottom: 1px solid var(--line); text-align: center; }
-  .client-logo { width:64px; height:64px; border-radius:14px; background: var(--sand); margin: 0 auto 14px; display:flex; align-items:center; justify-content:center; font-size:32px; color: var(--ink-soft); }
-  h1 { font-family:'Fraunces',serif; font-variation-settings:"SOFT" 50,"WONK" 1; font-size:24px; font-weight:500; letter-spacing:-0.01em; margin-bottom:6px; }
-  h1 em { color: var(--terra); font-style:italic; font-variation-settings:"SOFT" 100,"WONK" 1; }
-  .client-url { font-family:'JetBrains Mono',monospace; font-size:12px; color: var(--ink-mute); margin-top: 8px; }
-  .badge { display:inline-block; font-size: 11px; padding: 4px 10px; border-radius: 100px; margin-top: 10px; font-family:'JetBrains Mono',monospace; letter-spacing:0.5px; }
-  .badge-verified { background: rgba(91,175,107,0.15); color: var(--green-v); }
-  .badge-unverified { background: rgba(201,125,91,0.15); color: var(--terra-dp); }
-  .warning { background: rgba(201,125,91,0.08); border-left: 4px solid var(--terra); padding: 14px 18px; margin: 0; font-size:13px; color: var(--ink-soft); }
-  .warning strong { color: var(--terra-dp); display:block; margin-bottom:4px; }
-  .warning code { background: var(--sand); padding: 2px 6px; border-radius: 4px; font-family:'JetBrains Mono',monospace; font-size: 11px; }
-  .scope-list { padding: 20px 28px; }
-  .scope-list-head { font-family:'JetBrains Mono',monospace; font-size:10px; color: var(--ink-mute); letter-spacing:1.5px; text-transform:uppercase; margin-bottom: 14px; }
-  .scope-row { display:flex; gap:14px; padding:10px 0; align-items:flex-start; border-bottom: 1px solid var(--line); }
-  .scope-row:last-child { border-bottom:none; }
-  .scope-icon { font-size:24px; line-height:1; }
-  .scope-title { font-weight:600; margin-bottom:2px; }
-  .scope-desc { font-size: 12px; color: var(--ink-mute); }
-  .actions { padding: 20px 28px 28px; display:flex; gap:10px; }
-  .btn { flex:1; padding: 14px; border-radius: 100px; border: none; font-family:inherit; font-size:14px; font-weight:500; cursor:pointer; transition: all 0.2s; }
-  .btn-allow { background: var(--ink); color: var(--paper); }
-  .btn-allow:hover { background: var(--terra-dp); transform: translateY(-1px); }
-  .btn-allow:disabled { background: var(--ink-mute); cursor: not-allowed; transform: none; }
-  .btn-deny { background: var(--paper); color: var(--ink-soft); border: 1px solid var(--line); }
-  .btn-deny:hover { background: var(--sand); }
-  .footer-note { padding: 14px 28px; background: var(--cream); border-top: 1px solid var(--line); text-align:center; font-size: 11px; color: var(--ink-mute); font-family:'JetBrains Mono',monospace; }
-  .status { padding: 14px 28px; font-size: 13px; text-align:center; display:none; }
-  .status.error { background: rgba(201,125,91,0.1); color: var(--terra-dp); display:block; }
-  .lang-toggle { display:inline-flex; gap:2px; background:var(--sand); border-radius:100px; padding:2px; margin-top:12px; }
-  .lang-toggle button { border:none; background:transparent; color:var(--ink-mute); font:600 11px/1 'JetBrains Mono',monospace; letter-spacing:.5px; padding:5px 9px; border-radius:100px; cursor:pointer; transition:all .15s; }
-  .lang-toggle button:hover { color:var(--ink); }
-  .lang-toggle button.active { background:var(--paper); color:var(--terra-dp); box-shadow:0 1px 3px rgba(45,40,35,.12); }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--font-ui);background:var(--bg);color:var(--ink);
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    padding:40px 20px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{width:100%;max-width:480px}
+
+  /* Brand — same dot mark and Syne wordmark as the sign-in page */
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);
+    font-weight:800;font-size:22px;letter-spacing:-.02em;color:inherit;text-decoration:none}
+  .brand .dot{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--ink);
+    position:relative;flex:none}
+  .brand .dot::after{content:'';position:absolute;inset:5px;border-radius:50%;background:var(--ink)}
+  .lang-toggle{display:inline-flex;gap:2px;border:1.5px solid var(--line-subtle);
+    border-radius:var(--r-pill);padding:2px}
+  .lang-toggle button{border:none;background:none;color:var(--ink-2);
+    font:500 12px/1 var(--font-mono);letter-spacing:.5px;padding:6px 11px;
+    border-radius:var(--r-pill);cursor:pointer;transition:all .16s var(--ease)}
+  .lang-toggle button:hover{color:var(--ink)}
+  .lang-toggle button.active{background:var(--ink);color:#fff}
+
+  .card{background:var(--surface);border:1.5px solid var(--ink);
+    border-radius:var(--r-card);box-shadow:var(--sh-lg);overflow:hidden}
+  .card-head{padding:32px 28px 24px;text-align:center;border-bottom:1px solid var(--line-subtle)}
+  .client-logo{width:56px;height:56px;border-radius:16px;border:1.5px solid var(--line-subtle);
+    background:var(--bg);margin:0 auto 18px;display:flex;align-items:center;
+    justify-content:center;font-size:26px;overflow:hidden}
+  h1{font-family:var(--font-display);font-weight:800;font-size:1.6rem;
+    line-height:1.15;letter-spacing:-.02em}
+  /* the platform name carries the same shimmer accent as the home page hero */
+  h1 .name{background:linear-gradient(100deg,#0A7C99 0%,#B05A1E 32%,#FFD9A8 50%,#B05A1E 68%,#0A7C99 100%);
+    background-size:200% auto;-webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;animation:shimmer 6.5s ease-in-out infinite}
+  @keyframes shimmer{0%,100%{background-position:0% center}50%{background-position:100% center}}
+  @media (prefers-reduced-motion:reduce){h1 .name{animation:none}}
+  .client-url{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);margin-top:12px;
+    word-break:break-all}
+  .badge{display:inline-block;font:500 11px/1 var(--font-mono);letter-spacing:.4px;
+    padding:6px 12px;border-radius:var(--r-pill);margin-top:14px}
+  .badge-ok{background:var(--ok-bg);color:var(--ok)}
+  .badge-warn{background:var(--warn-bg);color:var(--warn)}
+
+  .warning{background:var(--warn-bg);border-bottom:1px solid var(--line-subtle);
+    padding:16px 28px;font-size:13px;color:var(--ink-2)}
+  .warning strong{color:var(--warn);display:block;margin-bottom:4px;font-weight:600}
+  .warning code{font-family:var(--font-mono);font-size:11px;background:#fff;
+    padding:2px 6px;border-radius:6px;border:1px solid var(--line-subtle)}
+
+  .scope-list{padding:22px 28px}
+  .scope-list-head{font-family:var(--font-mono);font-size:10px;color:var(--ink-2);
+    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px}
+  .scope-row{display:flex;gap:14px;padding:12px 0;align-items:flex-start;
+    border-bottom:1px solid var(--line-subtle)}
+  .scope-row:last-child{border-bottom:none;padding-bottom:0}
+  .scope-icon{font-size:22px;line-height:1.2}
+  .scope-title{font-weight:600;margin-bottom:2px}
+  .scope-desc{font-size:13px;color:var(--ink-2);line-height:1.45}
+
+  .status{padding:14px 28px;font-size:13px;text-align:center;display:none}
+  .status.error{background:var(--warn-bg);color:var(--warn);display:block;font-weight:500}
+
+  .actions{padding:8px 28px 28px;display:flex;gap:10px}
+  .btn{flex:1;min-height:52px;border-radius:var(--r-pill);font-family:var(--font-ui);
+    font-size:15px;font-weight:700;cursor:pointer;transition:transform .16s var(--ease),opacity .16s}
+  .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .btn-allow{background:var(--ink);color:#fff;border:none;box-shadow:var(--sh-md)}
+  .btn-allow:hover{transform:translateY(-1px)}
+  .btn-allow:disabled{opacity:.35;cursor:not-allowed;transform:none;box-shadow:none}
+  .btn-deny{background:none;color:var(--ink);border:1.5px solid var(--line-subtle);font-weight:500}
+  .btn-deny:hover{border-color:var(--ink)}
+
+  .footer-note{padding:16px 28px;background:var(--bg);border-top:1px solid var(--line-subtle);
+    text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--ink-2);line-height:1.6}
+  .footer-note a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+  @media (max-width:420px){.actions{flex-direction:column-reverse}}
 </style></head><body>
 <div class="wrap">
-  <div class="header">
-    <a class="logo" href="https://hhttps.org" style="text-decoration:none;color:inherit">
-      <div class="logo-mark"></div>
-      <div class="logo-text">HHTTPS</div>
+  <div class="top">
+    <a class="brand" href="https://hhttps.org">
+      <span class="dot"></span><span>HHTTPS</span>
     </a>
     <div class="lang-toggle" role="group" aria-label="Language">
       <button type="button" data-lang="de" class="active">DE</button>
@@ -1810,8 +1938,8 @@ function renderConsentPage({ client, scopes, params }) {
   </div>
   <div class="card">
     <div class="card-head">
-      <div class="client-logo">${client.logo_url ? `<img src="${escapeHtml(client.logo_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">` : '🏛️'}</div>
-      <h1><em>${escapeHtml(client.name)}</em> <span data-i18n="consent.heading">möchte deine Identität sehen</span></h1>
+      <div class="client-logo">${client.logo_url ? `<img src="${escapeHtml(client.logo_url)}" alt="" style="width:100%;height:100%;object-fit:cover">` : '🏛️'}</div>
+      <h1><span class="name">${escapeHtml(client.name)}</span> <span data-i18n="consent.heading">möchte deine Identität sehen</span></h1>
       ${client.homepage_url ? `<div class="client-url">${escapeHtml(client.homepage_url)}</div>` : ''}
       ${verifiedBadge}
     </div>
@@ -1825,7 +1953,7 @@ function renderConsentPage({ client, scopes, params }) {
       <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
       <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">Erlauben</button>
     </div>
-    <div class="footer-note"><span data-i18n="consent.footPre">Nur Rolle und Trust-Score werden geteilt. Keine PII. Du kannst die Verbindung jederzeit auf</span> <a href="https://hhttps.org" style="color:var(--terra-dp);text-decoration:none">hhttps.org</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
+    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="https://hhttps.org">hhttps.org</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
   </div>
 </div>
 <script>
@@ -1841,14 +1969,53 @@ document.getElementById('denyBtn').addEventListener('click', () => {
   window.location = url.toString();
 });
 
+// Read a JWT payload without verifying (client-side, for the exp check only).
+function jwtPayload(tok){
+  try { return JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
+  catch(e){ return null; }
+}
+// Expired (with a small clock-skew margin) or unreadable → treat as expired.
+function hhttpsTokenExpired(tok){
+  const p = jwtPayload(tok);
+  if (!p || !p.exp) return true;
+  return (p.exp * 1000) <= (Date.now() + 5000);
+}
+function clearIdentity(){ try { localStorage.removeItem('hhttps_identity'); } catch(e){} }
+function relogin(){
+  clearIdentity();
+  window.location = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
+}
+// Try to mint a fresh access token from the stored refresh token. Returns the
+// new access token, or null if refresh is impossible (then we re-login).
+async function tryRefresh(identity){
+  if (!identity || !identity.refreshToken) return null;
+  if (identity.refreshExpiresAt && new Date(identity.refreshExpiresAt).getTime() <= Date.now()) return null;
+  try {
+    const r = await fetch('https://hhttps.org/hhttps/token/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: identity.refreshToken })
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d.token) return null;
+    const merged = Object.assign({}, identity, {
+      token: d.token,
+      expiresAt: d.expiresAt || identity.expiresAt || null
+    });
+    try { localStorage.setItem('hhttps_identity', JSON.stringify(merged)); } catch(e){}
+    return d.token;
+  } catch(e){ return null; }
+}
+
 document.getElementById('allowBtn').addEventListener('click', async () => {
   const allow = document.getElementById('allowBtn');
   const status = document.getElementById('status');
   allow.disabled = true;
   allow.textContent = t('consent.processing');
 
-  // Look for an identity in localStorage (published by hhttps.org main page)
-  // or in browser extension storage. For Phase 3a we use localStorage.
+  // Identity is published to localStorage by the sign-in page after a token
+  // is issued (publishIdentity). Without it we send the user there and come
+  // back via ?returnTo=.
   let identity = null;
   try {
     const raw = localStorage.getItem('hhttps_identity');
@@ -1856,12 +2023,21 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
   } catch (e) {}
 
   if (!identity || !identity.token) {
-    status.className = 'status error';
-    status.textContent = t('consent.noIdentity');
-    setTimeout(() => {
-      window.location = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
-    }, 2000);
+    // No identity at all → straight to sign-in (no error shown).
+    relogin();
     return;
+  }
+
+  // Expired access token → silently refresh, or re-login. The user never sees
+  // an "expired" error.
+  if (hhttpsTokenExpired(identity.token)) {
+    const fresh = await tryRefresh(identity);
+    if (fresh) {
+      identity.token = fresh;
+    } else {
+      relogin();
+      return;
+    }
   }
 
   try {
@@ -1880,7 +2056,34 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
       })
     });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error || 'OAuth error');
+    if (!r.ok) {
+      // Server-side expiry (race between our check and the request): try one
+      // refresh, then re-login — never surface an expiry error to the user.
+      const msg = (d.error || '') + ' ' + (d.error_description || '');
+      if (/expired|jwt/i.test(msg)) {
+        const fresh = await tryRefresh(identity);
+        if (fresh) {
+          const r2 = await fetch('/hhttps/oauth/approve', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              token: fresh,
+              client_id:             params.get('client_id'),
+              redirect_uri:          params.get('redirect_uri'),
+              scope:                 params.get('scope'),
+              state:                 params.get('state'),
+              nonce:                 params.get('nonce'),
+              code_challenge:        params.get('code_challenge'),
+              code_challenge_method: params.get('code_challenge_method')
+            })
+          });
+          const d2 = await r2.json();
+          if (r2.ok) { window.location = d2.redirect; return; }
+        }
+        relogin();
+        return;
+      }
+      throw new Error(d.error || 'OAuth error');
+    }
     window.location = d.redirect;
   } catch (e) {
     status.className = 'status error';
@@ -1899,12 +2102,12 @@ const CONSENT_I18N = {
     "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
     "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
     "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
-    "consent.footPre":"Nur Rolle und Trust-Score werden geteilt. Keine PII. Du kannst die Verbindung jederzeit auf",
+    "consent.footPre":"Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf",
     "consent.footPost":"widerrufen.","consent.processing":"Wird verarbeitet…",
     "consent.noIdentity":"Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.",
     "consent.errorPrefix":"Fehler: ",
     "scope.openid.title":"Anonyme Identität","scope.openid.desc":"Eine pseudonyme Kennung, die nur diese Plattform sieht.",
-    "scope.role.title":"Rolle + Trust-Score","scope.role.desc":"Deine gesellschaftliche Rolle (z. B. Entwickler) und dein Vertrauenswert.",
+    "scope.role.title":"Berufsrolle","scope.role.desc":"Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).",
     "scope.verification_method.title":"Verifikationsmethode","scope.verification_method.desc":"Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).",
     "scope.age_group.title":"Altersgruppe","scope.age_group.desc":"Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe."
   },
@@ -1915,12 +2118,12 @@ const CONSENT_I18N = {
     "consent.warnB2":". Check in particular that the URL in the address bar matches",
     "consent.warnB3":".","consent.heading":"wants to see your identity",
     "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
-    "consent.footPre":"Only role and trust score are shared. No PII. You can revoke the connection any time at",
+    "consent.footPre":"No personal data is shared. You can revoke the connection any time at",
     "consent.footPost":".","consent.processing":"Processing…",
     "consent.noIdentity":"No HHTTPS identity found. Please log in at hhttps.org first.",
     "consent.errorPrefix":"Error: ",
     "scope.openid.title":"Anonymous identity","scope.openid.desc":"A pseudonymous identifier that only this platform sees.",
-    "scope.role.title":"Role + trust score","scope.role.desc":"Your societal role (e.g. developer) and your trust value.",
+    "scope.role.title":"Professional role","scope.role.desc":"Your verified professional role — only if present (e.g. via EUDI wallet).",
     "scope.verification_method.title":"Verification method","scope.verification_method.desc":"How your role was verified (e.g. ORCID, press card).",
     "scope.age_group.title":"Age group","scope.age_group.desc":"Your rough age group (e.g. 18+), not your date of birth. Currently self-declared."
   }
@@ -1943,6 +2146,13 @@ document.querySelectorAll('.lang-toggle button').forEach(function(b){
   b.addEventListener('click', function(){ applyConsentLang(b.dataset.lang); });
 });
 applyConsentLang(detectConsentLang());
+try {
+  var _idn = JSON.parse(localStorage.getItem('hhttps_identity')||'null');
+  if (!_idn || !_idn.role) {
+    var _rr = document.querySelector('.scope-row[data-scope="role"]');
+    if (_rr) _rr.style.display = 'none';
+  }
+} catch(e){}
 </script>
 </body></html>`;
 }
