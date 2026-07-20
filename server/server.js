@@ -1451,9 +1451,10 @@ app.post('/hhttps/oauth/approve', async (req, res) => {
 
   try {
     const d = await checkTokenValid(token);
-    if (d.sub === 'machine') {
-      return res.status(403).json({ error: 'machine tokens cannot authorize' });
-    }
+    // Machines ARE allowed through OAuth. Their actor type travels as
+    // verification_method 'machine-token' (no schema change needed) and the
+    // token endpoint turns that into actor_type:'bot' claims.
+    const isMachine = (d.sub === 'machine');
 
     const client = await db.oauthClients.get(client_id);
     if (!client) return res.status(400).json({ error: 'unknown client' });
@@ -1471,7 +1472,8 @@ app.post('/hhttps/oauth/approve', async (req, res) => {
     await db.authCodes.create({
       code,
       clientId:           client_id,
-      userId:             d.uid || d.userId || d.sub,
+      userId:             isMachine ? ('machine:' + (d.operatorId || 'unknown'))
+                                     : (d.uid || d.userId || d.sub),
       redirectUri:        redirect_uri,
       scopes,
       pkceChallenge:      code_challenge,
@@ -1480,9 +1482,9 @@ app.post('/hhttps/oauth/approve', async (req, res) => {
       // v0.5: a role is OPTIONAL (only a EUDI (Q)EAA grants a professional
       // role). authorization_codes.role/trust_score are NOT NULL (phase-3a
       // schema), so fall back to the documented base identity.
-      role:               d.role || 'citizen',
+      role:               d.role || (isMachine ? 'machine' : 'citizen'),
       trustScore:         d.trustScore ?? 0,
-      verificationMethod: d.roleLevel || null,
+      verificationMethod: isMachine ? 'machine-token' : (d.roleLevel || null),
       ageGroup:               d.age_group || null,
       ageVerified:            d.age_verified ?? null,
       ageVerificationMethod:  d.age_verification_method || null,
@@ -1536,17 +1538,24 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       return res.status(400).json({ error: 'invalid_grant' });
     }
     const active = await db.refreshTokens.get(rd.jti);
-    if (!active || active.credential_id !== `oauth:${client_id}`) {
+    if (!active) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
     }
 
-    // Rotation: alte jti entwerten, neue ausstellen.
-    await db.refreshTokens.delete(rd.jti);
+    // Rotation: erst die neue jti anlegen, dann die alte entwerten — und
+    // jeden Persistenzfehler sauber beantworten statt den Request hängen zu
+    // lassen.
     const newJti = uuid();
-    await db.refreshTokens.create({
-      jti: newJti, userId: rd.ouid, credentialId: `oauth:${client_id}`,
-      role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
-    });
+    try {
+      await db.refreshTokens.create({
+        jti: newJti, userId: rd.ouid, credentialId: null,
+        role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
+      });
+      await db.refreshTokens.delete(rd.jti);
+    } catch (err) {
+      console.error('[OAUTH] refresh rotation failed:', err.message);
+      return res.status(500).json({ error: 'server_error' });
+    }
     const newRefresh = signToken({
       sub: 'oauth_refresh', jti: newJti, client_id,
       ouid: rd.ouid, scope: rd.scope || 'openid',
@@ -1569,6 +1578,8 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       scope:      rScopes.join(' '),
       role:       rd.role || null,
       trustScore: rd.trust_score ?? 0,
+      ...(rd.verification_method === 'machine-token'
+          ? { actor_type: 'bot', human: false } : {}),
       ...(rScopes.includes('age_group') && rd.age_group ? {
         age_group:               rd.age_group,
         age_verified:            rd.age_verified ?? false,
@@ -1655,6 +1666,10 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     scope:      claimed.scopes.join(' '),
     role:       claimed.role,
     trustScore: claimed.trust_score,
+    // Actor type survives the code flow: 'machine-token' in the code row
+    // becomes explicit bot claims here (and in the ID token below).
+    ...(claimed.verification_method === 'machine-token'
+        ? { actor_type: 'bot', human: false } : {}),
     // age_group travels with the access token only when the scope was granted,
     // so /userinfo can echo it. Orthogonal to role; self-declared in Phase 1.
     ...(claimed.scopes.includes('age_group') && claimed.age_group ? {
@@ -1666,6 +1681,8 @@ app.post('/hhttps/oauth/token', async (req, res) => {
 
   // ID token (OIDC) — claims based on requested scopes
   const idTokenClaims = {
+    ...(claimed.verification_method === 'machine-token'
+        ? { actor_type: 'bot', human: false } : {}),
     iss:       `https://${RP_ID}`,
     sub:       pairwiseId,
     aud:       client_id,
@@ -1705,27 +1722,36 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   }
 
   // Refresh-Token für die stille Erneuerung (RFC 6749 §6), rotierend.
-  const refreshJti = uuid();
-  await db.refreshTokens.create({
-    jti: refreshJti, userId: claimed.user_id, credentialId: `oauth:${client_id}`,
-    role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
-  });
-  const oauthRefreshToken = signToken({
-    sub: 'oauth_refresh', jti: refreshJti, client_id,
-    ouid: claimed.user_id, scope: claimed.scopes.join(' '),
-    role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
-    verification_method: claimed.verification_method || null,
-    ...(claimed.age_group ? { age_group: claimed.age_group,
-      age_verified: claimed.age_verified ?? false,
-      age_verification_method: claimed.age_verification_method || 'self-declared' } : {})
-  }, { expiresIn: OAUTH_REFRESH_TTL });
+  // Die Persistenz darf den Login NIE brechen: schlägt sie fehl, antworten
+  // wir schlicht ohne refresh_token. credential_id bleibt null — die Spalte
+  // trägt einen FK auf credentials; die OAuth-Bindung steckt signiert im
+  // Refresh-JWT selbst (client_id-Claim).
+  let oauthRefreshToken = null;
+  try {
+    const refreshJti = uuid();
+    await db.refreshTokens.create({
+      jti: refreshJti, userId: claimed.user_id, credentialId: null,
+      role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
+    });
+    oauthRefreshToken = signToken({
+      sub: 'oauth_refresh', jti: refreshJti, client_id,
+      ouid: claimed.user_id, scope: claimed.scopes.join(' '),
+      role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
+      verification_method: claimed.verification_method || null,
+      ...(claimed.age_group ? { age_group: claimed.age_group,
+        age_verified: claimed.age_verified ?? false,
+        age_verification_method: claimed.age_verification_method || 'self-declared' } : {})
+    }, { expiresIn: OAUTH_REFRESH_TTL });
+  } catch (err) {
+    console.error('[OAUTH] refresh issuance failed:', err.message);
+  }
 
   return res.json({
     access_token:  accessToken,
     token_type:    'Bearer',
     expires_in:    OAUTH_TOKEN_TTL,
     id_token:      idToken,
-    refresh_token: oauthRefreshToken,
+    ...(oauthRefreshToken ? { refresh_token: oauthRefreshToken } : {}),
     scope:         claimed.scopes.join(' ')
   });
 });
@@ -3477,6 +3503,11 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   const { operatorName, operatorUrl, purpose, contactEmail, role } = req.body;
   if (!operatorName || !purpose)
     return res.status(400).json({ error: 'operatorName and purpose are required.' });
+  // The ONE rule for machines: an operator contact e-mail is required.
+  // This is reachability, not a trust event — machine trustScore stays 0.
+  if (!contactEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(contactEmail)))
+    return res.status(400).json({ error: 'operator_email_required',
+      detail: 'A valid operator contact e-mail is required to register a machine.' });
 
   // Optional self-declared role for the bot. v0.5: roles are ESCO-dynamic, so a
   // bot may declare a free-form role — EXCEPT a reserved profession (doctor/

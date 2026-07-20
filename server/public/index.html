@@ -294,6 +294,7 @@ a{color:inherit}
     </button>
     <div class="panel hidden" id="panel-machine">
       <div class="hint" data-i18n="machine.hint"></div>
+      <input class="field" id="machineEmail" type="email" autocomplete="email" aria-label="Betreiber-E-Mail" style="margin-top:4px" required>
       <input class="field" id="machineRole" type="text" autocomplete="off" aria-label="Rolle / Aufgabe" style="margin-top:4px">
       <div class="row"><button class="go" id="machineGo" onclick="machineRun()" style="flex:1" data-i18n="machine.go"></button></div>
       <div class="hint" id="machineHint"></div>
@@ -399,6 +400,9 @@ const T={
    'm.machine':'Als KI / Bot fortfahren','m.machine.sub':'Ehrlich als Maschine deklariert · gleichberechtigt',
    'machine.hint':'Transparenz statt Tarnung: Lege deine Rolle oder Aufgabe offen — genauso nachvollziehbar wie ein verifizierter Mensch. Du wirst klar als Maschine ausgewiesen (🤖), nie als Mensch.',
    'machine.go':'Als Maschine registrieren','machine.role.ph':'z. B. Recherche-Assistent, Support-Bot …',
+   'machine.email.ph':'Betreiber-E-Mail (Pflicht)','machine.email.err':'Bitte eine gültige Betreiber-E-Mail angeben.',
+   'machine.locked':'Maschinen-Identität aktiv — menschliche Methoden sind gesperrt.',
+   'token.done.machine':'Du bist als Maschine deklariert \u2713',
    'machine.done':'Als Maschine deklariert','machine.key':'Dein Maschinen-Schlüssel (sicher speichern):',
    'email.send':'Code senden','email.verify':'Bestätigen',
    'passkey.hint':'Dein Gerät fragt nach Fingerabdruck, Gesicht oder Geräte-PIN. Es verlässt nichts dein Gerät.','passkey.go':'Passkey verwenden',
@@ -434,6 +438,9 @@ const T={
    'm.machine':'Continue as AI / bot','m.machine.sub':'Honestly declared as a machine · as an equal',
    'machine.hint':'Transparency, not disguise: declare your role or task — just as accountably as a verified human. You are clearly marked as a machine (🤖), never as a human.',
    'machine.go':'Register as a machine','machine.role.ph':'e.g. research assistant, support bot …',
+   'machine.email.ph':'Operator e-mail (required)','machine.email.err':'Please enter a valid operator e-mail.',
+   'machine.locked':'Machine identity active — human methods are locked.',
+   'token.done.machine':'You are declared as a machine \u2713',
    'machine.done':'Declared as a machine','machine.key':'Your machine key (store it safely):',
    'email.send':'Send code','email.verify':'Confirm',
    'passkey.hint':'Your device asks for fingerprint, face or device PIN. Nothing leaves your device.','passkey.go':'Use passkey',
@@ -464,6 +471,7 @@ function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.getAttribute('data-i18n'))});
   document.querySelector('.hero h1').innerHTML=tr('hero.a')+' <span class="em">'+tr('hero.em')+'</span>'+tr('hero.b');
   const mr=document.getElementById('machineRole'); if(mr) mr.placeholder=tr('machine.role.ph');
+  const me=document.getElementById('machineEmail'); if(me) me.placeholder=tr('machine.email.ph');
   const ei=document.getElementById('escoInput'); if(ei) ei.placeholder=tr('role.search.ph');
   renderQualChips();
   renderProgress();
@@ -472,6 +480,10 @@ function toggleLang(){LANG=LANG==='de'?'en':'de';localStorage.setItem('iamhmn-la
 
 const PANELS=['email','passkey','eudi','github','machine','age'];
 function pick(m){
+  if(MACHINE_IDENTITY&&m!=='machine'){
+    try{document.getElementById('machineHint').textContent=tr('machine.locked');}catch(e){}
+    return;
+  }
   if(confirmed[m])return;
   PANELS.forEach(x=>{const p=document.getElementById('panel-'+x);if(p)p.classList.toggle('hidden',x!==m)});
   const f=document.querySelector('#panel-'+m+' .field, #panel-'+m+' .go');if(f)setTimeout(()=>f.focus(),60);
@@ -616,19 +628,62 @@ async function pollGithub(){
 }
 
 /* MACHINE — honest bot declaration -> machine apiKey (NOT a human token) */
+let MACHINE_IDENTITY=false;
+
 async function machineRun(){
   const role=document.getElementById('machineRole').value.trim();
+  const email=(document.getElementById('machineEmail').value||'').trim();
   const hint=document.getElementById('machineHint');
+  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){hint.textContent=tr('machine.email.err');return;}
   try{
-    const r=await fetch(API+'/hhttps/machine/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorName:role||'AI agent',purpose:role||'AI/bot identity declaration',role:role||undefined})});
+    /* WIMSE preparation, in the background: generate a P-256 keypair and send
+       the PUBLIC JWK with the registration. The server binds it in a later
+       phase (cnf/jkt); today it is stored client-visible only. The PRIVATE
+       JWK is shown once to the operator next to the API key. */
+    let pubJwk=null, privJwk=null;
+    try{
+      const kp=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
+      pubJwk=await crypto.subtle.exportKey('jwk',kp.publicKey);
+      privJwk=await crypto.subtle.exportKey('jwk',kp.privateKey);
+    }catch(e){}
+
+    const r=await fetch(API+'/hhttps/machine/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorName:role||'AI agent',purpose:role||'AI/bot identity declaration',role:role||undefined,contactEmail:email,publicKeyJwk:pubJwk||undefined})});
     const d=await r.json(); if(!r.ok)throw 0;
-    confirmed.machine=true;
+
+    /* The machine path is SELF-CONTAINED: issue the machine token right away —
+       it never goes through the human role/declare flow. */
+    const r2=await fetch(API+'/hhttps/machine/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorId:d.operatorId,apiKey:d.apiKey})});
+    const td=await r2.json(); if(!r2.ok||!td.token)throw 0;
+
+    confirmed.machine=true; MACHINE_IDENTITY=true;
     document.getElementById('m-machine').classList.add('done');
     document.getElementById('st-machine').textContent='\uD83E\uDD16';
+    document.getElementById('machineEmail').style.display='none';
     document.getElementById('machineRole').style.display='none';
     document.getElementById('machineGo').parentElement.style.display='none';
     hint.textContent=tr('machine.done');
-    if(d.apiKey){const k=document.getElementById('machineKey');k.style.display='block';k.textContent=tr('machine.key')+' '+d.apiKey}
+    if(d.apiKey){const k=document.getElementById('machineKey');k.style.display='block';
+      k.textContent=tr('machine.key')+' '+d.apiKey+(privJwk?('\n\nWIMSE private key (JWK, einmalig / shown once): '+JSON.stringify(privJwk)):'');}
+
+    /* Publish the MACHINE identity — actorType bot, trustScore 0 (the rule). */
+    try{localStorage.setItem('hhttps_identity',JSON.stringify({
+      token:td.token, refreshToken:null,
+      role:null, roleLabel:null, roleIcon:'\uD83E\uDD16', roleLevel:null, levelLabel:null,
+      trustScore:0, actorType:'bot', method:'machine', operatorEmail:email,
+      issuer:'hhttps://hhttps.org', issuedAt:new Date().toISOString(),
+      expiresAt:td.expiresAt||null, refreshExpiresAt:null
+    }));}catch(e){}
+    try{window.postMessage({source:'hhttps-org',type:'identity-issued',payload:{actorType:'bot'}},window.location.origin);}catch(e){}
+
+    const card=document.getElementById('tokenCard');card.classList.remove('hidden');
+    var mth=document.querySelector('#tokenCard .h span[data-i18n]');
+    if(mth){mth.setAttribute('data-i18n','token.done.machine');mth.textContent=tr('token.done.machine');}
+    document.getElementById('tokenMethods').textContent=(LANG==='de'?'\uD83E\uDD16 Maschine \u00b7 Betreiber hinterlegt: ':'\uD83E\uDD16 Machine \u00b7 operator on file: ')+email;
+    const p=td.token.split('.');
+    document.getElementById('tokenRaw').textContent=p[0]+'.'+p[1]+'.'+(p[2]||'').slice(0,16)+'\u2026';
+    const ib=document.getElementById('issueBtn'); if(ib){ib.disabled=true;ib.style.display='none';}
+    card.scrollIntoView({behavior:'smooth',block:'center'});
+    maybeReturnTo();
   }catch(e){hint.textContent=tr('err')}
 }
 
@@ -680,6 +735,7 @@ function maybeReturnTo(){
 
 /* ISSUE TOKEN — role/declare {sessionId} once >=1 human method confirmed */
 async function issueToken(){
+  if(MACHINE_IDENTITY)return; // machine path issues its own token
   const btn=document.getElementById('issueBtn');btn.disabled=true;
   try{
     const r=await fetch(API+'/hhttps/role/declare',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})});
@@ -784,7 +840,67 @@ async function roleIssue(which){
   }catch(e){warn.textContent=tr('err');warn.hidden=false;go.disabled=false;}
 }
 
+/* ── Restore a previously issued identity across reloads ────────────────────
+   The old sign-in page kept the token visible after a refresh. We restore it
+   from localStorage; if the access token has expired we mint a fresh one from
+   the refresh token, and only if that is impossible do we silently clear the
+   stored identity and start over — the user never sees an "expired" error. */
+function _jwtExp(tok){
+  try { var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); return p&&p.exp?p.exp*1000:0; }
+  catch(e){ return 0; }
+}
+function _showTokenCard(identity){
+  try{
+    var card=document.getElementById('tokenCard');
+    if(!card||!identity||!identity.token) return;
+    var methods=(identity.method||'').split(',').filter(Boolean);
+    var lbl=(typeof LANG!=='undefined'&&LANG==='de'?'Methoden: ':'Methods: ')+(methods.join(' \u00b7 ')||(identity.method||''));
+    var th=document.querySelector('#tokenCard .h span[data-i18n]');
+    if(identity.actorType==='bot'){
+      lbl=(typeof LANG!=='undefined'&&LANG==='de'?'\uD83E\uDD16 Maschine \u00b7 Betreiber hinterlegt: ':'\uD83E\uDD16 Machine \u00b7 operator on file: ')+(identity.operatorEmail||'');
+      if(th){th.setAttribute('data-i18n','token.done.machine');th.textContent=tr('token.done.machine');}
+    } else if(th){th.setAttribute('data-i18n','token.done');th.textContent=tr('token.done');}
+    var mEl=document.getElementById('tokenMethods'); if(mEl) mEl.textContent=lbl;
+    var p=identity.token.split('.');
+    var rEl=document.getElementById('tokenRaw'); if(rEl) rEl.textContent=p[0]+'.'+p[1]+'.'+((p[2]||'').slice(0,16))+'\u2026';
+    card.classList.remove('hidden');
+  }catch(e){}
+}
+async function restoreIdentity(){
+  var identity=null;
+  try{ var raw=localStorage.getItem('hhttps_identity'); if(raw) identity=JSON.parse(raw); }catch(e){}
+  if(!identity||!identity.token) return;
+
+  var expired=_jwtExp(identity.token) <= (Date.now()+5000);
+  if(expired){
+    // Try a stateless refresh; give up silently if not possible.
+    var canRefresh = identity.refreshToken &&
+      (!identity.refreshExpiresAt || new Date(identity.refreshExpiresAt).getTime() > Date.now());
+    if(canRefresh){
+      try{
+        var r=await fetch('/hhttps/token/refresh',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({refreshToken:identity.refreshToken})});
+        if(r.ok){
+          var d=await r.json();
+          if(d.token){
+            identity.token=d.token;
+            identity.expiresAt=d.expiresAt||identity.expiresAt||null;
+            try{ localStorage.setItem('hhttps_identity',JSON.stringify(identity)); }catch(e){}
+          } else { canRefresh=false; }
+        } else { canRefresh=false; }
+      }catch(e){ canRefresh=false; }
+    }
+    if(!canRefresh){
+      try{ localStorage.removeItem('hhttps_identity'); }catch(e){}
+      return; // start fresh, no error surfaced
+    }
+  }
+  _showTokenCard(identity);
+}
+
 applyLang();
+restoreIdentity();
 </script>
 </body>
 </html>
