@@ -295,6 +295,9 @@ a{color:inherit}
     <div class="panel hidden" id="panel-machine">
       <div class="hint" data-i18n="machine.hint"></div>
       <input class="field" id="machineEmail" type="email" autocomplete="email" aria-label="Betreiber-E-Mail" style="margin-top:4px" required>
+      <div class="hidden" id="machineCodeRow">
+        <input class="field" id="machineCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="Code" style="margin-top:10px">
+      </div>
       <input class="field" id="machineRole" type="text" autocomplete="off" aria-label="Rolle / Aufgabe" style="margin-top:4px">
       <div class="row"><button class="go" id="machineGo" onclick="machineRun()" style="flex:1" data-i18n="machine.go"></button></div>
       <div class="hint" id="machineHint"></div>
@@ -401,6 +404,9 @@ const T={
    'machine.hint':'Transparenz statt Tarnung: Lege deine Rolle oder Aufgabe offen — genauso nachvollziehbar wie ein verifizierter Mensch. Du wirst klar als Maschine ausgewiesen (🤖), nie als Mensch.',
    'machine.go':'Als Maschine registrieren','machine.role.ph':'z. B. Recherche-Assistent, Support-Bot …',
    'machine.email.ph':'Betreiber-E-Mail (Pflicht)','machine.email.err':'Bitte eine gültige Betreiber-E-Mail angeben.',
+   'machine.codeSent':'Code an die Betreiber-E-Mail gesendet — bitte hier eingeben.',
+   'machine.codeErr':'Code ungültig oder abgelaufen — bitte prüfen.',
+   'machine.go2':'Code bestätigen & registrieren',
    'machine.locked':'Maschinen-Identität aktiv — menschliche Methoden sind gesperrt.',
    'token.done.machine':'Du bist als Maschine deklariert \u2713',
    'machine.done':'Als Maschine deklariert','machine.key':'Dein Maschinen-Schlüssel (sicher speichern):',
@@ -439,6 +445,9 @@ const T={
    'machine.hint':'Transparency, not disguise: declare your role or task — just as accountably as a verified human. You are clearly marked as a machine (🤖), never as a human.',
    'machine.go':'Register as a machine','machine.role.ph':'e.g. research assistant, support bot …',
    'machine.email.ph':'Operator e-mail (required)','machine.email.err':'Please enter a valid operator e-mail.',
+   'machine.codeSent':'Code sent to the operator e-mail — enter it here.',
+   'machine.codeErr':'Code invalid or expired — please check.',
+   'machine.go2':'Confirm code & register',
    'machine.locked':'Machine identity active — human methods are locked.',
    'token.done.machine':'You are declared as a machine \u2713',
    'machine.done':'Declared as a machine','machine.key':'Your machine key (store it safely):',
@@ -629,12 +638,38 @@ async function pollGithub(){
 
 /* MACHINE — honest bot declaration -> machine apiKey (NOT a human token) */
 let MACHINE_IDENTITY=false;
+let MACHINE_STEP='email';
 
 async function machineRun(){
   const role=document.getElementById('machineRole').value.trim();
   const email=(document.getElementById('machineEmail').value||'').trim();
   const hint=document.getElementById('machineHint');
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){hint.textContent=tr('machine.email.err');return;}
+
+  /* Step A: send the confirmation code to the operator e-mail. Reuses the
+     human code-mail flow — confirmation only, ZERO trust for machines. */
+  if(MACHINE_STEP==='email'){
+    try{
+      await ensureSession();
+      const rs=await fetch(API+'/hhttps/email/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,email})});
+      if(!rs.ok)throw 0;
+      MACHINE_STEP='code';
+      document.getElementById('machineCodeRow').classList.remove('hidden');
+      document.getElementById('machineEmail').readOnly=true;
+      const gb=document.getElementById('machineGo');
+      if(gb){gb.setAttribute('data-i18n','machine.go2');gb.textContent=tr('machine.go2');}
+      hint.textContent=tr('machine.codeSent');
+      document.getElementById('machineCode').focus();
+    }catch(e){hint.textContent=tr('err')}
+    return;
+  }
+
+  /* Step B: confirm the code, then register + issue the machine token. */
+  const code=(document.getElementById('machineCode').value||'').trim();
+  try{
+    const rc=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
+    if(!rc.ok){hint.textContent=tr('machine.codeErr');return;}
+  }catch(e){hint.textContent=tr('err');return;}
   try{
     /* WIMSE preparation, in the background: generate a P-256 keypair and send
        the PUBLIC JWK with the registration. The server binds it in a later
@@ -647,7 +682,7 @@ async function machineRun(){
       privJwk=await crypto.subtle.exportKey('jwk',kp.privateKey);
     }catch(e){}
 
-    const r=await fetch(API+'/hhttps/machine/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorName:role||'AI agent',purpose:role||'AI/bot identity declaration',role:role||undefined,contactEmail:email,publicKeyJwk:pubJwk||undefined})});
+    const r=await fetch(API+'/hhttps/machine/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorName:role||'AI agent',purpose:role||'AI/bot identity declaration',role:role||undefined,contactEmail:email,sessionId,publicKeyJwk:pubJwk||undefined})});
     const d=await r.json(); if(!r.ok)throw 0;
 
     /* The machine path is SELF-CONTAINED: issue the machine token right away —
@@ -659,6 +694,7 @@ async function machineRun(){
     document.getElementById('m-machine').classList.add('done');
     document.getElementById('st-machine').textContent='\uD83E\uDD16';
     document.getElementById('machineEmail').style.display='none';
+    var mcr=document.getElementById('machineCodeRow'); if(mcr) mcr.classList.add('hidden');
     document.getElementById('machineRole').style.display='none';
     document.getElementById('machineGo').parentElement.style.display='none';
     hint.textContent=tr('machine.done');

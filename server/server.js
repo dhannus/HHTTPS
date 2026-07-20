@@ -3500,7 +3500,7 @@ app.get('/hhttps/protected', async (req, res) => {
 // ─── Machine Tokens ───────────────────────────────────────────────────────────
 
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
-  const { operatorName, operatorUrl, purpose, contactEmail, role } = req.body;
+  const { operatorName, operatorUrl, purpose, contactEmail, role, sessionId } = req.body;
   if (!operatorName || !purpose)
     return res.status(400).json({ error: 'operatorName and purpose are required.' });
   // The ONE rule for machines: an operator contact e-mail is required.
@@ -3508,6 +3508,16 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   if (!contactEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(contactEmail)))
     return res.status(400).json({ error: 'operator_email_required',
       detail: 'A valid operator contact e-mail is required to register a machine.' });
+  // The operator e-mail must be CONFIRMED via the code flow — we need to know
+  // it exists and is read. Confirmation is reachability, NOT trust: machine
+  // trustScore stays 0 (the score is a humanity scale). Zero-PII: the session
+  // stores only the e-mail DOMAIN, so we compare domains.
+  const opSess   = sessionId ? await db.sessions.get(sessionId) : null;
+  const opDomain = String(contactEmail).split('@')[1].toLowerCase();
+  if (!opSess || !opSess.emailVerified
+      || String(opSess.emailDomain || '').toLowerCase() !== opDomain)
+    return res.status(400).json({ error: 'operator_email_unconfirmed',
+      detail: 'Confirm the operator e-mail first: /hhttps/email/send, then /hhttps/email/confirm-code, then register with the same sessionId.' });
 
   // Optional self-declared role for the bot. v0.5: roles are ESCO-dynamic, so a
   // bot may declare a free-form role — EXCEPT a reserved profession (doctor/
