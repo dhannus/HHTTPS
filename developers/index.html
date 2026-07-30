@@ -86,7 +86,7 @@
   </div>
 </section>
 
-<!-- Role hint: only shown when the user is signed in but NOT as developer -->
+<!-- Access hint: shown when signed in but the e-mail is not confirmed yet -->
 <section class="container" id="role-hint-host" style="padding-top: 0; display: none;"></section>
 
 <section class="container" style="padding-top: 0;">
@@ -258,9 +258,9 @@ app.use(<span style="color: var(--info);">async</span> (req, res, next) => {
     apply(lang);
     document.addEventListener('hhttps:lang-changed', (e) => apply(e.detail.lang));
 
-    // Role-hint: signed in but not developer / admin?
+    // Access hint: signed in but no confirmed e-mail (and not admin)?
     const id = HHTTPS.auth.getIdentity();
-    if (id && HHTTPS.auth.isLoggedIn() && !HHTTPS.auth.isDeveloper()) {
+    if (id && HHTTPS.auth.isLoggedIn() && !HHTTPS.auth.hasPortalAccess()) {
       // verifyAdmin will update is_admin shortly — check both sync + async
       const renderHint = () => {
         if (HHTTPS.auth.isAdmin()) return; // admin bypass
@@ -271,7 +271,7 @@ app.use(<span style="color: var(--info);">async</span> (req, res, next) => {
             <span class="alert-icon">⚠</span>
             <div>
               <strong>${HHTTPS.i18n.t('gate.title')}</strong>
-              <div class="text-sm mt-2 muted">${HHTTPS.i18n.t('gate.lead', { role: HHTTPS.ui.escapeHtml(id.role || 'unknown') })}</div>
+              <div class="text-sm mt-2 muted">${HHTTPS.i18n.t('gate.lead')}</div>
             </div>
           </div>`;
       };

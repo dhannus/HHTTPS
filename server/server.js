@@ -40,7 +40,8 @@ import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
          TRUST_BANDS, trustBand, HUMAN_CONFIRMED_THRESHOLD } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, verifyEmailCode, classifyDomain,
-  sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail
+  sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail,
+  sendAdminPlatformNotification
 } from './email.js';
 import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
@@ -3724,6 +3725,30 @@ async function requireAdmin(req, res) {
   return u;
 }
 
+// ─── Developer-portal access floor ─────────────────────────────────────────
+// v0.5: there is NO 'developer' role any more. Roles are EUDI (Q)EAA artefacts
+// and say nothing about whether someone may register a platform. The only
+// requirement is a confirmed e-mail — VERIFICATION_METHODS.email contributes
+// trust 20 and is the sign-in gate, so trust >= 20 means "confirmed e-mail".
+// Machines register through /hhttps/machine/register instead (own flow, own
+// operator-email confirmation, trustScore stays 0 by design).
+const MIN_PORTAL_TRUST = 20;
+
+/** Authenticated user with a confirmed e-mail. Admins always pass. */
+async function requirePortalUser(req, res) {
+  const u = await requireUser(req, res);
+  if (!u) return null;
+  if ((u.trustScore || 0) >= MIN_PORTAL_TRUST) return u;
+  if (await db.admins.isAdmin(u.userId)) return u;
+  res.status(403).json({
+    error: 'email_unconfirmed',
+    message: 'A confirmed e-mail address is required to use the developer portal.',
+    min_trust: MIN_PORTAL_TRUST,
+    your_trust: u.trustScore || 0
+  });
+  return null;
+}
+
 /** Validate redirect URI format. Must be a syntactically valid HTTPS URL
  *  (or http://localhost for dev). */
 function isValidRedirectUri(uri) {
@@ -3752,7 +3777,7 @@ function generateClientId(name) {
 
 // ─── POST /hhttps/developers/clients — Register a new platform ─────────────
 app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
 
   const { name, description, homepage_url, redirect_uris, contact_email,
@@ -3831,6 +3856,20 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
   } catch (err) {
     console.warn('[DEVELOPERS] platform registration email failed:', err.message);
     // Continue — user can request resend later
+  }
+
+  // Operator FYI. Never blocks the developer's flow.
+  try {
+    await sendAdminPlatformNotification({
+      kind: 'registered',
+      platformName: name,
+      clientId,
+      homepageUrl: homepage_url,
+      contactEmail: contact_email,
+      domainEmailMatch: domainMatch
+    });
+  } catch (err) {
+    console.warn('[DEVELOPERS] admin notification (registered) failed:', err.message);
   }
 
   res.json({
@@ -4087,6 +4126,22 @@ app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
   await db.oauthClients.submitForReview(client.client_id, {
     ownerRole: u.role, ownerTrust: u.trustScore
   });
+
+  // This is the one notification that needs a human decision from the operator.
+  try {
+    await sendAdminPlatformNotification({
+      kind: 'review',
+      platformName: client.name,
+      clientId: client.client_id,
+      homepageUrl: client.homepage_url,
+      contactEmail: client.contact_email,
+      impressumUrl: client.impressum_url,
+      domainEmailMatch: client.domain_email_match
+    });
+  } catch (err) {
+    console.warn('[DEVELOPERS] admin notification (review) failed:', err.message);
+  }
+
   res.json({ success: true, verification_status: 'pending_review' });
 });
 

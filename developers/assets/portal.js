@@ -1,5 +1,5 @@
 /* ============================================================
-   HHTTPS Developer Portal — Shared JS  (v4 — i18n + role-gate + resend)
+   HHTTPS Developer Portal — Shared JS  (v5 — email-floor gate, no role requirement)
    ============================================================ */
 
 (function () {
@@ -60,15 +60,16 @@
       'status.verified':       'Verifiziert',
       'status.rejected':       'Abgelehnt',
       'status.suspended':      'Gesperrt',
-      // role gate
-      'gate.title':         'Developer-Rolle erforderlich',
-      'gate.lead':          'Das Developer Dashboard ist nur mit der Rolle "developer" zugänglich. Aktuell bist du als "{role}" angemeldet.',
+      // access gate (v5: no role requirement — a confirmed e-mail is enough)
+      'gate.title':         'Bestätigte E-Mail erforderlich',
+      'gate.lead':          'Das Developer Dashboard steht jeder verifizierten Person offen. Dafür muss deine E-Mail-Adresse bestätigt sein — eine bestimmte Rolle ist nicht nötig.',
       'gate.howto':         'So bekommst du Zugang',
-      'gate.step1':         'Gehe zu hhttps.org und logge dich aus, falls du eingeloggt bist.',
-      'gate.step2':         'Bei der erneuten Verifikation wähle die Rolle "💻 Entwickler" (Developer).',
-      'gate.step3':         'Bestätige eine E-Mail-Domain, die mit Entwicklung zu tun hat (Firmen-Domain, GitHub-verbundene Adresse o. ä.).',
+      'gate.step1':         'Gehe zu hhttps.org und melde dich mit deiner E-Mail-Adresse an.',
+      'gate.step2':         'Bestätige den 6-stelligen Code, den wir dir per E-Mail schicken.',
+      'gate.step3':         'Komm zurück — das Dashboard ist dann sofort nutzbar. Rollen (EUDI-EAA/QEAA) sind optional und für die Plattform-Registrierung nicht erforderlich.',
       'gate.cta.signin':    'Zu hhttps.org →',
       'gate.cta.back':      '← Zurück zur Übersicht',
+      'gate.bot.note':      'Du betreibst einen Bot oder Agenten? Maschinen registrieren sich über /hhttps/machine/register mit einer bestätigten Betreiber-E-Mail.',
     },
     en: {
       'nav.overview':       'Overview',
@@ -110,14 +111,15 @@
       'status.verified':       'Verified',
       'status.rejected':       'Rejected',
       'status.suspended':      'Suspended',
-      'gate.title':         'Developer role required',
-      'gate.lead':          'The developer dashboard is only accessible with the "developer" role. You are currently signed in as "{role}".',
+      'gate.title':         'Confirmed email required',
+      'gate.lead':          'The developer dashboard is open to any verified person. All it takes is a confirmed email address — no particular role is required.',
       'gate.howto':         'How to get access',
-      'gate.step1':         'Go to hhttps.org and sign out if you are signed in.',
-      'gate.step2':         'When re-verifying, pick the role "💻 Entwickler" (Developer).',
-      'gate.step3':         'Confirm an email at a domain related to your development work.',
+      'gate.step1':         'Go to hhttps.org and sign in with your email address.',
+      'gate.step2':         'Confirm the 6-digit code we send you by email.',
+      'gate.step3':         'Come back — the dashboard works immediately. Roles (EUDI EAA/QEAA) are optional and not required to register a platform.',
       'gate.cta.signin':    'Go to hhttps.org →',
       'gate.cta.back':      '← Back to overview',
+      'gate.bot.note':      'Running a bot or agent? Machines register via /hhttps/machine/register using a confirmed operator email.',
     }
   };
 
@@ -205,9 +207,40 @@
     return !!(id && id.is_admin === true);
   }
 
-  function isDeveloper() {
+  /** Minimum internal trust required to use the portal.
+   *  v5: a confirmed e-mail (VERIFICATION_METHODS.email → trust 20) is the floor.
+   *  There is no role requirement any more — roles are EUDI (Q)EAA artefacts and
+   *  are irrelevant for registering a platform. The server enforces the same
+   *  floor; this check exists only to render a helpful page instead of a 403. */
+  const MIN_PORTAL_TRUST = 20;
+
+  function getTrust() {
     const id = getIdentity();
-    return !!(id && id.role === 'developer');
+    if (!id) return 0;
+    const t = id.trustScore ?? id.trust_score;
+    return typeof t === 'number' ? t : null;   // null = unknown, let server decide
+  }
+
+  function hasEmailMethod() {
+    const id = getIdentity() || {};
+    const m = id.verified_methods || id.verifiedMethods;
+    return Array.isArray(m) ? m.includes('email') : false;
+  }
+
+  /** True if this identity may use the portal. Unknown trust is treated as
+   *  allowed — the server is authoritative and will return 403 if not. */
+  function hasPortalAccess() {
+    if (!isLoggedIn()) return false;
+    if (hasEmailMethod()) return true;
+    const t = getTrust();
+    if (t === null) return true;
+    return t >= MIN_PORTAL_TRUST;
+  }
+
+  /** @deprecated v5 — the 'developer' role no longer exists. Kept as an alias so
+   *  older cached pages don't break. Use hasPortalAccess(). */
+  function isDeveloper() {
+    return hasPortalAccess();
   }
 
   async function verifyAdmin() {
@@ -232,27 +265,29 @@
     return true;
   }
 
-  /** Show a friendly role-gate page if the user isn't a developer.
+  /** Show a friendly gate page if the identity has no confirmed e-mail.
    *  Admins bypass the gate. Returns true if the user should proceed. */
-  function requireDeveloper() {
+  function requirePortalAccess() {
     if (!requireAuth()) return false;
-    if (isDeveloper()) return true;
-    // Admins can pass too
-    if (isAdmin()) return true;
-    renderRoleGate();
+    if (hasPortalAccess()) return true;
+    if (isAdmin()) return true;          // admins always pass
+    renderAccessGate();
     return false;
   }
 
-  function renderRoleGate() {
-    const id = getIdentity() || {};
-    const role = id.role || 'unknown';
+  /** @deprecated v5 — alias for requirePortalAccess(). */
+  function requireDeveloper() {
+    return requirePortalAccess();
+  }
+
+  function renderAccessGate() {
     const main = document.querySelector('main') || document.body;
     main.innerHTML = `
       <div class="container-narrow" style="padding: 64px 24px;">
         <div class="card card-bracketed" style="padding: 40px;">
           <span class="eyebrow">⚠ ${t('gate.title')}</span>
           <h1 class="mt-2 mb-3" data-i18n="gate.title">${t('gate.title')}</h1>
-          <p class="lede mb-6">${t('gate.lead', { role: escapeHtml(role) })}</p>
+          <p class="lede mb-6" data-i18n="gate.lead">${t('gate.lead')}</p>
 
           <h3 class="mb-3" data-i18n="gate.howto">${t('gate.howto')}</h3>
           <ol style="padding-left: 20px; line-height: 1.7; color: var(--text-muted); font-size: 14px;">
@@ -265,6 +300,9 @@
             <a href="/" class="btn btn-primary" data-i18n="gate.cta.signin">${t('gate.cta.signin')}</a>
             <a href="/developers/" class="btn btn-ghost" data-i18n="gate.cta.back">${t('gate.cta.back')}</a>
           </div>
+
+          <p class="text-sm muted mt-6" data-i18n="gate.bot.note"
+             style="padding-top:16px;border-top:1px solid var(--border);">${t('gate.bot.note')}</p>
         </div>
       </div>`;
   }
@@ -404,8 +442,11 @@
   // ─── Expose ────────────────────────────────────────────────────────────
   window.HHTTPS = {
     auth: { getToken, getUid, getIdentity, setIdentity, clearAuth,
-            isLoggedIn, isAdmin, isDeveloper, verifyAdmin,
-            requireAuth, requireDeveloper },
+            isLoggedIn, isAdmin, verifyAdmin, getTrust, hasEmailMethod,
+            hasPortalAccess, requireAuth, requirePortalAccess,
+            MIN_PORTAL_TRUST,
+            // deprecated aliases (v4 compat)
+            isDeveloper, requireDeveloper },
     api:  { developers, admin, raw: api },
     ui:   { renderIdentityBadge, toast, copyToClipboard, escapeHtml, fmtDate, initNav },
     i18n: { t, setLang, getLang, applyTranslations },

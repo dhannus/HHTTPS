@@ -107,7 +107,7 @@ HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
 <script>
 (function () {
   if (!HHTTPS.auth.requireAuth('/developers/')) return;
-  if (!HHTTPS.auth.requireDeveloper()) return;  // shows role-gate page if not developer
+  if (!HHTTPS.auth.requirePortalAccess()) return;  // shows gate page if e-mail unconfirmed
 
   HHTTPS.auth.verifyAdmin().then(isAdmin => {
     if (isAdmin) document.getElementById('admin-link').style.display = '';

@@ -38,6 +38,11 @@ const BASE_URL  = process.env.BASE_URL  || 'https://hhttps.org';
 const FROM_NAME = process.env.SMTP_FROM_NAME || 'HHTTPS Issuer';
 const REPLY_TO  = process.env.SMTP_REPLY_TO || null;  // optional: separate reply address
 
+// Operator inbox for admin notifications (new platform, review requested).
+// Comma-separated list allowed. If unset, admin notifications are skipped
+// silently — the feature is opt-in and never blocks the user-facing flow.
+const ADMIN_NOTIFY_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || null;
+
 // ─── Domain classification (for user email verification, legacy flow) ──────
 const DOMAIN_RULES = {
   official: [
@@ -503,6 +508,132 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
   }));
 
   return { sent: true };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ADMIN NOTIFICATIONS (operator inbox)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Two events reach the operator:
+//   'registered' — someone created a platform draft. FYI only, no action.
+//   'review'     — someone completed e-mail + domain-match + DNS + Impressum
+//                  and asked for verification. THIS one needs a decision.
+//
+// German only: the recipient is the issuer operator, not an unknown third party.
+// Failures are swallowed by the caller — a broken operator inbox must never
+// break a developer's registration.
+
+/**
+ * Notify the issuer operator about a platform lifecycle event.
+ *
+ * @param {object}  p
+ * @param {'registered'|'review'} p.kind
+ * @param {string}  p.platformName
+ * @param {string}  p.clientId
+ * @param {string}  p.homepageUrl
+ * @param {string}  p.contactEmail
+ * @param {string} [p.impressumUrl]
+ * @param {boolean} [p.domainEmailMatch]
+ * @param {string} [p.to]  override recipient (defaults to ADMIN_NOTIFY_EMAIL)
+ */
+export async function sendAdminPlatformNotification({
+  kind = 'review', platformName, clientId, homepageUrl,
+  contactEmail, impressumUrl, domainEmailMatch, to
+}) {
+  const recipient = to || ADMIN_NOTIFY_EMAIL;
+  if (!recipient) return { sent: false, skipped: 'ADMIN_NOTIFY_EMAIL not configured' };
+
+  const isReview  = kind === 'review';
+  const adminUrl  = `${BASE_URL}/developers/admin.html`;
+  const safeName  = escapeHtml(platformName || '(ohne Namen)');
+  const safeHome  = escapeHtml(homepageUrl  || '—');
+  const safeMail  = escapeHtml(contactEmail || '—');
+  const safeImpr  = escapeHtml(impressumUrl || '—');
+  const safeCid   = escapeHtml(clientId     || '—');
+
+  const rows = `
+    <div class="info-box">
+      <div class="ib-key">Plattform</div>
+      <div class="ib-val">${safeName}</div>
+    </div>
+    <div class="info-box">
+      <div class="ib-key">client_id</div>
+      <div class="ib-val">${safeCid}</div>
+    </div>
+    <div class="info-box">
+      <div class="ib-key">Homepage</div>
+      <div class="ib-val">${safeHome}</div>
+    </div>
+    <div class="info-box">
+      <div class="ib-key">Kontakt-E-Mail</div>
+      <div class="ib-val">${safeMail}${domainEmailMatch === false ? ' <span style="color:#ff8a5c;font-weight:400;">(Domain stimmt nicht überein)</span>' : ''}</div>
+    </div>
+    ${isReview ? `<div class="info-box">
+      <div class="ib-key">Impressum</div>
+      <div class="ib-val" style="font-weight:400;">${safeImpr}</div>
+    </div>` : ''}`;
+
+  const bodyHtml = isReview
+    ? `<p><strong>Eine Plattform wartet auf deine Prüfung.</strong></p>
+       <p>Alle automatischen Voraussetzungen sind erfüllt: E-Mail bestätigt, Kontakt-Domain
+          passt zur Plattform-Domain, DNS-TXT-Record verifiziert, Impressum gesetzt.
+          Es fehlt nur noch deine manuelle Freigabe.</p>
+       ${rows}
+       <p>Prüfe Domain, Impressum und Betreiber, dann gib frei oder lehne mit Begründung ab.</p>`
+    : `<p><strong>Neue Plattform registriert.</strong></p>
+       <p>Es wurde gerade ein Plattform-Entwurf angelegt. Der Betreiber muss jetzt
+          selbständig E-Mail bestätigen, DNS setzen und ein Impressum hinterlegen.
+          <em>Du musst hier nichts tun</em> — du bekommst eine zweite Mail, sobald
+          die Plattform zur Prüfung eingereicht wird.</p>
+       ${rows}`;
+
+  const html = emailShell({
+    title:     isReview ? 'Plattform wartet auf Prüfung' : 'Neue Plattform registriert',
+    subtitle:  isReview ? 'ADMIN · REVIEW ERFORDERLICH' : 'ADMIN · NEUE REGISTRIERUNG',
+    bodyHtml,
+    ctaUrl:    adminUrl,
+    ctaLabel:  isReview ? '→ Zur Admin-Queue' : '→ Zum Admin-Bereich',
+    footerNote: isReview
+      ? 'Diese Benachrichtigung geht nur an den Betreiber dieses Issuers.'
+      : 'Reine Info-Mail. Aktion erforderlich erst bei der Review-Benachrichtigung.'
+  });
+
+  const text = [
+    isReview
+      ? 'HHTTPS — Plattform wartet auf Prüfung'
+      : 'HHTTPS — Neue Plattform registriert',
+    '',
+    `Plattform:      ${platformName || '(ohne Namen)'}`,
+    `client_id:      ${clientId || '—'}`,
+    `Homepage:       ${homepageUrl || '—'}`,
+    `Kontakt-E-Mail: ${contactEmail || '—'}${domainEmailMatch === false ? '  (Domain stimmt nicht überein)' : ''}`,
+    ...(isReview ? [`Impressum:      ${impressumUrl || '—'}`] : []),
+    '',
+    isReview
+      ? 'Alle automatischen Voraussetzungen sind erfüllt. Es fehlt nur deine Freigabe.'
+      : 'Reine Info. Du bekommst eine zweite Mail, sobald zur Prüfung eingereicht wird.',
+    '',
+    `Admin-Queue: ${adminUrl}`,
+    '',
+    '— HHTTPS Project · hhttps.org'
+  ].join('\n');
+
+  const transporter = createTransport();
+  if (!transporter) {
+    devLog(isReview ? 'Admin review request' : 'Admin new platform',
+           recipient, adminUrl, { platformName, clientId });
+    return { sent: false, devMode: true };
+  }
+
+  await transporter.sendMail(buildMailOptions({
+    to: recipient,
+    subject: isReview
+      ? `[HHTTPS Admin] Prüfung erforderlich: "${platformName}"`
+      : `[HHTTPS Admin] Neue Plattform: "${platformName}"`,
+    text, html
+  }));
+
+  return { sent: true, to: recipient };
 }
 
 // ─── Verify token (used by /hhttps/email/verify, legacy user flow) ─────────
