@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HHTTPS · Admin Queue</title>
+  <link rel="stylesheet" href="assets/portal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a href="/" class="topnav-logo">
+      <span class="topnav-logo-mark">👤</span>
+      <span>HHTTPS</span>
+    </a>
+    <span class="topnav-section">developers / admin</span>
+    <div class="topnav-links">
+      <a href="/developers/" class="topnav-link" data-path="/developers/" data-i18n="nav.overview">Overview</a>
+      <a href="/developers/dashboard.html" class="topnav-link" data-path="/developers/dashboard" data-i18n="nav.dashboard">Dashboard</a>
+      <a href="/developers/admin.html" class="topnav-link active" data-path="/developers/admin" data-i18n="nav.admin">Admin</a>
+      <a href="#" class="topnav-link" id="signout-btn" data-i18n="nav.signout">Sign out</a>
+      <div class="lang-toggle" role="group" aria-label="Sprache wählen">
+        <button type="button" data-lang="de" class="active">DE</button>
+        <button type="button" data-lang="en">EN</button>
+      </div>
+      <span id="identity-slot"></span>
+    </div>
+  </div>
+</nav>
+
+<style>
+  .lang-toggle {
+    display: inline-flex; gap: 2px; padding: 2px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg-elevated);
+  }
+  .lang-toggle button {
+    padding: 4px 10px; font-size: 11px;
+    font-family: 'JetBrains Mono', monospace; font-weight: 500;
+    letter-spacing: 0.04em; background: transparent; border: 0;
+    color: var(--text-muted); cursor: pointer; border-radius: 2px;
+    transition: all 0.15s;
+  }
+  .lang-toggle button:hover { color: var(--text); }
+  .lang-toggle button.active { background: var(--accent); color: #06140d; }
+</style>
+
+<div class="layout-sidebar">
+
+  <aside class="sidebar">
+    <div class="sidebar-section">Admin</div>
+    <a href="#queue"     class="sidebar-link active" data-tab="queue">⌁ Review queue <span id="count-queue" class="badge badge-pending text-xs mono" style="margin-left:auto;">…</span></a>
+    <a href="#unverified"class="sidebar-link"        data-tab="unverified">⌥ Setup in progress</a>
+    <a href="#verified"  class="sidebar-link"        data-tab="verified">✓ Verified</a>
+    <a href="#rejected"  class="sidebar-link"        data-tab="rejected">× Rejected</a>
+    <a href="#suspended" class="sidebar-link"        data-tab="suspended">✕ Suspended</a>
+
+    <div class="sidebar-section">Workspace</div>
+    <a href="/developers/dashboard.html" class="sidebar-link">← My dashboard</a>
+  </aside>
+
+  <main>
+    <header class="mb-6">
+      <span class="eyebrow">admin · restricted</span>
+      <h1>Platform review queue</h1>
+      <p class="muted mt-2">
+        Approve to mark a platform as <span class="code-inline">verified</span>, reject with a reason
+        the developer will see, or suspend a previously-verified platform on policy violation.
+      </p>
+    </header>
+
+    <div class="card card-tight mb-4 flex gap-3" style="flex-wrap: wrap; align-items: center;">
+      <div class="flex gap-2 items-center text-sm">
+        <span class="muted mono">FILTER</span>
+        <input id="filter-input" type="text" placeholder="name, domain, email…" style="width: 280px;" />
+      </div>
+      <div class="flex gap-2 items-center text-sm" style="margin-left: auto;">
+        <button class="btn btn-ghost btn-sm" id="btn-refresh">↻ Refresh</button>
+        <span class="text-xs dim mono" id="last-refresh">never</span>
+      </div>
+    </div>
+
+    <section id="panel-queue">       <div id="queue-host">      <div class="empty-state">Loading…</div></div></section>
+    <section id="panel-unverified" class="hidden"><div id="unverified-host"><div class="empty-state">Loading…</div></div></section>
+    <section id="panel-verified"   class="hidden"><div id="verified-host">  <div class="empty-state">Loading…</div></div></section>
+    <section id="panel-rejected"   class="hidden"><div id="rejected-host">  <div class="empty-state">Loading…</div></div></section>
+    <section id="panel-suspended"  class="hidden"><div id="suspended-host"> <div class="empty-state">Loading…</div></div></section>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="mono">HHTTPS · admin · v4</div>
+    <div><a href="/developers/dashboard.html">← back to dashboard</a></div>
+  </div>
+</footer>
+
+<script src="assets/portal.js"></script>
+<script>
+(function () {
+  if (!HHTTPS.auth.requireAuth('/developers/')) return;
+
+  HHTTPS.auth.verifyAdmin().then(isAdmin => {
+    if (!isAdmin) {
+      HHTTPS.ui.toast('Admin access required — redirecting…', 'error');
+      setTimeout(() => window.location.href = '/developers/dashboard.html', 1200);
+      return;
+    }
+    initAdminPage();
+  });
+
+  function initAdminPage() {
+
+  let cache = { queue: [], unverified: [], verified: [], rejected: [], suspended: [] };
+  let filter = '';
+
+  const STATUS_BADGE = {
+    email_pending:   'badge-pending',
+    unverified:      'badge-review',
+    pending_review:  'badge-review',
+    verified:        'badge-approved',
+    rejected:        'badge-rejected',
+    suspended:       'badge-blocked',
+  };
+  function badge(s) {
+    return `<span class="badge ${STATUS_BADGE[s] || 'badge-neutral'}">${HHTTPS.ui.escapeHtml(s || '—')}</span>`;
+  }
+
+  function matches(p) {
+    if (!filter) return true;
+    const f = filter.toLowerCase();
+    return (p.name || '').toLowerCase().includes(f) ||
+           (p.homepage_url || '').toLowerCase().includes(f) ||
+           (p.contact_email || '').toLowerCase().includes(f) ||
+           (p.client_id || '').toLowerCase().includes(f);
+  }
+
+  function actionsFor(p, kind) {
+    if (kind === 'queue') {
+      return `
+        <button class="btn btn-ghost btn-sm"  data-toggle="${HHTTPS.ui.escapeHtml(p.client_id)}">details</button>
+        <button class="btn btn-primary btn-sm" data-act="approve" data-id="${HHTTPS.ui.escapeHtml(p.client_id)}">approve</button>
+        <button class="btn btn-danger btn-sm"  data-act="reject"  data-id="${HHTTPS.ui.escapeHtml(p.client_id)}">reject</button>`;
+    }
+    if (kind === 'verified') {
+      return `
+        <button class="btn btn-ghost btn-sm"   data-toggle="${HHTTPS.ui.escapeHtml(p.client_id)}">details</button>
+        <button class="btn btn-danger btn-sm"  data-act="suspend" data-id="${HHTTPS.ui.escapeHtml(p.client_id)}">suspend</button>`;
+    }
+    return `<button class="btn btn-ghost btn-sm" data-toggle="${HHTTPS.ui.escapeHtml(p.client_id)}">details</button>`;
+  }
+
+  function renderRow(p, kind) {
+    const ownerHint = p.owner_role_at_submit
+      ? `<div class="text-xs muted mono">${HHTTPS.ui.escapeHtml(p.owner_role_at_submit)} · trust ${p.owner_trust_at_submit ?? '—'}</div>`
+      : '';
+    return `
+      <tr data-id="${HHTTPS.ui.escapeHtml(p.client_id)}">
+        <td>
+          <div style="font-weight: 600;">${HHTTPS.ui.escapeHtml(p.name || '—')}</div>
+          <div class="text-xs muted mono">${HHTTPS.ui.escapeHtml(p.homepage_url || '')}</div>
+          ${ownerHint}
+        </td>
+        <td class="mono text-xs muted">${HHTTPS.ui.escapeHtml(p.contact_email || '')}<br>
+          ${p.domain_email_match
+            ? '<span style="color:var(--accent);">domain ✓</span>'
+            : '<span style="color:var(--warning);">domain ✗</span>'}
+        </td>
+        <td>${badge(p.verification_status)}</td>
+        <td class="text-xs muted mono">
+          ${p.submitted_for_review_at ? HHTTPS.ui.fmtDate(p.submitted_for_review_at) : HHTTPS.ui.fmtDate(p.created_at)}
+        </td>
+        <td style="text-align: right; white-space: nowrap;">${actionsFor(p, kind)}</td>
+      </tr>
+      <tr class="detail-row hidden" data-detail-for="${HHTTPS.ui.escapeHtml(p.client_id)}">
+        <td colspan="5" style="background: var(--bg-elevated);">
+          <div style="display: grid; grid-template-columns: 180px 1fr; gap: 8px 16px; font-size: 13px; padding: 8px 0;">
+            <div class="muted">client_id</div><div class="mono">${HHTTPS.ui.escapeHtml(p.client_id)}</div>
+            <div class="muted">owner user_id</div><div class="mono">${HHTTPS.ui.escapeHtml(p.owner_user_id || '')}</div>
+            <div class="muted">redirect_uris</div><div class="mono">${(p.redirect_uris || []).map(u => HHTTPS.ui.escapeHtml(u)).join('<br>') || '—'}</div>
+            <div class="muted">impressum</div><div class="mono">${HHTTPS.ui.escapeHtml(p.impressum_url || '—')}</div>
+            <div class="muted">logo</div><div class="mono">${HHTTPS.ui.escapeHtml(p.logo_url || '—')}</div>
+            <div class="muted">email verified</div><div class="mono">${p.email_verified_at ? HHTTPS.ui.fmtDate(p.email_verified_at) : '—'}</div>
+            <div class="muted">dns verified</div><div class="mono">${p.dns_verified_at ? HHTTPS.ui.fmtDate(p.dns_verified_at) : '—'}</div>
+            <div class="muted">description</div><div style="white-space:pre-wrap;">${HHTTPS.ui.escapeHtml(p.description || '—')}</div>
+            ${p.rejection_reason ? `<div class="muted">previous reason</div><div>${HHTTPS.ui.escapeHtml(p.rejection_reason)}</div>` : ''}
+          </div>
+        </td>
+      </tr>`;
+  }
+
+  function renderTable(host, rows, kind, emptyMsg) {
+    if (rows.length === 0) {
+      host.innerHTML = `<div class="empty-state"><div class="empty-state-icon">∅</div>${emptyMsg}</div>`;
+      return;
+    }
+    host.innerHTML = `
+      <div class="card card-tight" style="padding: 0;">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Platform</th>
+              <th>Contact</th>
+              <th>Status</th>
+              <th>${kind === 'queue' ? 'Submitted' : 'Created'}</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(p => renderRow(p, kind)).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    wireRowEvents(host);
+  }
+
+  function wireRowEvents(host) {
+    host.querySelectorAll('[data-toggle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-toggle');
+        const det = host.querySelector(`[data-detail-for="${CSS.escape(id)}"]`);
+        if (det) det.classList.toggle('hidden');
+      });
+    });
+    host.querySelectorAll('[data-act]').forEach(btn => {
+      btn.addEventListener('click', () => doAction(btn));
+    });
+  }
+
+  async function doAction(btn) {
+    const id = btn.getAttribute('data-id');
+    const act = btn.getAttribute('data-act');
+
+    let reason = '';
+    if (act === 'reject' || act === 'suspend') {
+      reason = prompt(`Reason for ${act} (REQUIRED — shown to the developer, max 1000 chars):`, '');
+      if (reason === null) return;
+      if (!reason.trim()) {
+        HHTTPS.ui.toast(`A reason is required for ${act}`, 'error');
+        return;
+      }
+    }
+
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = act + '…';
+
+    try {
+      if (act === 'approve')      await HHTTPS.api.admin.approve(id);
+      else if (act === 'reject')  await HHTTPS.api.admin.reject(id, reason);
+      else if (act === 'suspend') await HHTTPS.api.admin.suspend(id, reason);
+      HHTTPS.ui.toast(`Platform ${act}d`, 'success');
+      await loadAll();
+    } catch (e) {
+      HHTTPS.ui.toast(e.message || 'Action failed', 'error');
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  function partition(all) {
+    const out = { queue: [], unverified: [], verified: [], rejected: [], suspended: [] };
+    for (const p of all) {
+      switch (p.verification_status) {
+        case 'pending_review': out.queue.push(p); break;
+        case 'email_pending':
+        case 'unverified':     out.unverified.push(p); break;
+        case 'verified':       out.verified.push(p); break;
+        case 'rejected':       out.rejected.push(p); break;
+        case 'suspended':      out.suspended.push(p); break;
+      }
+    }
+    return out;
+  }
+
+  function renderAll() {
+    const f = (a) => a.filter(matches);
+    renderTable(document.getElementById('queue-host'),      f(cache.queue),      'queue',      'Queue is empty. No platforms awaiting review.');
+    renderTable(document.getElementById('unverified-host'), f(cache.unverified), 'unverified', 'No platforms currently in setup.');
+    renderTable(document.getElementById('verified-host'),   f(cache.verified),   'verified',   'No verified platforms yet.');
+    renderTable(document.getElementById('rejected-host'),   f(cache.rejected),   'other',      'No rejected platforms.');
+    renderTable(document.getElementById('suspended-host'),  f(cache.suspended),  'other',      'No suspended platforms.');
+    document.getElementById('count-queue').textContent = cache.queue.length;
+  }
+
+  async function loadAll() {
+    try {
+      // /admin/clients returns ALL clients (any status) for admins
+      const a = await HHTTPS.api.admin.platforms();
+      const all = (a && a.clients) || [];
+      cache = partition(all);
+      document.getElementById('last-refresh').textContent = 'updated ' + new Date().toLocaleTimeString('de-DE');
+      renderAll();
+    } catch (e) {
+      document.getElementById('queue-host').innerHTML = `
+        <div class="alert alert-warning">
+          <span class="alert-icon">!</span>
+          <div><strong>Could not load admin data</strong>
+            <div class="text-sm mt-2">${HHTTPS.ui.escapeHtml(e.message || 'Unknown error')}</div>
+          </div>
+        </div>`;
+    }
+  }
+
+  document.querySelectorAll('.sidebar-link[data-tab]').forEach(link => {
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const tab = link.getAttribute('data-tab');
+      document.querySelectorAll('.sidebar-link[data-tab]').forEach(l => l.classList.toggle('active', l === link));
+      ['queue', 'unverified', 'verified', 'rejected', 'suspended'].forEach(t => {
+        const panel = document.getElementById('panel-' + t);
+        if (panel) panel.classList.toggle('hidden', t !== tab);
+      });
+    });
+  });
+
+  document.getElementById('filter-input').addEventListener('input', (e) => {
+    filter = e.target.value;
+    renderAll();
+  });
+
+  document.getElementById('btn-refresh').addEventListener('click', loadAll);
+
+  loadAll();
+
+  } // end initAdminPage
+})();
+</script>
+
+</body>
+</html>

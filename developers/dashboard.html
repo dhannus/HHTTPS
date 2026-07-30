@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HHTTPS · Developer Dashboard</title>
+  <link rel="stylesheet" href="assets/portal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a href="/" class="topnav-logo">
+      <span class="topnav-logo-mark">👤</span>
+      <span>HHTTPS</span>
+    </a>
+    <span class="topnav-section">developers / dashboard</span>
+    <div class="topnav-links">
+      <a href="/developers/" class="topnav-link" data-path="/developers/" data-i18n="nav.overview">Overview</a>
+      <a href="/developers/dashboard.html" class="topnav-link" data-path="/developers/dashboard" data-i18n="nav.dashboard">Dashboard</a>
+      <a href="/developers/admin.html" class="topnav-link" data-path="/developers/admin" id="admin-link" style="display:none;" data-i18n="nav.admin">Admin</a>
+      <a href="#" class="topnav-link" id="signout-btn" data-i18n="nav.signout">Sign out</a>
+      <div class="lang-toggle" role="group" aria-label="Sprache wählen">
+        <button type="button" data-lang="de" class="active">DE</button>
+        <button type="button" data-lang="en">EN</button>
+      </div>
+      <span id="identity-slot"></span>
+    </div>
+  </div>
+</nav>
+
+<style>
+  .lang-toggle {
+    display: inline-flex; gap: 2px; padding: 2px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: var(--bg-elevated);
+  }
+  .lang-toggle button {
+    padding: 4px 10px; font-size: 11px;
+    font-family: 'JetBrains Mono', monospace; font-weight: 500;
+    letter-spacing: 0.04em; background: transparent; border: 0;
+    color: var(--text-muted); cursor: pointer; border-radius: 2px;
+    transition: all 0.15s;
+  }
+  .lang-toggle button:hover { color: var(--text); }
+  .lang-toggle button.active { background: var(--accent); color: #06140d; }
+</style>
+
+<div class="layout-sidebar">
+
+  <aside class="sidebar">
+    <div class="sidebar-section">Workspace</div>
+    <a href="#platforms" class="sidebar-link active">⌁ My Platforms</a>
+    <a href="#integration" class="sidebar-link">{ } Integration</a>
+
+    <div class="sidebar-section">Account</div>
+    <a href="/developers/register.html" class="sidebar-link">+ Register platform</a>
+
+    <div class="sidebar-section">Resources</div>
+    <a href="/spec" class="sidebar-link">📄 Specification</a>
+    <a href="https://github.com/dhannus/HHTTPS" class="sidebar-link">↗ GitHub</a>
+  </aside>
+
+  <main>
+    <header class="mb-8 flex justify-between items-center" style="flex-wrap:wrap; gap:16px;">
+      <div>
+        <span class="eyebrow">dashboard</span>
+        <h1>My platforms</h1>
+        <p class="muted mt-2">All platforms registered under your HHTTPS identity.</p>
+      </div>
+      <a href="/developers/register.html" class="btn btn-primary">+ Register platform</a>
+    </header>
+
+    <div id="blockers-host" class="mb-6"></div>
+
+    <section id="platforms">
+      <div id="platforms-host">
+        <div class="empty-state">
+          <div class="empty-state-icon">⌁</div>
+          <div>Loading your platforms…</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="integration" class="mt-8">
+      <h2 class="mb-3">Integration</h2>
+      <p class="muted mb-4 text-sm">Once a platform reaches <span class="code-inline">verified</span> status, point your SDK at these values.</p>
+
+      <div class="card card-tight mb-4">
+        <span class="code-block-label">env</span>
+        <pre class="code-block">HHTTPS_CLIENT_ID=&lt;your client_id from the platform card above&gt;
+HHTTPS_ISSUER=https://hhttps.org
+HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="mono">HHTTPS · v4 · dashboard</div>
+    <div><a href="/developers/">overview</a> · <a href="/spec">spec</a> · <a href="https://github.com/dhannus/HHTTPS">github</a></div>
+  </div>
+</footer>
+
+<script src="assets/portal.js"></script>
+<script>
+(function () {
+  if (!HHTTPS.auth.requireAuth('/developers/')) return;
+  if (!HHTTPS.auth.requireDeveloper()) return;  // shows role-gate page if not developer
+
+  HHTTPS.auth.verifyAdmin().then(isAdmin => {
+    if (isAdmin) document.getElementById('admin-link').style.display = '';
+  });
+
+  // Status → badge + human label
+  // Verification states match server.js: email_pending → unverified → pending_review → verified / rejected / suspended
+  const STATUS_MAP = {
+    email_pending:   { label: 'Email confirmation pending', cls: 'badge-pending', dot: true },
+    unverified:      { label: 'Unverified · setup in progress', cls: 'badge-review', dot: true },
+    pending_review:  { label: 'In admin review',                cls: 'badge-review', dot: true },
+    verified:        { label: 'Verified',                       cls: 'badge-approved', dot: false },
+    rejected:        { label: 'Rejected',                       cls: 'badge-rejected', dot: false },
+    suspended:       { label: 'Suspended',                      cls: 'badge-blocked',  dot: false },
+  };
+  function statusBadge(status) {
+    const s = STATUS_MAP[status] || { label: status || '—', cls: 'badge-neutral', dot: false };
+    const dot = s.dot ? '<span class="badge-dot pulsing"></span>' : '';
+    return `<span class="badge ${s.cls}">${dot}${HHTTPS.ui.escapeHtml(s.label)}</span>`;
+  }
+
+  // Blocker-code → human-readable hint
+  const BLOCKER_HINTS = {
+    email_not_verified:    'Click the confirmation link sent to your contact email.',
+    email_domain_mismatch: 'Your contact email domain doesn’t match the platform homepage. Update the contact email to one at the platform domain.',
+    dns_not_verified:      'Add the DNS TXT record below and click "Verify DNS".',
+    impressum_missing:     'Add an Impressum / legal contact URL (Edit platform).',
+  };
+
+  // ─── account-level blockers / alerts ───────────────────────────────────────
+  function renderBlockers(platforms) {
+    const host = document.getElementById('blockers-host');
+    const alerts = [];
+
+    if (platforms.some(p => p.verification_status === 'rejected')) {
+      alerts.push(`
+        <div class="alert alert-warning">
+          <span class="alert-icon">×</span>
+          <div>
+            <strong>A submission was rejected</strong>
+            <div class="text-sm mt-2 muted">Read the admin note on the platform card and edit before resubmitting.</div>
+          </div>
+        </div>`);
+    }
+    if (platforms.some(p => p.verification_status === 'suspended')) {
+      alerts.push(`
+        <div class="alert alert-warning">
+          <span class="alert-icon">!</span>
+          <div>
+            <strong>A platform is suspended</strong>
+            <div class="text-sm mt-2 muted">Token issuance is paused. Contact the admin via the suspension reason listed on the card.</div>
+          </div>
+        </div>`);
+    }
+    host.innerHTML = alerts.join('');
+  }
+
+  // ─── checklist of preconditions ────────────────────────────────────────────
+  function renderChecklist(p) {
+    if (p.verification_status === 'verified' || p.verification_status === 'pending_review') return '';
+
+    const items = [
+      { ok: !!p.email_verified_at, label: 'Email confirmed', hint: 'Click the verification link in your inbox.' },
+      { ok: !!p.domain_email_match, label: 'Contact email matches platform domain', hint: 'Use an email at the platform’s apex domain.' },
+      { ok: !!p.dns_verified_at, label: 'DNS TXT record verified', hint: 'Set the record below, then click Verify DNS.' },
+      { ok: !!p.impressum_url, label: 'Impressum URL set', hint: 'Required for review. Edit the platform to add it.' },
+    ];
+
+    const rows = items.map(it => `
+      <div style="display:flex; align-items:flex-start; gap:10px; padding: 6px 0;">
+        <span style="color: ${it.ok ? 'var(--accent)' : 'var(--text-dim)'}; font-family:'JetBrains Mono',monospace; font-size: 13px;">
+          ${it.ok ? '✓' : '○'}
+        </span>
+        <div style="font-size: 13px;">
+          <div style="color: ${it.ok ? 'var(--text)' : 'var(--text-muted)'};">${HHTTPS.ui.escapeHtml(it.label)}</div>
+          ${it.ok ? '' : `<div class="text-xs dim mt-2" style="margin-top:2px;">${HHTTPS.ui.escapeHtml(it.hint)}</div>`}
+        </div>
+      </div>`).join('');
+
+    return `
+      <div class="card card-tight mt-3" style="background: var(--bg-elevated);">
+        <span class="code-block-label">Preconditions for review</span>
+        ${rows}
+      </div>`;
+  }
+
+  // ─── DNS record card ───────────────────────────────────────────────────────
+  function renderDnsBlock(p) {
+    if (p.verification_status === 'verified' || p.verification_status === 'pending_review') return '';
+    if (!p.dns_token || !p.dns_record_host) return '';
+    const verified = !!p.dns_verified_at;
+    const verifiedNote = verified
+      ? `<span class="text-xs" style="color:var(--accent);">✓ Verified ${HHTTPS.ui.fmtDate(p.dns_verified_at)}</span>`
+      : (p.dns_last_checked_at
+          ? `<span class="text-xs muted">Last check: ${HHTTPS.ui.fmtDate(p.dns_last_checked_at)} — not found yet</span>`
+          : '');
+
+    return `
+      <div class="card card-tight mt-3" style="background: var(--bg-elevated);">
+        <div class="flex justify-between items-center mb-3">
+          <span class="code-block-label" style="margin:0;">DNS verification · TXT record</span>
+          ${verifiedNote}
+        </div>
+        <div style="display: grid; grid-template-columns: 80px 1fr; gap: 8px 16px; align-items: center; font-size: 13px;">
+          <div class="muted mono">Type</div><div class="mono">TXT</div>
+          <div class="muted mono">Name</div>
+          <div class="mono" style="word-break: break-all;">${HHTTPS.ui.escapeHtml(p.dns_record_host)}</div>
+          <div class="muted mono">Value</div>
+          <div class="mono" style="word-break: break-all;">${HHTTPS.ui.escapeHtml(p.dns_token)}</div>
+          <div class="muted mono">TTL</div><div class="mono">300</div>
+        </div>
+        <div class="flex gap-3 mt-4">
+          ${verified ? '' : `<button class="btn btn-ghost btn-sm" data-dns-check="${HHTTPS.ui.escapeHtml(p.client_id)}">Verify DNS now</button>`}
+          <button class="btn btn-ghost btn-sm" data-copy="${HHTTPS.ui.escapeHtml(p.dns_token)}">Copy value</button>
+        </div>
+      </div>`;
+  }
+
+  // ─── rejection / suspension note ───────────────────────────────────────────
+  function renderRejectionNote(p) {
+    if (!p.rejection_reason) return '';
+    const label = p.verification_status === 'suspended' ? 'SUSPENSION REASON' : 'REJECTION REASON';
+    return `
+      <div class="card card-tight mt-3" style="background: var(--bg-elevated); border-left: 2px solid var(--warning);">
+        <div class="text-xs muted mono mb-2">${label}</div>
+        <div class="text-sm">${HHTTPS.ui.escapeHtml(p.rejection_reason)}</div>
+      </div>`;
+  }
+
+  // ─── platform card ─────────────────────────────────────────────────────────
+  function renderPlatformCard(p) {
+    const submitBtn = p.eligible_for_review
+      ? `<button class="btn btn-primary btn-sm" data-submit-review="${HHTTPS.ui.escapeHtml(p.client_id)}">Submit for review →</button>`
+      : '';
+
+    const blockerSummary = (p.blockers && p.blockers.length)
+      ? `<div class="text-xs muted mt-2">Missing: ${p.blockers.map(b => HHTTPS.ui.escapeHtml(b)).join(', ')}</div>`
+      : '';
+
+    // Edit is allowed for any state except 'pending_review' (admin is looking at it).
+    const canEdit   = p.verification_status !== 'pending_review';
+    // Delete is destructive — only for clients that haven't been reviewed yet.
+    const canDelete = p.verification_status === 'email_pending' ||
+                      p.verification_status === 'unverified';
+    // Resend only makes sense while the email is still unconfirmed.
+    const canResend = p.verification_status === 'email_pending';
+
+    const headerActions = `
+      <div class="flex gap-2" style="flex-wrap:wrap;">
+        ${canResend ? `<button class="btn btn-ghost btn-sm" data-resend="${HHTTPS.ui.escapeHtml(p.client_id)}">${HHTTPS.i18n.t('dash.resend')}</button>` : ''}
+        ${canEdit   ? `<button class="btn btn-ghost btn-sm" data-edit="${HHTTPS.ui.escapeHtml(p.client_id)}">${HHTTPS.i18n.t('dash.edit')}</button>` : ''}
+        ${canDelete ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger);border-color:var(--danger);" data-delete="${HHTTPS.ui.escapeHtml(p.client_id)}" data-name="${HHTTPS.ui.escapeHtml(p.name)}">${HHTTPS.i18n.t('dash.delete')}</button>` : ''}
+      </div>`;
+
+    return `
+      <article class="card mb-4" data-card="${HHTTPS.ui.escapeHtml(p.client_id)}">
+        <header class="card-header">
+          <div style="flex: 1;">
+            <div class="flex items-center gap-3 mb-2" style="flex-wrap:wrap;">
+              <h3 class="card-title">${HHTTPS.ui.escapeHtml(p.name)}</h3>
+              ${statusBadge(p.verification_status)}
+            </div>
+            <div class="mono text-sm muted">${HHTTPS.ui.escapeHtml(p.homepage_url || '')}</div>
+            ${blockerSummary}
+          </div>
+          <div class="text-xs muted mono" style="text-align: right;">
+            <div>client_id <span class="mono" style="color:var(--text);">${HHTTPS.ui.escapeHtml(p.client_id)}</span></div>
+            <div>created ${HHTTPS.ui.fmtDate(p.created_at)}</div>
+            ${p.submitted_for_review_at ? `<div>submitted ${HHTTPS.ui.fmtDate(p.submitted_for_review_at)}</div>` : ''}
+            <div class="mt-2">${headerActions}</div>
+          </div>
+        </header>
+
+        <div data-view-section>
+          ${p.description ? `<div class="text-sm muted mb-3" style="white-space:pre-wrap;">${HHTTPS.ui.escapeHtml(p.description)}</div>` : ''}
+
+          <div class="flex gap-3 text-xs muted" style="flex-wrap: wrap;">
+            <span>contact <span class="mono" style="color:var(--text-muted);">${HHTTPS.ui.escapeHtml(p.contact_email || '—')}</span></span>
+            <span class="dim">·</span>
+            <span>match: ${p.domain_email_match ? '<span style="color:var(--accent);">yes</span>' : '<span style="color:var(--warning);">no</span>'}</span>
+            ${p.impressum_url ? `<span class="dim">·</span><span>impressum <a href="${HHTTPS.ui.escapeHtml(p.impressum_url)}" target="_blank" rel="noopener" class="mono">✓ set</a></span>` : ''}
+            ${p.last_used_at ? `<span class="dim">·</span><span>last token ${HHTTPS.ui.fmtDate(p.last_used_at)}</span>` : ''}
+          </div>
+
+          ${renderRejectionNote(p)}
+          ${renderChecklist(p)}
+          ${renderDnsBlock(p)}
+
+          ${submitBtn ? `<div class="mt-4 flex gap-3" style="justify-content:flex-end;">${submitBtn}</div>` : ''}
+        </div>
+
+        ${canEdit ? renderEditSection(p) : ''}
+      </article>`;
+  }
+
+  // ─── inline edit form ──────────────────────────────────────────────────────
+  function renderEditSection(p) {
+    const id = HHTTPS.ui.escapeHtml(p.client_id);
+    const redirectList = (p.redirect_uris || []).join('\n');
+    return `
+      <div data-edit-section data-edit-for="${id}" class="hidden" style="margin-top: 16px; padding-top: 20px; border-top: 1px solid var(--border);">
+        <div class="flex items-center justify-between mb-4">
+          <h4 style="font-size: 14px; color: var(--accent); font-family: 'JetBrains Mono', monospace; text-transform: uppercase; letter-spacing: 0.08em;">[ edit platform ]</h4>
+          <button class="btn btn-ghost btn-sm" data-edit-cancel="${id}">Cancel</button>
+        </div>
+
+        <form data-edit-form="${id}" onsubmit="return false;">
+          <div class="form-group">
+            <label class="form-label form-label-required">Platform name</label>
+            <input type="text" name="name" required minlength="2" maxlength="120"
+                   value="${HHTTPS.ui.escapeHtml(p.name || '')}" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label form-label-required">Impressum URL</label>
+            <input type="url" name="impressum_url" required placeholder="https://example.org/impressum"
+                   value="${HHTTPS.ui.escapeHtml(p.impressum_url || '')}" />
+            <div class="form-hint">Required to make this platform eligible for review.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Description</label>
+            <textarea name="description" rows="4" maxlength="2000"
+                      placeholder="What does your platform do? How will HHTTPS be used?">${HHTTPS.ui.escapeHtml(p.description || '')}</textarea>
+            <div class="form-hint">Max 2000 characters. Shown to admins during review.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label form-label-required">Redirect URI(s)</label>
+            <textarea name="redirect_uris" rows="3" required
+                      placeholder="https://example.org/callback&#10;https://example.org/login/return">${HHTTPS.ui.escapeHtml(redirectList)}</textarea>
+            <div class="form-hint">One per line, max 10. Must be HTTPS.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Logo URL</label>
+            <input type="url" name="logo_url" placeholder="https://example.org/logo.png"
+                   value="${HHTTPS.ui.escapeHtml(p.logo_url || '')}" />
+            <div class="form-hint">Optional. Shown to users during verification.</div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label form-label-required">Contact email</label>
+            <input type="email" name="contact_email" required
+                   value="${HHTTPS.ui.escapeHtml(p.contact_email || '')}" />
+            <div class="form-hint" style="color: var(--warning);">
+              ⚠ Changing the contact email <strong>resets email verification</strong> — you'll have to confirm a new link.
+            </div>
+          </div>
+
+          <div class="flex gap-3 mt-4" style="justify-content: flex-end;">
+            <button class="btn btn-ghost btn-sm" data-edit-cancel="${id}">Cancel</button>
+            <button class="btn btn-primary btn-sm" data-edit-save="${id}">Save changes</button>
+          </div>
+        </form>
+      </div>`;
+  }
+
+  // ─── actions ───────────────────────────────────────────────────────────────
+  function toggleEdit(clientId, show) {
+    const card = document.querySelector(`[data-card="${CSS.escape(clientId)}"]`);
+    if (!card) return;
+    const view = card.querySelector('[data-view-section]');
+    const edit = card.querySelector('[data-edit-section]');
+    if (show) {
+      view.classList.add('hidden');
+      edit.classList.remove('hidden');
+      // Scroll edit form into view
+      edit.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+      view.classList.remove('hidden');
+      edit.classList.add('hidden');
+    }
+  }
+
+  async function saveEdit(clientId, btn) {
+    const form = document.querySelector(`[data-edit-form="${CSS.escape(clientId)}"]`);
+    if (!form) return;
+
+    // Native HTML5 validation
+    if (!form.reportValidity()) return;
+
+    const fd = new FormData(form);
+    const raw = Object.fromEntries(fd.entries());
+
+    const redirectUris = (raw.redirect_uris || '')
+      .split('\n').map(s => s.trim()).filter(Boolean);
+
+    // Client-side validation matches the backend
+    if (redirectUris.length === 0) {
+      HHTTPS.ui.toast('At least one redirect URI is required', 'error'); return;
+    }
+    if (redirectUris.length > 10) {
+      HHTTPS.ui.toast('Maximum 10 redirect URIs', 'error'); return;
+    }
+    const badRedirect = redirectUris.find(u => !/^https:\/\//i.test(u));
+    if (badRedirect) {
+      HHTTPS.ui.toast(`Redirect URI must be https://: ${badRedirect}`, 'error'); return;
+    }
+    if (!/^https?:\/\//i.test(raw.impressum_url || '')) {
+      HHTTPS.ui.toast('Impressum URL must start with https:// or http://', 'error'); return;
+    }
+    if (raw.logo_url && !/^https?:\/\//i.test(raw.logo_url)) {
+      HHTTPS.ui.toast('Logo URL must start with https:// or http://', 'error'); return;
+    }
+
+    const payload = {
+      name:          (raw.name || '').trim(),
+      description:   (raw.description || '').trim() || null,
+      impressum_url: (raw.impressum_url || '').trim(),
+      logo_url:      (raw.logo_url || '').trim() || null,
+      redirect_uris: redirectUris,
+      contact_email: (raw.contact_email || '').trim(),
+    };
+
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'Saving…';
+
+    try {
+      await HHTTPS.api.developers.update(clientId, payload);
+      HHTTPS.ui.toast('Saved ✓', 'success');
+      load();
+    } catch (e) {
+      // Backend often returns { error: 'invalid_xyz', uri: '...' }
+      const detail = e.data && (e.data.error || e.data.message);
+      HHTTPS.ui.toast(detail || e.message || 'Save failed', 'error');
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  async function deletePlatform(clientId, name) {
+    if (!confirm(`Permanently delete "${name}"?\n\nThis can only be done while the platform is still in setup. Verified platforms must be suspended by an admin instead.`)) return;
+    try {
+      await HHTTPS.api.developers.remove(clientId);
+      HHTTPS.ui.toast('Platform deleted', 'success');
+      load();
+    } catch (e) {
+      HHTTPS.ui.toast(e.message || 'Delete failed', 'error');
+    }
+  }
+
+  async function resendEmail(clientId, btn) {
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '…';
+    try {
+      const r = await HHTTPS.api.developers.resendEmail(clientId);
+      HHTTPS.ui.toast(`Verification email re-sent to ${r.sent_to || 'your inbox'}`, 'success');
+    } catch (e) {
+      HHTTPS.ui.toast(e.message || 'Resend failed', 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  async function runDnsCheck(btn) {
+    const id = btn.getAttribute('data-dns-check');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try {
+      const r = await HHTTPS.api.developers.dnsCheck(id);
+      if (r && (r.verified || r.success)) {
+        HHTTPS.ui.toast('DNS verified ✓', 'success');
+      } else {
+        HHTTPS.ui.toast(r && r.message ? r.message : 'DNS record not found yet — check propagation.', 'error');
+      }
+      load();
+    } catch (e) {
+      HHTTPS.ui.toast(e.message || 'DNS check failed', 'error');
+      btn.disabled = false; btn.textContent = 'Verify DNS now';
+    }
+  }
+
+  async function runSubmitReview(btn) {
+    const id = btn.getAttribute('data-submit-review');
+    if (!confirm('Submit this platform for admin review? You won’t be able to change metadata until reviewed.')) return;
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    try {
+      await HHTTPS.api.developers.submitReview(id);
+      HHTTPS.ui.toast('Submitted for review ✓', 'success');
+      load();
+    } catch (e) {
+      // Backend returns 412 + { failures: [...] } if preconditions fail
+      const failures = e.data && e.data.failures;
+      if (failures && failures.length) {
+        HHTTPS.ui.toast('Not eligible yet: ' + failures.join('; '), 'error');
+      } else {
+        HHTTPS.ui.toast(e.message || 'Submit failed', 'error');
+      }
+      btn.disabled = false; btn.textContent = 'Submit for review →';
+    }
+  }
+
+  // ─── load + render ─────────────────────────────────────────────────────────
+  async function load() {
+    const host = document.getElementById('platforms-host');
+    try {
+      const data = await HHTTPS.api.developers.platforms();
+      const platforms = (data && data.clients) || [];
+      if (platforms.length === 0) {
+        host.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state-icon">⊕</div>
+            <h3 class="mb-2">No platforms yet</h3>
+            <p class="text-sm muted mb-4">Register your first platform to start issuing HHTTPS verifications.</p>
+            <a href="/developers/register.html" class="btn btn-primary">+ Register a platform</a>
+          </div>`;
+        return;
+      }
+      renderBlockers(platforms);
+      host.innerHTML = platforms.map(renderPlatformCard).join('');
+
+      host.querySelectorAll('[data-dns-check]').forEach(btn =>
+        btn.addEventListener('click', () => runDnsCheck(btn)));
+      host.querySelectorAll('[data-submit-review]').forEach(btn =>
+        btn.addEventListener('click', () => runSubmitReview(btn)));
+      host.querySelectorAll('[data-copy]').forEach(btn =>
+        btn.addEventListener('click', () => HHTTPS.ui.copyToClipboard(btn.getAttribute('data-copy'), btn)));
+
+      // Edit/Save/Cancel/Delete/Resend wiring
+      host.querySelectorAll('[data-edit]').forEach(btn =>
+        btn.addEventListener('click', () => toggleEdit(btn.getAttribute('data-edit'), true)));
+      host.querySelectorAll('[data-edit-cancel]').forEach(btn =>
+        btn.addEventListener('click', () => toggleEdit(btn.getAttribute('data-edit-cancel'), false)));
+      host.querySelectorAll('[data-edit-save]').forEach(btn =>
+        btn.addEventListener('click', () => saveEdit(btn.getAttribute('data-edit-save'), btn)));
+      host.querySelectorAll('[data-delete]').forEach(btn =>
+        btn.addEventListener('click', () => deletePlatform(btn.getAttribute('data-delete'), btn.getAttribute('data-name'))));
+      host.querySelectorAll('[data-resend]').forEach(btn =>
+        btn.addEventListener('click', () => resendEmail(btn.getAttribute('data-resend'), btn)));
+
+    } catch (e) {
+      host.innerHTML = `
+        <div class="alert alert-warning">
+          <span class="alert-icon">!</span>
+          <div>
+            <strong>Failed to load platforms</strong>
+            <div class="text-sm mt-2">${HHTTPS.ui.escapeHtml(e.message || 'Unknown error')}</div>
+          </div>
+        </div>`;
+    }
+  }
+
+  load();
+
+  // Re-render cards when the language changes (JS-rendered strings need a redraw)
+  document.addEventListener('hhttps:lang-changed', () => load());
+})();
+</script>
+
+</body>
+</html>

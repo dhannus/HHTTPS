@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HHTTPS · Register Platform</title>
+  <link rel="stylesheet" href="assets/portal.css" />
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav-inner">
+    <a href="/" class="topnav-logo">
+      <span class="topnav-logo-mark">👤</span>
+      <span>HHTTPS</span>
+    </a>
+    <span class="topnav-section">developers / register</span>
+    <div class="topnav-links">
+      <a href="/developers/" class="topnav-link" data-path="/developers/">Overview</a>
+      <a href="/developers/dashboard.html" class="topnav-link" data-path="/developers/dashboard">Dashboard</a>
+      <span id="identity-slot"></span>
+    </div>
+  </div>
+</nav>
+
+<main class="container-narrow">
+  <span class="eyebrow">developer onboarding</span>
+  <h1 class="mb-3">Register a platform</h1>
+  <p class="lede mb-8">
+    Four steps. About five minutes. Reviewed manually within ~48h.
+  </p>
+
+  <!-- Stepper -->
+  <div class="stepper" id="stepper">
+    <div class="step active" data-step="1"><span class="step-num">1</span> Identity</div>
+    <div class="step"        data-step="2"><span class="step-num">2</span> Platform</div>
+    <div class="step"        data-step="3"><span class="step-num">3</span> Compliance</div>
+    <div class="step"        data-step="4"><span class="step-num">4</span> Confirm</div>
+  </div>
+
+  <form id="register-form" class="card" style="padding: 32px;" onsubmit="return false;">
+
+    <!-- STEP 1: Identity -->
+    <section class="step-panel" data-step="1">
+      <h2 class="mb-3">Sign in with HHTTPS Identity</h2>
+      <p class="muted mb-6 text-sm">
+        We don't create new accounts. Your developer account is bound to your existing HHTTPS
+        passkey identity (verified via WebAuthn at the issuer).
+      </p>
+
+      <div id="identity-status" class="alert alert-info mb-4">
+        <span class="alert-icon">⌁</span>
+        <div>
+          <strong>Checking for existing identity…</strong>
+          <div class="text-sm mt-2">Looking for an HHTTPS token in your local browser storage.</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Display name <span class="dim">(optional, shown to admins)</span></label>
+        <input type="text" name="display_name" placeholder="daniel" maxlength="80" />
+        <div class="form-hint">Used internally during review. Never shown publicly.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Contact email</label>
+        <input type="email" name="contact_email" placeholder="you@example.org" required />
+        <div class="form-hint">For review status updates and revocation alerts only. Sent via Brevo.</div>
+      </div>
+    </section>
+
+    <!-- STEP 2: Platform -->
+    <section class="step-panel hidden" data-step="2">
+      <h2 class="mb-3">Platform details</h2>
+      <p class="muted mb-6 text-sm">Tell us about the service that will verify HHTTPS tokens.</p>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Platform name</label>
+        <input type="text" name="name" placeholder="My Forum" required minlength="2" maxlength="120" />
+        <div class="form-hint">2–120 characters. Shown to admins and end-users.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Homepage URL</label>
+        <input type="url" name="homepage_url" placeholder="https://example.org" required />
+        <div class="form-hint">Full URL incl. <span class="code-inline">https://</span>. DNS verification will be derived from this host.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Redirect URI(s)</label>
+        <textarea name="redirect_uris" rows="3" required
+          placeholder="https://example.org/auth/callback
+https://example.org/login/return"></textarea>
+        <div class="form-hint">One per line. These are the only URLs HHTTPS tokens will redirect to. Must be HTTPS.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Logo URL <span class="dim">(optional)</span></label>
+        <input type="url" name="logo_url" placeholder="https://example.org/logo.png" />
+        <div class="form-hint">Shown to users during the verification flow.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Category</label>
+        <select name="category" required>
+          <option value="">— Select category —</option>
+          <option value="social">Social network / Community</option>
+          <option value="forum">Forum / Discussion</option>
+          <option value="comments">Comment system</option>
+          <option value="marketplace">Marketplace</option>
+          <option value="dating">Dating / Personal</option>
+          <option value="news">News / Media</option>
+          <option value="gov">Government / Civic</option>
+          <option value="research">Research / Academic</option>
+          <option value="other">Other</option>
+        </select>
+        <div class="form-hint">Folded into the description sent to admins (your backend has no separate field).</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label form-label-required">Use-case description</label>
+        <textarea name="use_case" rows="4" required minlength="40" maxlength="2000"
+          placeholder="What will you do with HHTTPS tokens? Where will they be required? How do they affect user experience?"></textarea>
+        <div class="form-hint">Min. 40 characters. Becomes the platform's <span class="code-inline">description</span>.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Expected monthly verifications</label>
+        <select name="expected_volume">
+          <option value="<1k">Less than 1,000</option>
+          <option value="1k-10k">1k – 10k</option>
+          <option value="10k-100k" selected>10k – 100k</option>
+          <option value="100k-1m">100k – 1M</option>
+          <option value=">1m">More than 1M (contact us)</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- STEP 3: Compliance -->
+    <section class="step-panel hidden" data-step="3">
+      <h2 class="mb-3">Compliance &amp; revocation handling</h2>
+      <p class="muted mb-6 text-sm">
+        HHTTPS is anti-surveillance. We require platforms to commit to the same principles.
+      </p>
+
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" name="agree_no_pii" required style="width: auto; margin-right: 8px;" />
+          I will not attempt to link HHTTPS pseudonyms to real-world identities.
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" name="agree_no_crosssite" required style="width: auto; margin-right: 8px;" />
+          I will not share HHTTPS pseudonyms with third parties or use them for cross-site tracking.
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" name="agree_webhook" required style="width: auto; margin-right: 8px;" />
+          I will subscribe to revocation webhooks and act on them within 24h.
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" name="agree_eupl" required style="width: auto; margin-right: 8px;" />
+          I understand HHTTPS is licensed EUPL-1.2 and that my use is subject to the
+          <a href="/terms/">developer terms</a>.
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Impressum / Legal contact URL <span class="dim">(if applicable)</span></label>
+        <input type="url" name="impressum_url" placeholder="https://example.org/impressum" />
+        <div class="form-hint">Required if your platform is operated commercially under German jurisdiction.</div>
+      </div>
+    </section>
+
+    <!-- STEP 4: Confirm -->
+    <section class="step-panel hidden" data-step="4">
+      <h2 class="mb-3">Review &amp; submit</h2>
+      <p class="muted mb-6 text-sm">Double-check before sending to the admin queue.</p>
+
+      <div id="review-summary" class="card card-tight" style="background: var(--bg-elevated);">
+        <em class="muted">Summary will appear here.</em>
+      </div>
+
+      <div class="alert alert-info mt-6">
+        <span class="alert-icon">⌁</span>
+        <div>
+          <strong>What happens next</strong>
+          <ul class="text-sm mt-2" style="padding-left: 18px;">
+            <li>Submission lands in the admin queue</li>
+            <li>You'll get a Brevo email on every status change</li>
+            <li>On approval, you'll receive DNS verification instructions</li>
+            <li>After DNS verification, platform credentials are issued</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Form actions -->
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" id="btn-back">← Back</button>
+      <div class="flex gap-3">
+        <button type="button" class="btn btn-ghost" id="btn-cancel"
+                onclick="window.location.href='/developers/'">Cancel</button>
+        <button type="button" class="btn btn-primary" id="btn-next">Next →</button>
+      </div>
+    </div>
+  </form>
+</main>
+
+<footer class="footer">
+  <div class="footer-inner">
+    <div class="mono">HHTTPS · Developer onboarding · v4</div>
+    <div><a href="/developers/">← Back to overview</a></div>
+  </div>
+</footer>
+
+<script src="assets/portal.js"></script>
+<script>
+(function () {
+  const form = document.getElementById('register-form');
+  const panels = form.querySelectorAll('.step-panel');
+  const steps = document.querySelectorAll('#stepper .step');
+  const btnBack = document.getElementById('btn-back');
+  const btnNext = document.getElementById('btn-next');
+  const TOTAL = 4;
+  let current = 1;
+
+  // -- Step 1: identity check --
+  function refreshIdentityStatus() {
+    const box = document.getElementById('identity-status');
+    const id = HHTTPS.auth.getIdentity();
+    if (id && HHTTPS.auth.isLoggedIn()) {
+      box.className = 'alert alert-success mb-4';
+      box.innerHTML = `
+        <span class="alert-icon">✓</span>
+        <div>
+          <strong>Signed in as <span class="mono">${HHTTPS.ui.escapeHtml((id.user_id || '').slice(0, 12))}…</span></strong>
+          <div class="text-sm mt-2 muted">Your developer account will be bound to this identity.</div>
+        </div>`;
+    } else {
+      box.className = 'alert alert-warning mb-4';
+      box.innerHTML = `
+        <span class="alert-icon">!</span>
+        <div>
+          <strong>No HHTTPS identity found</strong>
+          <div class="text-sm mt-2">
+            You need an HHTTPS passkey identity before you can register as a developer.
+            <a href="/issuer/">Create one at the issuer →</a>
+          </div>
+        </div>`;
+    }
+  }
+  refreshIdentityStatus();
+
+  // -- Stepper navigation --
+  function goToStep(n) {
+    if (n < 1 || n > TOTAL) return;
+    current = n;
+    panels.forEach(p => p.classList.toggle('hidden', Number(p.dataset.step) !== n));
+    steps.forEach(s => {
+      const sn = Number(s.dataset.step);
+      s.classList.toggle('active', sn === n);
+      s.classList.toggle('done', sn < n);
+    });
+    btnBack.style.visibility = n === 1 ? 'hidden' : 'visible';
+    btnNext.textContent = n === TOTAL ? 'Submit →' : 'Next →';
+    if (n === TOTAL) renderSummary();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function validateCurrentStep() {
+    const panel = form.querySelector(`.step-panel[data-step="${current}"]`);
+    const required = panel.querySelectorAll('[required]');
+    for (const el of required) {
+      if (el.type === 'checkbox' && !el.checked) {
+        HHTTPS.ui.toast(`Please confirm: "${el.parentElement.textContent.trim().slice(0, 60)}…"`, 'error');
+        el.focus(); return false;
+      }
+      if (el.type !== 'checkbox' && !el.value.trim()) {
+        HHTTPS.ui.toast(`"${el.previousElementSibling?.textContent || 'A field'}" is required`, 'error');
+        el.focus(); return false;
+      }
+      if (el.type === 'email' && !/^.+@.+\..+$/.test(el.value)) {
+        HHTTPS.ui.toast('Please enter a valid email', 'error');
+        el.focus(); return false;
+      }
+    }
+
+    // Step 1 needs identity
+    if (current === 1 && !HHTTPS.auth.isLoggedIn()) {
+      HHTTPS.ui.toast('Sign in with HHTTPS Identity first', 'error');
+      return false;
+    }
+    return true;
+  }
+
+  function renderSummary() {
+    const fd = new FormData(form);
+    const get = (k) => fd.get(k) || '—';
+    const uid = HHTTPS.auth.getUid() || '';
+    const redirects = (get('redirect_uris') || '').toString().split('\n').map(s => s.trim()).filter(Boolean);
+    document.getElementById('review-summary').innerHTML = `
+      <div style="display: grid; grid-template-columns: 160px 1fr; gap: 8px 16px; font-size: 13px;">
+        <div class="muted">Identity</div><div class="mono">${HHTTPS.ui.escapeHtml(uid.slice(0, 16))}…</div>
+        <div class="muted">Display name</div><div>${HHTTPS.ui.escapeHtml(get('display_name'))}</div>
+        <div class="muted">Contact email</div><div>${HHTTPS.ui.escapeHtml(get('contact_email'))}</div>
+        <div class="muted">Platform name</div><div>${HHTTPS.ui.escapeHtml(get('name'))}</div>
+        <div class="muted">Homepage URL</div><div class="mono">${HHTTPS.ui.escapeHtml(get('homepage_url'))}</div>
+        <div class="muted">Redirect URI(s)</div><div class="mono">${redirects.map(r => HHTTPS.ui.escapeHtml(r)).join('<br>') || '—'}</div>
+        <div class="muted">Logo URL</div><div class="mono">${HHTTPS.ui.escapeHtml(get('logo_url'))}</div>
+        <div class="muted">Category</div><div>${HHTTPS.ui.escapeHtml(get('category'))}</div>
+        <div class="muted">Volume</div><div>${HHTTPS.ui.escapeHtml(get('expected_volume'))}</div>
+        <div class="muted">Use-case</div><div>${HHTTPS.ui.escapeHtml(get('use_case'))}</div>
+        <div class="muted">Impressum</div><div>${HHTTPS.ui.escapeHtml(get('impressum_url'))}</div>
+      </div>`;
+  }
+
+  btnBack.addEventListener('click', () => goToStep(current - 1));
+  btnNext.addEventListener('click', async () => {
+    if (!validateCurrentStep()) return;
+    if (current < TOTAL) { goToStep(current + 1); return; }
+
+    // Build payload that matches the backend schema exactly:
+    //   name, description, homepage_url, redirect_uris (array), contact_email,
+    //   impressum_url, logo_url
+    const fd = new FormData(form);
+    const raw = Object.fromEntries(fd.entries());
+
+    const redirectUris = (raw.redirect_uris || '')
+      .split('\n').map(s => s.trim()).filter(Boolean);
+
+    // Validate redirect URIs are HTTPS
+    const badRedirect = redirectUris.find(u => !/^https:\/\//i.test(u));
+    if (badRedirect) {
+      HHTTPS.ui.toast(`Redirect URI must be https://: ${badRedirect}`, 'error');
+      return;
+    }
+    if (redirectUris.length === 0) {
+      HHTTPS.ui.toast('At least one redirect URI is required', 'error');
+      return;
+    }
+
+    // Compose description from category + volume + use-case (backend has no
+    // separate fields for these, so we fold them into the description).
+    const description = [
+      raw.category   ? `Category: ${raw.category}`                : null,
+      raw.expected_volume ? `Expected volume: ${raw.expected_volume}/mo` : null,
+      raw.use_case   ? `Use-case: ${raw.use_case}`                : null,
+      raw.display_name ? `Developer: ${raw.display_name}`         : null
+    ].filter(Boolean).join('\n');
+
+    const payload = {
+      name:          (raw.name || '').trim(),
+      description:   description,
+      homepage_url:  (raw.homepage_url || '').trim(),
+      redirect_uris: redirectUris,
+      contact_email: (raw.contact_email || '').trim(),
+      impressum_url: (raw.impressum_url || '').trim() || null,
+      logo_url:      (raw.logo_url || '').trim() || null,
+    };
+
+    btnNext.disabled = true;
+    btnNext.textContent = 'Submitting…';
+
+    try {
+      const res = await HHTTPS.api.developers.register(payload);
+      const warnings = (res && res.warnings) || [];
+      if (warnings.length) {
+        HHTTPS.ui.toast(`Submitted with warnings: ${warnings.map(w => w.code).join(', ')}`, 'info');
+      } else {
+        HHTTPS.ui.toast('Submitted! Check your inbox for the verification email.', 'success');
+      }
+      setTimeout(() => window.location.href = '/developers/dashboard.html', 1200);
+    } catch (e) {
+      HHTTPS.ui.toast(e.message || 'Submission failed', 'error');
+      btnNext.disabled = false;
+      btnNext.textContent = 'Submit →';
+    }
+  });
+
+  goToStep(1);
+})();
+</script>
+
+</body>
+</html>
