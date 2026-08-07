@@ -72,6 +72,17 @@ const PORT     = process.env.PORT    || 3000;
 const RP_ID    = process.env.RP_ID   || 'hhttps.org';
 const ORIGIN   = process.env.ORIGIN  || `https://${RP_ID}`;
 const BASE_URL = process.env.BASE_URL || ORIGIN;
+
+// ── WIMSE: RFC 7638 JWK thumbprint for an EC P-256 public JWK ───────────────
+// Zero-PII: only the thumbprint is ever stored, never the key material.
+function jwkThumbprint(jwk) {
+  try {
+    if (!jwk || jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) return null;
+    const canon = JSON.stringify({ crv: 'P-256', kty: 'EC', x: jwk.x, y: jwk.y });
+    return crypto.createHash('sha256').update(canon).digest('base64url');
+  } catch { return null; }
+}
+
 const RP_NAME  = 'iamhmn HHTTPS';
 
 // Token TTLs
@@ -3501,7 +3512,7 @@ app.get('/hhttps/protected', async (req, res) => {
 // ─── Machine Tokens ───────────────────────────────────────────────────────────
 
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
-  const { operatorName, operatorUrl, purpose, contactEmail, role, sessionId } = req.body;
+  const { operatorName, operatorUrl, purpose, contactEmail, role, sessionId, publicKeyJwk } = req.body;
   if (!operatorName || !purpose)
     return res.status(400).json({ error: 'operatorName and purpose are required.' });
   // The ONE rule for machines: an operator contact e-mail is required.
@@ -3545,9 +3556,10 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   const apiKey     = 'mk-' + crypto.randomBytes(24).toString('hex');
   const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
 
+  const keyJkt = jwkThumbprint(publicKeyJwk);
   await db.machineOperators.create({
     operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash,
-    role: normalizedRole, roleLabel, roleIcon,
+    role: normalizedRole, roleLabel, roleIcon, keyJkt,
   });
 
   res.status(201).json({
@@ -3588,6 +3600,7 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
     tokenPayload.role_label = op.role_label;
     tokenPayload.role_icon  = op.role_icon;
   }
+  if (op.key_jkt) { tokenPayload.cnf = { jkt: op.key_jkt }; }
   const token = signToken(tokenPayload, { expiresIn: MACHINE_TTL });
 
   await db.tokens.create({
