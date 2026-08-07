@@ -89,6 +89,9 @@
 <!-- Access hint: shown when signed in but the e-mail is not confirmed yet -->
 <section class="container" id="role-hint-host" style="padding-top: 0; display: none;"></section>
 
+<!-- Identity panel: own user_id, admin status, durability warning -->
+<section class="container" id="identity-panel-host" style="padding-top: 0; display: none;"></section>
+
 <section class="container" style="padding-top: 0;">
   <div class="grid grid-3">
     <div class="card">
@@ -278,6 +281,85 @@ app.use(<span style="color: var(--info);">async</span> (req, res, next) => {
       renderHint();
       // re-check after admin probe completes
       setTimeout(renderHint, 600);
+    }
+
+    // ── Identity panel ────────────────────────────────────────────────────
+    // Shows the caller's own user_id. This matters because `admins` is keyed on
+    // user_id and that id is only stable for passkey/eID-anchored identities —
+    // an e-mail-only sign-in mints a fresh one every time, silently dropping
+    // admin rights. Better to show it than to let the operator wonder.
+    if (HHTTPS.auth.isLoggedIn()) {
+      HHTTPS.auth.whoami().then((me) => {
+        const host = document.getElementById('identity-panel-host');
+        if (!host || !me) return;
+        const esc = HHTTPS.ui.escapeHtml;
+        const de  = HHTTPS.i18n.getLang() === 'de';
+        const durable = me.identity && me.identity.durable;
+
+        const warn = durable ? '' : `
+          <div class="alert alert-warning mt-4">
+            <span class="alert-icon">&#9888;</span>
+            <div>
+              <strong>${de ? 'Fl&uuml;chtige Identit&auml;t' : 'Ephemeral identity'}</strong>
+              <div class="text-sm mt-2 muted">
+                ${de
+                  ? 'Diese user_id gilt nur f&uuml;r die aktuelle Sitzung. Bei der n&auml;chsten Anmeldung bekommst du eine neue &mdash; registrierte Plattformen und Admin-Rechte w&auml;ren danach nicht mehr deine. Registriere einen Passkey; das Portal setzt ihn ohnehin voraus.'
+                  : 'This user_id is valid for the current session only. Your next sign-in produces a new one &mdash; registered platforms and admin rights would no longer be yours. Register a passkey; the portal requires one anyway.'}
+              </div>
+            </div>
+          </div>`;
+
+        const adminRow = me.is_admin
+          ? `<span style="color: var(--accent);">&#10003; ${de ? 'Admin' : 'Admin'}</span>`
+          : `<span class="muted">${de ? 'kein Admin' : 'not an admin'}</span>`;
+
+        const grantBlock = me.is_admin ? '' : `
+          <div class="mt-4">
+            <div class="text-sm muted mb-2">${de
+              ? 'Admin-Rechte f&uuml;r diese Identit&auml;t setzen (auf dem Server ausf&uuml;hren):'
+              : 'Grant admin to this identity (run on the server):'}</div>
+            <div class="flex gap-2" style="align-items: center; flex-wrap: wrap;">
+              <code class="code-inline" id="grant-cmd"
+                    style="flex:1; min-width: 260px; word-break: break-all;">${esc(me.grant_admin_command || '')}</code>
+              <button class="btn btn-ghost btn-sm" id="copy-grant">${de ? 'Kopieren' : 'Copy'}</button>
+            </div>
+          </div>`;
+
+        host.style.display = '';
+        host.innerHTML = `
+          <div class="card">
+            <span class="eyebrow">${de ? 'Meine Identit&auml;t' : 'My identity'}</span>
+            <div class="mt-3" style="display:grid; gap:10px;">
+              <div class="flex gap-2" style="align-items:center; flex-wrap: wrap;">
+                <span class="text-sm muted" style="min-width:110px;">user_id</span>
+                <code class="code-inline" id="my-uid"
+                      style="word-break: break-all;">${esc(me.user_id || '—')}</code>
+                <button class="btn btn-ghost btn-sm" id="copy-uid">${de ? 'Kopieren' : 'Copy'}</button>
+              </div>
+              <div class="flex gap-2" style="align-items:center; flex-wrap: wrap;">
+                <span class="text-sm muted" style="min-width:110px;">${de ? 'Status' : 'Status'}</span>
+                <span class="text-sm">${adminRow}</span>
+              </div>
+              <div class="flex gap-2" style="align-items:center; flex-wrap: wrap;">
+                <span class="text-sm muted" style="min-width:110px;">${de ? 'Methoden' : 'Methods'}</span>
+                <span class="text-sm">${esc((me.verified_methods || []).join(' &middot; ') || '—')}</span>
+              </div>
+              <div class="flex gap-2" style="align-items:center; flex-wrap: wrap;">
+                <span class="text-sm muted" style="min-width:110px;">${de ? 'Verankerung' : 'Anchor'}</span>
+                <span class="text-sm">${esc((me.identity && me.identity.anchor) || '—')}</span>
+              </div>
+            </div>
+            ${warn}
+            ${grantBlock}
+          </div>`;
+
+        const cu = document.getElementById('copy-uid');
+        if (cu) cu.addEventListener('click', () =>
+          HHTTPS.ui.copyToClipboard(me.user_id || '', cu));
+        const cg = document.getElementById('copy-grant');
+        if (cg) cg.addEventListener('click', () =>
+          HHTTPS.ui.copyToClipboard(me.grant_admin_command || '', cg));
+      }).catch(() => { /* not signed in or endpoint unavailable — stay silent */ });
     }
   });
 })();
