@@ -390,11 +390,11 @@ export const rolesDeclared = {
 // ─── MACHINE OPERATORS ────────────────────────────────────────────────────────
 
 export const machineOperators = {
-  async create({ operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash, role, roleLabel, roleIcon }) {
+  async create({ operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash, role, roleLabel, roleIcon, keyJkt }) {
     await q(
-      `INSERT INTO machine_operators (operator_id, operator_name, operator_url, purpose, contact_email, api_key_hash, role, role_label, role_icon)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash, role || null, roleLabel || null, roleIcon || null]
+      `INSERT INTO machine_operators (operator_id, operator_name, operator_url, purpose, contact_email, api_key_hash, role, role_label, role_icon, key_jkt)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash, role || null, roleLabel || null, roleIcon || null, keyJkt || null]
     );
   },
 

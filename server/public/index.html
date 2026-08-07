@@ -742,6 +742,9 @@ function publishIdentity(d){
     levelLabel:       (d.role&&d.role.levelLabel)||null,
     trustScore:       h.trustScore||0,
     method:           ORDER.filter(m=>confirmed[m]).join(',')||'email',
+    // Structured form of the same information. `method` stays for backward
+    // compatibility (extension, older pages); consumers should prefer this.
+    verified_methods: ORDER.filter(m=>confirmed[m]),
     issuer:           'hhttps://hhttps.org',
     issuedAt:         new Date().toISOString(),
     expiresAt:        h.expiresAt||null,

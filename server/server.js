@@ -3696,7 +3696,9 @@ async function authenticatedUser(req) {
   return {
     userId:     d.uid || d.userId || d.sub,
     role:       d.role,
-    trustScore: d.trustScore || 0
+    trustScore: d.trustScore || 0,
+    verifiedMethods: Array.isArray(d.verified_methods) ? d.verified_methods : [],
+    actorType:  d.actorType || 'human'
   };
 }
 
@@ -3725,26 +3727,38 @@ async function requireAdmin(req, res) {
   return u;
 }
 
-// ─── Developer-portal access floor ─────────────────────────────────────────
-// v0.5: there is NO 'developer' role any more. Roles are EUDI (Q)EAA artefacts
-// and say nothing about whether someone may register a platform. The only
-// requirement is a confirmed e-mail — VERIFICATION_METHODS.email contributes
-// trust 20 and is the sign-in gate, so trust >= 20 means "confirmed e-mail".
-// Machines register through /hhttps/machine/register instead (own flow, own
-// operator-email confirmation, trustScore stays 0 by design).
-const MIN_PORTAL_TRUST = 20;
+// ─── Developer-portal access rule ──────────────────────────────────────────
+// The portal requires a PASSKEY-verified identity. Two reasons, both structural:
+//
+//   1. Durability. user_id is only stable when it derives from a stored
+//      credential (webauthn/auth/finish: `stored.userId || cred.userId`). An
+//      e-mail-only sign-in mints a fresh uuid every session, so anything keyed
+//      on user_id — owned platforms, admin membership — silently detaches.
+//      Passkey-only makes ownership survive by construction.
+//   2. Proportionality. Registering a platform means minting an OAuth client
+//      that other people will authenticate against. A hardware-backed
+//      credential is the right floor for that; a mail loop is not.
+//
+// There is NO role requirement. v0.5 roles are EUDI (Q)EAA artefacts and say
+// nothing about whether someone may operate a platform.
+//
+// Machines do not come through here: /hhttps/machine/register is its own path
+// with its own operator-e-mail confirmation, and machine trustScore stays 0.
+const PORTAL_REQUIRED_METHOD = 'passkey';
 
-/** Authenticated user with a confirmed e-mail. Admins always pass. */
+/** Authenticated user whose identity is passkey-verified. Admins always pass. */
 async function requirePortalUser(req, res) {
   const u = await requireUser(req, res);
   if (!u) return null;
-  if ((u.trustScore || 0) >= MIN_PORTAL_TRUST) return u;
+  if (u.verifiedMethods.includes(PORTAL_REQUIRED_METHOD)) return u;
   if (await db.admins.isAdmin(u.userId)) return u;
   res.status(403).json({
-    error: 'email_unconfirmed',
-    message: 'A confirmed e-mail address is required to use the developer portal.',
-    min_trust: MIN_PORTAL_TRUST,
-    your_trust: u.trustScore || 0
+    error: 'passkey_required',
+    message: 'The developer portal requires a passkey-verified identity. ' +
+             'Register a passkey at ' + BASE_URL + ' and sign in with it.',
+    required_method: PORTAL_REQUIRED_METHOD,
+    your_methods: u.verifiedMethods,
+    registration_endpoint: `${BASE_URL}/hhttps/webauthn/register/start`
   });
   return null;
 }
@@ -3774,6 +3788,54 @@ function generateClientId(name) {
   const tail = crypto.randomBytes(2).toString('hex');
   return `${slug || 'platform'}-${tail}`;
 }
+
+// ─── GET /hhttps/whoami — who am I, and is this identity durable? ──────────
+// Zero-PII by construction: everything here already lives in the caller's own
+// signed token. Nothing is looked up in a per-user table because there isn't one.
+//
+// Why this exists: `admins` is keyed on user_id, and user_id is only STABLE for
+// passkey-anchored identities (it comes from the stored credential). An
+// email-only sign-in mints a fresh uuid every time, so admin rights granted to
+// such an id evaporate with the session. This endpoint makes that visible
+// instead of leaving the operator guessing why their admin access vanished.
+app.get('/hhttps/whoami', async (req, res) => {
+  const u = await requireUser(req, res);
+  if (!u) return;
+
+  const methods  = u.verifiedMethods;
+  const hasKey   = methods.includes(PORTAL_REQUIRED_METHOD);
+  // A passkey binds the identity to a stored credential, so the same user_id
+  // comes back on every sign-in. An eID identity is durable in the same sense.
+  const durable  = hasKey || methods.includes('eudi');
+  const isAdmin  = await db.admins.isAdmin(u.userId);
+
+  res.json({
+    user_id:          u.userId,
+    is_admin:         isAdmin,
+    trust_score:      u.trustScore || 0,
+    verified_methods: methods,
+    actor_type:       u.actorType,
+    portal_access: {
+      granted:         hasKey || isAdmin,
+      required_method: PORTAL_REQUIRED_METHOD,
+      reason: hasKey
+        ? 'passkey verified'
+        : (isAdmin ? 'admin override' : 'no passkey on this identity')
+    },
+    identity: {
+      durable,
+      anchor: durable
+        ? (hasKey ? 'passkey' : 'eudi')
+        : 'session-only',
+      note: durable
+        ? 'This user_id derives from a stored credential and stays the same on every sign-in.'
+        : 'This user_id was minted for this session only. Signing in again produces a NEW id — ' +
+          'platform ownership and admin membership will not carry over. Register a passkey.'
+    },
+    grant_admin_command:
+      `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
+  });
+});
 
 // ─── POST /hhttps/developers/clients — Register a new platform ─────────────
 app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
@@ -3937,7 +3999,7 @@ app.get('/hhttps/developers/confirm-email', async (req, res) => {
 
 // ─── GET /hhttps/developers/clients — List my platforms ────────────────────
 app.get('/hhttps/developers/clients', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
   const clients = await db.oauthClients.listAllByOwner(u.userId);
   res.json({
@@ -3948,7 +4010,7 @@ app.get('/hhttps/developers/clients', async (req, res) => {
 
 // ─── GET /hhttps/developers/clients/:id — Detail ───────────────────────────
 app.get('/hhttps/developers/clients/:id', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
   const client = await db.oauthClients.get(req.params.id);
   if (!client || client.owner_user_id !== u.userId) {
@@ -3959,7 +4021,7 @@ app.get('/hhttps/developers/clients/:id', async (req, res) => {
 
 // ─── PATCH /hhttps/developers/clients/:id — Update metadata ────────────────
 app.patch('/hhttps/developers/clients/:id', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
 
   const client = await db.oauthClients.get(req.params.id);
@@ -4019,7 +4081,7 @@ app.patch('/hhttps/developers/clients/:id', async (req, res) => {
 
 // ─── DELETE /hhttps/developers/clients/:id — Delete draft ──────────────────
 app.delete('/hhttps/developers/clients/:id', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
   const deleted = await db.oauthClients.deleteIfDraft(req.params.id, u.userId);
   if (!deleted) return res.status(409).json({ error: 'cannot_delete',
@@ -4030,7 +4092,7 @@ app.delete('/hhttps/developers/clients/:id', async (req, res) => {
 // ─── POST /hhttps/developers/clients/:id/dns-check ────────────────────────
 // Triggers a DNS lookup for _hhttps-verify.<apex> and matches against dns_token.
 app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
 
   const client = await db.oauthClients.get(req.params.id);
@@ -4097,7 +4159,7 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
 // ─── POST /hhttps/developers/clients/:id/submit-review ─────────────────────
 // Owner asks for admin verification. Checks all hard requirements first.
 app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
 
   const client = await db.oauthClients.get(req.params.id);
@@ -4145,9 +4207,56 @@ app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
   res.json({ success: true, verification_status: 'pending_review' });
 });
 
+// ─── POST /hhttps/developers/clients/:id/resend-email ─────────────────────
+// The dashboard offers a "resend confirmation" button; without this route it
+// 404s. Only valid while the platform is still waiting for its first e-mail
+// confirmation — afterwards there is nothing to resend.
+app.post('/hhttps/developers/clients/:id/resend-email', limit.email, async (req, res) => {
+  const u = await requirePortalUser(req, res);
+  if (!u) return;
+
+  const client = await db.oauthClients.get(req.params.id);
+  if (!client || client.owner_user_id !== u.userId) {
+    return res.status(404).json({ error: 'not_found' });
+  }
+  if (client.verification_status !== 'email_pending') {
+    return res.status(409).json({ error: 'wrong_state',
+      message: `Nothing to resend from state '${client.verification_status}'.` });
+  }
+
+  const emailToken   = randomToken(24);
+  const emailExpires = new Date(Date.now() + 48 * 3600 * 1000); // 48h, same as registration
+
+  try {
+    await db.oauthClients.refreshEmailToken(client.client_id, emailToken, emailExpires);
+  } catch (err) {
+    console.error('[DEVELOPERS] refreshEmailToken failed:', err.message);
+    return res.status(500).json({ error: 'token_refresh_failed', message: err.message });
+  }
+
+  try {
+    await sendPlatformRegistrationEmail({
+      to:           client.contact_email,
+      platformName: client.name,
+      homepageUrl:  client.homepage_url,
+      confirmUrl:   `${BASE_URL}/hhttps/developers/confirm-email?token=${emailToken}`,
+      kind:         'resend'
+    });
+  } catch (err) {
+    console.warn('[DEVELOPERS] resend email failed:', err.message);
+    return res.status(500).json({ error: 'send_failed', message: err.message });
+  }
+
+  // Mask the address — the owner knows it, the response body need not carry it.
+  const masked = String(client.contact_email || '')
+    .replace(/^(.)(.*)(@.*)$/, (m, a, b, c) => a + '*'.repeat(Math.max(b.length, 1)) + c);
+
+  res.json({ success: true, sent_to: masked, expires_at: emailExpires.toISOString() });
+});
+
 // ─── GET /hhttps/developers/clients/:id/stats ─────────────────────────────
 app.get('/hhttps/developers/clients/:id/stats', async (req, res) => {
-  const u = await requireUser(req, res);
+  const u = await requirePortalUser(req, res);
   if (!u) return;
   const client = await db.oauthClients.get(req.params.id);
   if (!client || client.owner_user_id !== u.userId) {
