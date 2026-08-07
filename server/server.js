@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { mountPopVerify } from './pop-verify.js'; // POP-VERIFY
 import { mountWpPluginRegistration } from './wp-plugin-registration.js'; // WP-PLUGIN-REG
 /**
  * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
@@ -4526,6 +4527,7 @@ async function main() {
   }
 
 mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
+mountPopVerify(app, { db, verifyToken, RP_ID, BASE_URL }); // POP-VERIFY
   app.listen(PORT, () => {
     console.log(`\n🔐 HHTTPS v4.1 · Port ${PORT}`);
     console.log(`   RP_ID:   ${RP_ID}`);
