@@ -1458,7 +1458,7 @@ app.get('/hhttps/oauth/authorize', async (req, res) => {
 // short-lived authorization code.
 app.post('/hhttps/oauth/approve', async (req, res) => {
   const { token, client_id, redirect_uri, scope, state, nonce,
-          code_challenge, code_challenge_method } = req.body || {};
+          code_challenge, code_challenge_method, pseudonym } = req.body || {};
 
   if (!token) return res.status(401).json({ error: 'token required' });
 
@@ -1503,6 +1503,14 @@ app.post('/hhttps/oauth/approve', async (req, res) => {
       ageVerificationMethod:  d.age_verification_method || null,
       ttlSec:             OAUTH_CODE_TTL
     });
+
+    const cleanPseudo = pseudonym
+      ? (String(pseudonym).replace(/[^\w\-. äöüÄÖÜß]/gu, '').slice(0, 32).trim() || null)
+      : null;
+    if (cleanPseudo) {
+      try { await db.challenges.create('pseudo:' + code, cleanPseudo, null, 'pseudonym', 120000); }
+      catch (e) { console.error('[OAUTH] pseudonym bind failed:', e.message); }
+    }
 
     await db.oauthClients.touchLastUsed(client_id);
     await db.stats.increment('oauth_authorizations');
@@ -1670,6 +1678,15 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   const roleDef = ROLES[claimed.role] || ROLES.citizen;
   const vMethod = VERIFICATION_LEVELS[claimed.verification_method] || {};
 
+  let _preferredUsername = null;
+  try {
+    const _pr = await db.challenges.get('pseudo:' + code);
+    if (_pr && _pr.challenge) {
+      _preferredUsername = _pr.challenge;
+      await db.challenges.delete('pseudo:' + code);
+    }
+  } catch (e) { /* none bound */ }
+
   const accessToken = signToken({
     iss:        `https://${RP_ID}`,
     hhttps_iss: `hhttps://${RP_ID}`,
@@ -1679,6 +1696,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     scope:      claimed.scopes.join(' '),
     role:       claimed.role,
     trustScore: claimed.trust_score,
+    ...(_preferredUsername ? { preferred_username: _preferredUsername } : {}),
     // Actor type survives the code flow: 'machine-token' in the code row
     // becomes explicit bot claims here (and in the ID token below).
     ...(claimed.verification_method === 'machine-token'
@@ -1717,6 +1735,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     idTokenClaims.age_verified            = claimed.age_verified ?? false;
     idTokenClaims.age_verification_method = claimed.age_verification_method || 'self-declared';
   }
+  if (_preferredUsername) { idTokenClaims.preferred_username = _preferredUsername; }
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
 
   await db.stats.increment('oauth_tokens_issued');
@@ -1785,6 +1804,7 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
       sub: d.sub,
       iss: d.iss
     };
+    if (d.preferred_username) { out.preferred_username = d.preferred_username; }
     if (scopes.includes('role')) {
       const roleDef = ROLES[d.role] || ROLES.citizen;
       out.role        = d.role;
@@ -1987,6 +2007,12 @@ function renderConsentPage({ client, scopes, params }) {
       <div class="scope-list-head" data-i18n="consent.scopeHead">Folgende Daten werden geteilt</div>
       ${scopeRows}
     </div>
+    <div class="pseudo-field" style="margin:14px 0 4px;">
+      <label for="pseudoInput" style="display:block;font-size:13px;opacity:.75;margin-bottom:6px;" data-i18n="consent.pseudoLabel">Anzeigename (frei wählbar, optional)</label>
+      <input id="pseudoInput" type="text" maxlength="32" autocomplete="nickname"
+             style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid rgba(0,0,0,.15);border-radius:10px;font-size:15px;background:#fff;" />
+      <div style="font-size:12px;opacity:.6;margin-top:5px;" data-i18n="consent.pseudoHint">Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.</div>
+    </div>
     <div class="status" id="status"></div>
     <div class="actions">
       <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
@@ -2091,7 +2117,8 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
         state:                 params.get('state'),
         nonce:                 params.get('nonce'),
         code_challenge:        params.get('code_challenge'),
-        code_challenge_method: params.get('code_challenge_method')
+        code_challenge_method: params.get('code_challenge_method'),
+        pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
       })
     });
     const d = await r.json();
@@ -2112,7 +2139,8 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
               state:                 params.get('state'),
               nonce:                 params.get('nonce'),
               code_challenge:        params.get('code_challenge'),
-              code_challenge_method: params.get('code_challenge_method')
+              code_challenge_method: params.get('code_challenge_method'),
+              pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
             })
           });
           const d2 = await r2.json();
@@ -2141,6 +2169,7 @@ const CONSENT_I18N = {
     "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
     "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
     "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
+    "consent.pseudoLabel":"Anzeigename (frei wählbar, optional)","consent.pseudoHint":"Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.",
     "consent.footPre":"Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf",
     "consent.footPost":"widerrufen.","consent.processing":"Wird verarbeitet…",
     "consent.noIdentity":"Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.",
@@ -2157,6 +2186,7 @@ const CONSENT_I18N = {
     "consent.warnB2":". Check in particular that the URL in the address bar matches",
     "consent.warnB3":".","consent.heading":"wants to see your identity",
     "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
+    "consent.pseudoLabel":"Display name (your choice, optional)","consent.pseudoHint":"It does not have to be your real name. You decide what to reveal.",
     "consent.footPre":"No personal data is shared. You can revoke the connection any time at",
     "consent.footPost":".","consent.processing":"Processing…",
     "consent.noIdentity":"No HHTTPS identity found. Please log in at hhttps.org first.",
