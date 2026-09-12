@@ -157,3 +157,10 @@ Befunde: **B-1 (hoch)**, B-2 (mittel, Spec-Entscheidung), B-3..B-6 (niedrig/Beob
 Gate: `TEST_PG_HOST=/var/lib/pgtest npm test` → `# tests 149 · # pass 145 · # fail 0 · # todo 4` (exit 0);
 `npm run lint` → `0 errors, 59 warnings` (alle vorbestehend). Die 4 `todo`-Tests sind die ausführbaren Reproduktionen von B-1 und B-2;
 sie werden zu regulären FAIL-Tests, sobald die Spec-Entscheidung (S-5/S-6) bzw. der B-1-Fix vorliegt (`todo` entfernen).
+
+## Nachtrag T8 (AK-27, AK-28) — 2026-09-12
+| AK | Testfall | Ausführung | Ergebnis | Nachweis |
+|---|---|---|---|---|
+| AK-27 | Session ohne bestätigte E-Mail, gültige Verifier-Assertion an `/hhttps/age/upgrade` | `test/integration/acceptance.test.mjs::AK-27: /hhttps/age/upgrade on a session WITHOUT confirmed email → 403 email_verification_required, no token` | PASS | vor Fix „observed 200“, nach Fix `ok 31` |
+| AK-28 | Gültige Assertion an `/hhttps/age/direct` | `acceptance.test.mjs::AK-28: /hhttps/age/direct with a VALID assertion → 403 …` und `…never issues an hhttps.token` | PASS | vor Fix „observed 200“, nach Fix `ok 30`, `ok 32` |
+Gesamt: 149 Tests, 148 pass, 0 fail, 1 todo (B-1, Issue #7).

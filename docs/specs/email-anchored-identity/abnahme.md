@@ -123,3 +123,10 @@ Meine Empfehlung: Option A — sie entspricht dem freigegebenen Scope-Text und d
 ### 4.4 Sonstiges für den Deploy-Plan (aus CHANGELOG/Review, kein Abnahmekriterium)
 - Breaking: `webauthn/register/start` verlangt jetzt `sessionId` (400 ohne), 403-Gates auf vier Endpunkten, `HHTTPS_VERIFICATION_PEPPER` in `production` Pflicht (Boot-Abbruch ohne), `EMAIL_DEV_MODE=1` nur außerhalb `production` wirksam.
 - 59 ESLint-Warnings in `server.js` sind vorbestehend (Legacy `no-unused-vars`), 0 in neuem Code.
+
+## Nachtrag Abnahme T8 (AK-27, AK-28) — 2026-09-12
+| Kriterium | Umgesetzt | Test | Status |
+|---|---|---|---|
+| AK-27 | `server/server.js` `/hhttps/age/upgrade`: `requireEmailVerified` nach Session-Lookup, vor Token-Ausstellung | `acceptance.test.mjs::AK-27` | PASS |
+| AK-28 | `server/server.js` `/hhttps/age/direct`: nach Assertion-Prüfung immer 403, kein Session-/Token-Bootstrap | `acceptance.test.mjs::AK-28` (2 Tests) | PASS |
+Lücke B-2 geschlossen. Urteil bleibt: **ABGENOMMEN** (28/28). Erstellt vom Feature-Lead auf Basis des Testprotokoll-Nachtrags.
