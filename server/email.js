@@ -28,6 +28,7 @@ import nodemailer from 'nodemailer';
 import { emailVerifications } from './db.js';
 import { ROLES } from './roles.js';
 import { roleLabel } from './roles.i18n.js';
+import { normalizeCode, isValidCode } from './identity.js';
 
 // ─── Config (from environment) ─────────────────────────────────────────────
 const SMTP_HOST = process.env.SMTP_HOST || null;
@@ -101,9 +102,9 @@ export function classifyDomain(email) {
 
 // ─── Bilingual helpers ──────────────────────────────────────────────────────
 // HTML: English block, a thin divider, then the German block.
-function biHtml(en, de) {
+function biHtml(en, de, lineColor = '#132035') {
   return `${en}
-    <div style="height:1px;background:#132035;margin:22px 0"></div>
+    <div style="height:1px;background:${lineColor};margin:22px 0"></div>
     <div lang="de">${de}</div>`;
 }
 // Plain text: English block, divider, German block.
@@ -148,10 +149,14 @@ function buildMailOptions(extra) {
 }
 
 // ─── Shared email shell (DRY for both purposes) ────────────────────────────
-function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote }) {
-  return `<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
+// Two themes (D7):
+//   'dark'  — legacy neon shell used by the platform (developer) mails.
+//   'light' — hhttps.org sign-in palette (tokens from public/index.html),
+//             used by the user-facing verification-code mail (AK-25).
+const SHELL_THEMES = {
+  dark: {
+    muted: '#4a6080', line: '#132035', strong: '#a0b8d8',
+    css: `
   body { margin:0; padding:0; background:#04080f; font-family:'Courier New',monospace; }
   .wrap { max-width:520px; margin:40px auto; background:#070d18;
     border:1px solid #132035; border-radius:12px; overflow:hidden; }
@@ -181,7 +186,49 @@ function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote })
     font-size:10px; color:#4a6080; word-break:break-all; }
   .footer { padding:16px 32px; border-top:1px solid #132035;
     font-size:10px; color:#4a6080; text-align:center; line-height:1.6; }
-  .footer a { color:#00e5ff; text-decoration:none; }
+  .footer a { color:#00e5ff; text-decoration:none; }`
+  },
+  light: {
+    muted: '#5C5C5C', line: '#E6E6E4', strong: '#0A0A0A',
+    css: `
+  body { margin:0; padding:0; background:#F9F9F8; color:#0A0A0A;
+    font-family:'Inter',system-ui,sans-serif; }
+  .wrap { max-width:520px; margin:40px auto; background:#FFFFFF;
+    border:1px solid #E6E6E4; border-radius:24px; overflow:hidden; }
+  .header { padding:28px 32px; background:#FFFFFF;
+    border-bottom:1px solid #E6E6E4; text-align:center; }
+  .header .logo { font-family:'Syne',system-ui,sans-serif; font-size:24px;
+    font-weight:800; color:#0A0A0A; letter-spacing:2px; }
+  .header .sub { font-size:11px; color:#5C5C5C; margin-top:4px; letter-spacing:2px; }
+  .body { padding:32px; }
+  .body p { color:#5C5C5C; font-size:14px; line-height:1.7; margin:0 0 16px; }
+  .body strong { color:#0A0A0A; }
+  .body code { background:#F9F9F8; padding:2px 6px; border-radius:6px;
+    font-family:'JetBrains Mono',ui-monospace,monospace; font-size:12px; color:#0A0A0A; }
+  .info-box { background:#F9F9F8; border:1px solid #E6E6E4;
+    border-radius:12px; padding:14px 18px; margin:20px 0; }
+  .info-box .ib-key { font-size:10px; color:#5C5C5C; letter-spacing:1.5px;
+    text-transform:uppercase; margin-bottom:4px; }
+  .info-box .ib-val { font-size:14px; color:#0A0A0A; font-weight:600; word-break:break-all; }
+  .btn-wrap { text-align:center; margin:28px 0; }
+  .btn { display:inline-block; padding:14px 32px; background:#0A0A0A;
+    color:#FFFFFF !important; text-decoration:none; border-radius:999px;
+    font-size:14px; font-weight:600; }
+  .url-fallback { background:#F9F9F8; border:1px solid #E6E6E4;
+    border-radius:12px; padding:10px 14px; margin:16px 0;
+    font-family:'JetBrains Mono',ui-monospace,monospace;
+    font-size:10px; color:#5C5C5C; word-break:break-all; }
+  .footer { padding:16px 32px; border-top:1px solid #E6E6E4;
+    font-size:10px; color:#5C5C5C; text-align:center; line-height:1.6; }
+  .footer a { color:#0A0A0A; text-decoration:none; }`
+  }
+};
+
+function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote, theme = 'dark' }) {
+  const t = SHELL_THEMES[theme] || SHELL_THEMES.dark;
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>${t.css}
 </style></head><body>
 <div class="wrap">
   <div class="header">
@@ -193,9 +240,9 @@ function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote })
     <div class="btn-wrap">
       <a href="${ctaUrl}" class="btn">${ctaLabel}</a>
     </div>
-    <p style="font-size:11px;color:#4a6080;">If the button does not work, copy this link into your browser:<br>Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
+    <p style="font-size:11px;color:${t.muted};">If the button does not work, copy this link into your browser:<br>Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
     <div class="url-fallback">${ctaUrl}</div>
-    ${footerNote ? `<p style="font-size:11px;color:#4a6080;margin-top:20px;">${footerNote}</p>` : ''}
+    ${footerNote ? `<p style="font-size:11px;color:${t.muted};margin-top:20px;">${footerNote}</p>` : ''}
   </div>
   <div class="footer">
     HHTTPS Project · <a href="https://github.com/dhannus/HHTTPS">github.com/dhannus/HHTTPS</a><br>
@@ -221,6 +268,70 @@ function generateCode6() {
   }
   const buf = crypto.randomBytes(4);
   return String(buf.readUInt32BE(0) % 1_000_000).padStart(6, '0');
+}
+
+/**
+ * Pure renderer for the verification-code mail (T2, AK-22/25/26).
+ * No I/O, no randomness — unit-testable. Returns { subject, html, text }.
+ *
+ * The visual centerpiece is the 6-digit code, shown RAW (no "123 456"
+ * grouping, AK-22) so that copy & paste always yields exactly what the
+ * server accepts. The legacy magic-link still ships below the code for users
+ * who open the email on a phone and want to confirm there.
+ */
+export function renderVerificationEmail({ code, verifyUrl, role, classification }) {
+  const t = SHELL_THEMES.light;
+  const label = roleDisplay(role);
+  const cls = classification || {};
+
+  const codeBox = `
+    <div style="margin:24px 0 18px;padding:24px 16px;text-align:center;background:#F9F9F8;border:1px solid #E6E6E4;border-radius:16px;">
+      <div style="font-family:'Inter',system-ui,sans-serif;font-size:11px;letter-spacing:2px;color:#5C5C5C;margin-bottom:10px;">VERIFICATION CODE · BESTÄTIGUNGS-CODE</div>
+      <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:36px;letter-spacing:4px;color:#0A0A0A;font-weight:500;">${code}</div>
+      <div style="font-family:'Inter',system-ui,sans-serif;font-size:12px;color:#5C5C5C;margin-top:10px;">Valid for 15 minutes · 15 Minuten gültig</div>
+    </div>
+  `;
+
+  const bodyHtml = biHtml(
+    `<p>You requested email verification for your HHTTPS identity.</p>
+    ${codeBox}
+    <p>Enter the 6-digit code <strong>in the browser tab where you started</strong>. The tab is still waiting — do <em>not</em> open a new tab.</p>
+    <div class="info-box">
+      <div class="ib-key">Role</div>
+      <div class="ib-val">${label}</div>
+    </div>
+    <div class="info-box">
+      <div class="ib-key">Domain · Level · Trust bonus</div>
+      <div class="ib-val">${cls.domain} · ${cls.level} · +${cls.trustBonus}</div>
+    </div>`,
+    `<p>Du hast eine E-Mail-Verifikation für deine HHTTPS-Identität angefordert.</p>
+    <p>Gib den 6-stelligen Code <strong>in dem Browser-Tab ein, in dem du gestartet hast</strong>. Der Tab wartet auf dich — <em>nicht</em> in einem neuen Tab öffnen.</p>`,
+    t.line
+  );
+
+  // AK-26: truthful privacy note — the address is held only until it has been
+  // handed over to the platform the user signs in to (identity claims cache).
+  const footerNote =
+    `<strong style="color:${t.strong}">Privacy:</strong> your email address is held temporarily, only until it has been passed on to the platform you sign in to. The code expires automatically after 15 minutes. — ` +
+    `<strong style="color:${t.strong}">Datenschutz:</strong> Deine E-Mail-Adresse wird nur bis zur Übertragung an die Plattform, bei der du dich anmeldest, zwischengespeichert. Der Code verfällt automatisch nach 15 Minuten.`;
+
+  const html = emailShell({
+    theme:     'light',
+    title:     'Verification code',
+    subtitle:  'HUMAN-VERIFIED HTTPS · EMAIL VERIFICATION',
+    bodyHtml,
+    ctaUrl:    verifyUrl,
+    ctaLabel:  'Mobile? Confirm via link / per Link bestätigen',
+    footerNote
+  });
+
+  const text = biText(
+    `HHTTPS — Email verification\n\nRole: ${label}\nDomain: ${cls.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (15 min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held only until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
+    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${label}\nDomain: ${cls.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur bis zur Übertragung an die Plattform, bei der du dich anmeldest, zwischengespeichert.\n\n— HHTTPS Project · hhttps.org`
+  );
+
+  const subject = `[HHTTPS] Verify email for role "${roleLabel(role, 'en')}" / E-Mail-Verifikation`;
+  return { subject, html, text };
 }
 
 export async function sendVerificationEmail({ email, role, sessionId, baseUrl }) {
@@ -253,52 +364,7 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
   });
 
   const verifyUrl = `${base}/hhttps/email/verify?token=${rawToken}&session=${sessionId}`;
-  const label = roleDisplay(role);
-
-  // The visual centerpiece is the 6-digit code in monospace, copy-friendly.
-  // No link button in the primary CTA — that was the source of the new-tab
-  // confusion. The legacy magic-link still ships at the bottom for users who
-  // open the email on a phone and want to confirm there.
-  const codePretty = code6.replace(/(\d{3})(\d{3})/, '$1 $2');
-  const codeBox = `
-    <div style="margin:24px 0 18px;padding:22px 16px;text-align:center;background:#0f1a2d;border:1px solid #1f2f4a;border-radius:10px;">
-      <div style="font-family:Arial,sans-serif;font-size:11px;letter-spacing:2px;color:#7a8aa0;margin-bottom:10px;">VERIFICATION CODE · BESTÄTIGUNGS-CODE</div>
-      <div style="font-family:'JetBrains Mono','Courier New',monospace;font-size:34px;letter-spacing:8px;color:#00e5ff;font-weight:700;">${codePretty}</div>
-      <div style="font-family:Arial,sans-serif;font-size:12px;color:#7a8aa0;margin-top:10px;">Valid for 15 minutes · 15 Minuten gültig</div>
-    </div>
-  `;
-
-  const bodyHtml = biHtml(
-    `<p>You requested email verification for your HHTTPS identity.</p>
-    ${codeBox}
-    <p>Enter the 6-digit code <strong>in the browser tab where you started</strong>. The tab is still waiting — do <em>not</em> open a new tab.</p>
-    <div class="info-box">
-      <div class="ib-key">Role</div>
-      <div class="ib-val">${label}</div>
-    </div>
-    <div class="info-box">
-      <div class="ib-key">Domain · Level · Trust bonus</div>
-      <div class="ib-val">${classification.domain} · ${classification.level} · +${classification.trustBonus}</div>
-    </div>`,
-    `<p>Du hast eine E-Mail-Verifikation für deine HHTTPS-Identität angefordert.</p>
-    <p>Gib den 6-stelligen Code <strong>in dem Browser-Tab ein, in dem du gestartet hast</strong>. Der Tab wartet auf dich — <em>nicht</em> in einem neuen Tab öffnen.</p>`
-  );
-
-  const html = emailShell({
-    title:     'Verification code',
-    subtitle:  'HUMAN-VERIFIED HTTPS · EMAIL VERIFICATION',
-    bodyHtml,
-    // We keep a discreet magic-link in the footer for users on mobile who'd
-    // rather tap than type. Most users will never see it.
-    ctaUrl:    verifyUrl,
-    ctaLabel:  'Mobile? Confirm via link / per Link bestätigen',
-    footerNote: '<strong style="color:#a0b8d8">Privacy:</strong> your email address is not stored — only a hash of the domain is used for role verification. The code expires automatically after 15 minutes. — <strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nicht gespeichert. Nur ein Hash der Domain wird für die Rollenverifikation genutzt. Der Code verfällt automatisch nach 15 Minuten.'
-  });
-
-  const text = biText(
-    `HHTTPS — Email verification\n\nRole: ${label}\nDomain: ${classification.domain}\nTrust bonus: +${classification.trustBonus}\n\nYour verification code (15 min):\n\n    ${codePretty}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\n— HHTTPS Project · hhttps.org`,
-    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${label}\nDomain: ${classification.domain}\nTrust-Bonus: +${classification.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${codePretty}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\n— HHTTPS Project · hhttps.org`
-  );
+  const { subject, html, text } = renderVerificationEmail({ code: code6, verifyUrl, role, classification });
 
   const transporter = createTransport();
   if (!transporter) {
@@ -306,12 +372,7 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
     return { sent: false, devMode: true, verifyUrl, code: code6, classification, rawToken };
   }
 
-  await transporter.sendMail(buildMailOptions({
-    to:      email,
-    subject: `[HHTTPS] Verify email for role "${roleLabel(role,'en')}" / E-Mail-Verifikation`,
-    text,
-    html
-  }));
+  await transporter.sendMail(buildMailOptions({ to: email, subject, text, html }));
 
   return { sent: true, devMode: false, classification };
 }
@@ -665,10 +726,13 @@ export async function verifyEmailToken(rawToken) {
 // Same shape as verifyEmailToken — but resolves by sha256(code) and binds
 // the call to the SAME session that requested the code (defence in depth).
 export async function verifyEmailCode(code, sessionId) {
-  if (!/^\d{6}$/.test(String(code || '').trim())) {
+  // AK-23/24: tolerate spaces, tabs and dashes ("482 913", " 482913 "), then
+  // require exactly 6 digits. The hash is computed over the normalized code.
+  const normalized = normalizeCode(code);
+  if (!isValidCode(normalized)) {
     return { valid: false, error: 'Code must be 6 digits.' };
   }
-  const codeHash = crypto.createHash('sha256').update(String(code).trim()).digest('hex');
+  const codeHash = crypto.createHash('sha256').update(normalized).digest('hex');
   const entry = await emailVerifications.getAndConsumeByCode(codeHash, sessionId);
 
   if (!entry) return {
