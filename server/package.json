@@ -7,7 +7,9 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "migrate": "node scripts/migrate.js",
-    "db:check": "node scripts/db-check.js"
+    "db:check": "node scripts/db-check.js",
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@cloudflare/voprf-ts": "^1.0.0",
@@ -21,5 +23,10 @@
     "nodemailer": "^6.9.9",
     "pg": "^8.11.5",
     "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0"
   }
 }

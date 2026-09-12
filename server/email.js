@@ -23,6 +23,7 @@
  */
 
 import crypto     from 'crypto';
+import fs         from 'fs';
 import nodemailer from 'nodemailer';
 import { emailVerifications } from './db.js';
 import { ROLES } from './roles.js';
@@ -128,7 +129,10 @@ function createTransport() {
       tls:    { rejectUnauthorized: true }
     });
   }
-  if (process.platform !== 'win32') {
+  // sendmail only when a system MTA binary actually exists — otherwise the
+  // transport is created fine but sendMail() fails with ENOENT. Without a
+  // binary we fall back to dev mode (code surfaced in the API response).
+  if (fs.existsSync('/usr/sbin/sendmail') || fs.existsSync('/usr/bin/sendmail')) {
     try { return nodemailer.createTransport({ sendmail: true }); } catch(e) {}
   }
   return null;
