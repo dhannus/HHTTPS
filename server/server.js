@@ -47,6 +47,8 @@ import {
 import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
+// T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
+import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym } from './identity.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -2540,6 +2542,8 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
       trustScore:   0,      // email pending — 0 until the email is confirmed (then 20)
     }, 900_000); // 15 min — ausreichend für E-Mail-Zustellung und Bestätigung
 
+    if (cleanPseudo) await db.sessions.update(sid, { pseudonym: cleanPseudo }); // T4/D3: session carries the wish
+
     await db.stats.increment('verifications');
 
     res.json({
@@ -2582,6 +2586,8 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
       trustScore:   0,
     }, 900_000); // 15 min
 
+    if (cleanPseudo) await db.sessions.update(sid, { pseudonym: cleanPseudo }); // T4/D3: session carries the wish
+
     await db.stats.increment('verifications');
 
     res.json({
@@ -2600,10 +2606,69 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
 
 // ─── Email Verification ───────────────────────────────────────────────────────
 
+// ─── T4: bind a session to the email identity anchor (D1/D2/D3/D5) ──────────
+// Runs after a successful code / magic-link check. The plaintext email and the
+// pseudonym wish are NOT in email_verifications (sha256 only) — /email/send
+// parks them in a short-lived `email:<sessionId>` challenge row (AK-16 needs
+// the plaintext for the claims cache).
+const EMAIL_CONTEXT_TTL_MS = 900_000; // = verification-mail validity (15 min)
+const emailContextId = (sessionId) => `email:${sessionId}`;
+
+async function readEmailContext(sessionId) {
+  const row = await db.challenges.get(emailContextId(sessionId));
+  if (!row) return null;
+  try { return JSON.parse(row.challenge); } catch { return null; }
+}
+
+/**
+ * @returns {{ userId, pseudonym, created, methods, trust }}
+ * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
+ * An existing anchor always wins (AK-8): its stored userId/pseudonym are returned
+ * by resolveOrCreate and the session is rebound to them (AK-2).
+ */
+async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymInput, verification }) {
+  const emailHash = emailAnchorHash(email);
+  const wish      = sanitizePseudonym(pseudonymInput) ?? session.pseudonym ?? null;
+  const anchor    = await db.identityAnchors.resolveOrCreate({
+    emailHash, userId: session.userId, pseudonym: resolvePseudonym(wish)
+  });
+
+  await db.sessions.update(sessionId, {
+    userId:          anchor.userId,
+    pseudonym:       anchor.pseudonym,
+    emailVerified:   true,
+    emailLevel:      verification.level,
+    emailDomain:     verification.domain,
+    emailTrustBonus: verification.trustBonus,
+    emailCategory:   verification.category,
+  });
+
+  const v = computeVerification({
+    email:       true,
+    passkey:     !!(session.hasPasskey || session.credentialId),
+    domain:      !!verification.domain,
+    domainTrust: verification.trustBonus || 0,
+    domainValue: verification.domain || null,
+    github:      !!session.githubVerified,
+    eudi:        !!session.eudiVerified
+  });
+
+  await db.identityClaimsCache.upsert({
+    userId:          anchor.userId,
+    email:           normalizeEmail(email),
+    pseudonym:       anchor.pseudonym,
+    verifiedMethods: v.methods,
+  });
+
+  return { userId: anchor.userId, pseudonym: anchor.pseudonym, created: anchor.created, methods: v.methods, trust: v.trust };
+}
+
 app.post('/hhttps/email/send', limit.email, async (req, res) => {
-  const { sessionId, email, role } = req.body;
+  const { sessionId, email: rawEmail, role, pseudonym } = req.body;
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+  // AK-2: case/whitespace variants of the same address are the same anchor.
+  const email = normalizeEmail(rawEmail);
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return res.status(400).json({ error: 'Invalid email address.' });
 
@@ -2617,6 +2682,12 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
     // v0.5: the sign-in page no longer declares a role here — fall back to the
     // base identity so the mail does not read: role "undefined".
     const result = await sendVerificationEmail({ email, role: role || 'citizen', sessionId, baseUrl: BASE_URL });
+    // T4: park plaintext email + pseudonym wish until the code/link is confirmed.
+    await db.challenges.create(
+      emailContextId(sessionId),
+      JSON.stringify({ email, pseudonym: sanitizePseudonym(pseudonym) }),
+      session.userId, 'email-pending', EMAIL_CONTEXT_TTL_MS
+    );
     const resp   = {
       sent: result.sent || result.devMode, devMode: result.devMode || false,
       domain: classification.domain, expectedLevel: classification.level,
@@ -2643,17 +2714,24 @@ app.get('/hhttps/email/verify', async (req, res) => {
   const session = await db.sessions.get(sessionId);
   if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
 
-  await db.sessions.update(sessionId, {
-    emailVerified:   true,
-    emailLevel:      result.level,
-    emailDomain:     result.domain,
-    emailTrustBonus: result.trustBonus,
-    emailCategory:   result.category
-  });
+  const ctx = await readEmailContext(sessionId);
+  if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
+
+  let bound;
+  try {
+    bound = await bindSessionToEmailAnchor({
+      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+    });
+    await db.challenges.delete(emailContextId(sessionId));
+  } catch (e) {
+    console.error('[email/verify] anchor bind failed:', e.message);
+    return res.redirect('/?email_verify=error&reason=anchor_failed');
+  }
 
   res.redirect(
     `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
-    `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}`
+    `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}` +
+    `&pseudonym=${encodeURIComponent(bound.pseudonym)}`
   );
 });
 
@@ -2677,35 +2755,37 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   const session = await db.sessions.get(sessionId);
   if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
 
-  await db.sessions.update(sessionId, {
-    emailVerified:   true,
-    emailLevel:      result.level,
-    emailDomain:     result.domain,
-    emailTrustBonus: result.trustBonus,
-    emailCategory:   result.category,
-  });
+  // T4: the plaintext email was parked by /email/send in the same session.
+  const ctx = await readEmailContext(sessionId);
+  if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
 
-  // Report the verification surface the user has RIGHT NOW (before adding more
+  // Bind the session to the stable identity anchor (AK-1/AK-2), store the
+  // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
+  // surface reported here is what the user has RIGHT NOW (before adding more
   // methods), so the UI can immediately show the confirmed method badges. Trust
   // is internal/API-only; the UI renders `methods`, never the number.
-  const v = computeVerification({
-    email:       true,
-    passkey:     !!(session.hasPasskey || session.credentialId),
-    domain:      !!result.domain,
-    domainTrust: result.trustBonus || 0,
-    domainValue: result.domain || null,
-    github:      !!session.githubVerified,
-    eudi:        !!session.eudiVerified
-  });
+  let bound;
+  try {
+    bound = await bindSessionToEmailAnchor({
+      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+    });
+    await db.challenges.delete(emailContextId(sessionId));
+  } catch (e) {
+    console.error('[email/confirm-code] anchor bind failed:', e.message);
+    return res.status(500).json({ error: 'anchor_bind_failed' });
+  }
 
   res.json({
-    verified:     true,
-    level:        result.level,
-    domain:       result.domain,
-    trustBonus:   result.trustBonus,
-    category:     result.category,
-    methods:      v.methods,        // confirmed verification methods (UI shows these)
-    accountTrust: v.trust,          // API only — the UI must not render this number
+    verified:      true,
+    level:         result.level,
+    domain:        result.domain,
+    trustBonus:    result.trustBonus,
+    category:      result.category,
+    methods:       bound.methods,   // confirmed verification methods (UI shows these)
+    accountTrust:  bound.trust,     // API only — the UI must not render this number
+    userId:        bound.userId,    // stable identity (AK-1/AK-2)
+    pseudonym:     bound.pseudonym, // account pseudonym (AK-6..AK-8)
+    anchorCreated: bound.created,
   });
 });
 
