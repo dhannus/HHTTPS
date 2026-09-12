@@ -1,0 +1,156 @@
+// T3 / AK-1, AK-16, AK-17: phase-8 migration and identity DB layer.
+// Talks to db.js directly (no server process) against the local test Postgres.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { sql, closeDb } from '../helpers/db.mjs';
+
+const skip = !process.env.TEST_PG_HOST && 'TEST_PG_HOST not set';
+
+// db.js reads DB_* at import time — set them before the dynamic import.
+if (process.env.TEST_PG_HOST) {
+  process.env.DB_HOST = process.env.TEST_PG_HOST;
+  process.env.DB_USER = 'hhttps';
+  process.env.DB_NAME = 'hhttps';
+  process.env.DB_PASSWORD = 'x';
+}
+const db = skip ? null : await import('../../db.js');
+
+const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const MIGRATION = path.join(SERVER_DIR, 'sql', 'migration-phase-8-email-anchored-identity.sql');
+
+const rnd = () => crypto.randomBytes(6).toString('hex');
+const hash = () => crypto.createHash('sha256').update('t3-' + rnd()).digest('hex');
+
+test.before(async () => {
+  if (skip) return;
+  await db.ensurePhase8Schema();
+});
+
+test.after(async () => {
+  if (skip) return;
+  await db.close();
+  await closeDb();
+});
+
+test('resolveOrCreate: same hash keeps the FIRST userId and pseudonym (AK-1)', { skip }, async (t) => {
+  const emailHash = hash();
+  const u1 = 'u-' + rnd(); const u2 = 'u-' + rnd();
+  t.after(() => sql('DELETE FROM identity_anchors WHERE email_hash = $1', [emailHash]));
+
+  const first = await db.identityAnchors.resolveOrCreate({ emailHash, userId: u1, pseudonym: 'anna' });
+  assert.deepEqual(first, { userId: u1, pseudonym: 'anna', created: true });
+
+  const second = await db.identityAnchors.resolveOrCreate({ emailHash, userId: u2, pseudonym: 'other' });
+  assert.deepEqual(second, { userId: u1, pseudonym: 'anna', created: false });
+
+  const byUser = await db.identityAnchors.getByUserId(u1);
+  assert.equal(byUser.emailHash, emailHash);
+  assert.equal(byUser.pseudonym, 'anna');
+  assert.equal(await db.identityAnchors.getByUserId(u2), null);
+});
+
+test('identityClaimsCache: upsert/get roundtrip, expiry, cleanupExpired (AK-16)', { skip }, async (t) => {
+  const userId = 'u-' + rnd();
+  t.after(() => sql('DELETE FROM identity_claims_cache WHERE user_id = $1', [userId]));
+
+  await db.identityClaimsCache.upsert({ userId, email: 'Anna@Example.org', pseudonym: 'anna', verifiedMethods: ['email'] });
+  assert.deepEqual(await db.identityClaimsCache.get(userId),
+    { userId, email: 'Anna@Example.org', pseudonym: 'anna', verifiedMethods: ['email'] });
+
+  // Upsert overwrites (same PK) …
+  await db.identityClaimsCache.upsert({ userId, email: 'anna@example.org', pseudonym: 'anna', verifiedMethods: ['email', 'passkey'] });
+  assert.deepEqual((await db.identityClaimsCache.get(userId)).verifiedMethods, ['email', 'passkey']);
+
+  // … and an expired row is invisible to get() and removed by cleanupExpired().
+  await db.identityClaimsCache.upsert({ userId, email: 'anna@example.org', pseudonym: 'anna', verifiedMethods: ['email'], ttlMs: -1000 });
+  assert.equal(await db.identityClaimsCache.get(userId), null);
+  await db.cleanupExpired();
+  const rows = await sql('SELECT 1 FROM identity_claims_cache WHERE user_id = $1', [userId]);
+  assert.equal(rows.length, 0);
+});
+
+test('sessions.update accepts userId and pseudonym; get returns them (AK-1)', { skip }, async (t) => {
+  const sessionId = 's-' + rnd();
+  t.after(() => sql('DELETE FROM sessions WHERE session_id = $1', [sessionId]));
+
+  await db.sessions.create(sessionId, { userId: 'u-old-' + rnd(), verified: false, trustScore: 0 });
+  await db.sessions.update(sessionId, { userId: 'u-stable', pseudonym: 'iamhmn_abc123def4' });
+  const s = await db.sessions.get(sessionId);
+  assert.equal(s.userId, 'u-stable');
+  assert.equal(s.pseudonym, 'iamhmn_abc123def4');
+});
+
+test('authCodes: create with email/pseudonym/verifiedMethods, claim returns them and nulls email (AK-17)', { skip }, async (t) => {
+  const clientId = 'test-t3-' + rnd();
+  const code = 'c-' + rnd();
+  t.after(async () => {
+    await sql('DELETE FROM authorization_codes WHERE code = $1', [code]);
+    await sql('DELETE FROM oauth_clients WHERE client_id = $1', [clientId]);
+  });
+  await sql(
+    `INSERT INTO oauth_clients (client_id, name, redirect_uris, allowed_scopes)
+     VALUES ($1, 'T3 test client', '["https://example.org/cb"]', '["openid","email"]')`, [clientId]);
+
+  await db.authCodes.create({
+    code, clientId, userId: 'u-' + rnd(), redirectUri: 'https://example.org/cb',
+    scopes: ['openid', 'email'], role: 'citizen', trustScore: 60,
+    email: 'anna@example.org', pseudonym: 'anna', verifiedMethods: ['email', 'passkey'],
+  });
+
+  const claimed = await db.authCodes.claim(code);
+  assert.ok(claimed, 'claim returned a row');
+  assert.equal(claimed.email, 'anna@example.org');
+  assert.equal(claimed.pseudonym, 'anna');
+  assert.deepEqual(claimed.verified_methods, ['email', 'passkey']);
+  assert.deepEqual(claimed.scopes, ['openid', 'email']);
+  assert.equal(claimed.used, true);
+
+  const [row] = await sql('SELECT email, used FROM authorization_codes WHERE code = $1', [code]);
+  assert.equal(row.email, null);
+  assert.equal(row.used, true);
+
+  // Second claim: single-use.
+  assert.equal(await db.authCodes.claim(code), null);
+});
+
+test('authCodes.claim without the new fields yields defaults', { skip }, async (t) => {
+  const clientId = 'test-t3-' + rnd();
+  const code = 'c-' + rnd();
+  t.after(async () => {
+    await sql('DELETE FROM authorization_codes WHERE code = $1', [code]);
+    await sql('DELETE FROM oauth_clients WHERE client_id = $1', [clientId]);
+  });
+  await sql(`INSERT INTO oauth_clients (client_id, name, redirect_uris) VALUES ($1, 'T3', '[]')`, [clientId]);
+  await db.authCodes.create({ code, clientId, userId: 'u', redirectUri: 'x', scopes: ['openid'], role: 'citizen', trustScore: 60 });
+  const claimed = await db.authCodes.claim(code);
+  assert.equal(claimed.email, null);
+  assert.equal(claimed.pseudonym, null);
+  assert.deepEqual(claimed.verified_methods, []);
+});
+
+test('migration SQL is idempotent and appends "email" to allowed_scopes', { skip }, async (t) => {
+  const clientId = 'test-t3-' + rnd();
+  t.after(() => sql('DELETE FROM oauth_clients WHERE client_id = $1', [clientId]));
+  await sql(
+    `INSERT INTO oauth_clients (client_id, name, redirect_uris, allowed_scopes)
+     VALUES ($1, 'T3 legacy client', '[]', '["openid","role"]')`, [clientId]);
+
+  const migration = fs.readFileSync(MIGRATION, 'utf8');
+  await sql(migration);
+  await sql(migration); // safe to re-run
+
+  const [row] = await sql('SELECT allowed_scopes FROM oauth_clients WHERE client_id = $1', [clientId]);
+  assert.deepEqual(JSON.parse(row.allowed_scopes), ['openid', 'role', 'email']);
+
+  // Columns/tables exist after the migration.
+  const cols = await sql(
+    `SELECT table_name, column_name FROM information_schema.columns
+     WHERE (table_name = 'sessions' AND column_name = 'pseudonym')
+        OR (table_name = 'authorization_codes' AND column_name IN ('email','pseudonym','verified_methods'))
+        OR (table_name IN ('identity_anchors','identity_claims_cache') AND column_name = 'user_id')`);
+  assert.equal(cols.length, 6, JSON.stringify(cols));
+});

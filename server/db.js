@@ -14,8 +14,13 @@
  * The pool is shared across all queries. Reconnects automatically.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 const { Pool } = pg;
+
+const SQL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'sql');
 
 let _pool = null;
 
@@ -173,7 +178,10 @@ export const sessions = {
       githubTrustBonus:  'github_trust_bonus',
       role:            'role',
       roleLevel:       'role_level',
-      trustScore:      'trust_score'
+      trustScore:      'trust_score',
+      // Phase 8: rebinding the session to the stable identity anchor (D2)
+      userId:          'user_id',
+      pseudonym:       'pseudonym'
     };
     const sets = []; const vals = []; let i = 1;
     for (const [k, v] of Object.entries(patch)) {
@@ -217,6 +225,7 @@ export const sessions = {
       role:            r.role,
       roleLevel:       r.role_level,
       trustScore:      r.trust_score,
+      pseudonym:       r.pseudonym ?? null,
       expires:         new Date(r.expires_at).getTime()
     };
   }
@@ -359,6 +368,113 @@ async function ensureCodeColumn() {
 }
 // Fire-and-forget on module load — pg client is already initialised.
 ensureCodeColumn().catch(() => {});
+
+// ─── PHASE 8: EMAIL-ANCHORED IDENTITY ─────────────────────────────────────────
+//
+// Schema: sql/migration-phase-8-email-anchored-identity.sql is the single
+// reference (for operators AND for the boot-time migration). Instead of
+// duplicating the statements here, the file is read and executed as ONE
+// multi-statement query. pg sends a query without parameters over the simple
+// protocol, which allows several statements (including the DO $$ block) in one
+// round trip. Every statement in the file is idempotent, so re-running on each
+// boot is safe. Memoised: returns the same promise on repeated calls.
+let _phase8Ready = null;
+export function ensurePhase8Schema() {
+  if (_phase8Ready) return _phase8Ready;
+  _phase8Ready = (async () => {
+    try {
+      const file = path.join(SQL_DIR, 'migration-phase-8-email-anchored-identity.sql');
+      await q(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      console.error('[db] ensurePhase8Schema:', e.message);
+      _phase8Ready = null; // allow a retry on the next explicit call
+      throw e;
+    }
+  })();
+  return _phase8Ready;
+}
+ensurePhase8Schema().catch(() => {});
+
+// identity_anchors: HMAC(email) → stable user_id + pseudonym (D1/D2/D3)
+export const identityAnchors = {
+  /**
+   * Atomic resolve-or-create. On a fresh hash the given userId/pseudonym are
+   * stored and `created` is true. If the anchor already exists, ONLY
+   * last_seen_at is touched and the STORED userId/pseudonym are returned
+   * (`created: false`) — the caller must rebind the session to them (AK-2/8).
+   */
+  async resolveOrCreate({ emailHash, userId, pseudonym }) {
+    const { rows } = await q(
+      `INSERT INTO identity_anchors (email_hash, user_id, pseudonym)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (email_hash) DO UPDATE SET last_seen_at = NOW()
+       RETURNING user_id, pseudonym, (xmax = 0) AS created`,
+      [emailHash, userId, pseudonym]
+    );
+    const r = rows[0];
+    return { userId: r.user_id, pseudonym: r.pseudonym, created: r.created === true };
+  },
+
+  async getByUserId(userId) {
+    const { rows } = await q(`SELECT * FROM identity_anchors WHERE user_id = $1`, [userId]);
+    return rows[0] ? this._normalize(rows[0]) : null;
+  },
+
+  _normalize(r) {
+    return {
+      emailHash:  r.email_hash,
+      userId:     r.user_id,
+      pseudonym:  r.pseudonym,
+      createdAt:  r.created_at,
+      lastSeenAt: r.last_seen_at
+    };
+  }
+};
+
+// identity_claims_cache: plaintext email + pseudonym + verified_methods per
+// user_id, kept until transferred to the platform, expiring after ≤ 7 days (D5)
+export const identityClaimsCache = {
+  async upsert({ userId, email, pseudonym, verifiedMethods, ttlMs = 7 * 24 * 3600 * 1000 }) {
+    await q(
+      `INSERT INTO identity_claims_cache (user_id, email, pseudonym, verified_methods, updated_at, expires_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' milliseconds')::interval)
+       ON CONFLICT (user_id) DO UPDATE SET
+         email            = EXCLUDED.email,
+         pseudonym        = EXCLUDED.pseudonym,
+         verified_methods = EXCLUDED.verified_methods,
+         updated_at       = NOW(),
+         expires_at       = EXCLUDED.expires_at`,
+      [userId, email, pseudonym || null, JSON.stringify(verifiedMethods || []), ttlMs]
+    );
+  },
+
+  /** @returns {{userId, email, pseudonym, verifiedMethods: string[]}|null} null if missing or expired */
+  async get(userId) {
+    const { rows } = await q(
+      `SELECT user_id, email, pseudonym, verified_methods
+       FROM identity_claims_cache WHERE user_id = $1 AND expires_at > NOW()`,
+      [userId]
+    );
+    if (!rows[0]) return null;
+    const r = rows[0];
+    return {
+      userId:          r.user_id,
+      email:           r.email,
+      pseudonym:       r.pseudonym,
+      verifiedMethods: parseJsonArray(r.verified_methods)
+    };
+  }
+};
+
+function parseJsonArray(text) {
+  if (!text) return [];
+  try {
+    const v = JSON.parse(text);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
 
 // ─── ROLES DECLARED ───────────────────────────────────────────────────────────
 
@@ -983,39 +1099,69 @@ export const authCodes = {
   async create({ code, clientId, userId, redirectUri, scopes,
                  pkceChallenge, pkceMethod, state, nonce,
                  role, trustScore, verificationMethod,
-                 ageGroup, ageVerified, ageVerificationMethod, ttlSec = 60 }) {
+                 ageGroup, ageVerified, ageVerificationMethod,
+                 email, pseudonym, verifiedMethods, ttlSec = 60 }) {
     await q(
       `INSERT INTO authorization_codes
        (code, client_id, user_id, redirect_uri, scopes,
         pkce_challenge, pkce_method, state, nonce,
         role, trust_score, verification_method,
         age_group, age_verified, age_verification_method,
+        email, pseudonym, verified_methods,
         expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                $13, $14, $15,
-               NOW() + ($16 || ' seconds')::interval)`,
+               $16, $17, $18,
+               NOW() + ($19 || ' seconds')::interval)`,
       [code, clientId, userId, redirectUri,
        JSON.stringify(scopes || []),
        pkceChallenge || null, pkceMethod || null,
        state || null, nonce || null,
        role, trustScore, verificationMethod || null,
-       ageGroup || null, ageVerified ?? null, ageVerificationMethod || null, ttlSec]
+       ageGroup || null, ageVerified ?? null, ageVerificationMethod || null,
+       email || null, pseudonym || null,
+       verifiedMethods == null ? null : JSON.stringify(verifiedMethods),
+       ttlSec]
     );
   },
 
+  /**
+   * Atomic single-use claim. Returns the row (with `scopes` and
+   * `verified_methods` parsed as arrays) only if the code was unused and not
+   * expired, otherwise null. The e-mail copy on the code row is deleted in the
+   * same transaction (transferred ⇒ deleted, AK-17) but the value from BEFORE
+   * the wipe is returned to the caller. Two statements in one transaction —
+   * a data-modifying CTE may not update the same row twice in one statement.
+   */
   async claim(code) {
-    // Atomic claim: mark used AND return only if not yet used and not expired
-    const { rows } = await q(
-      `UPDATE authorization_codes
-       SET used = TRUE, used_at = NOW()
-       WHERE code = $1 AND used = FALSE AND expires_at > NOW()
-       RETURNING *`,
-      [code]
-    );
-    if (!rows[0]) return null;
-    const r = rows[0];
-    try { r.scopes = JSON.parse(r.scopes); } catch (e) { r.scopes = []; }
-    return r;
+    const client = await pool().connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `UPDATE authorization_codes
+         SET used = TRUE, used_at = NOW()
+         WHERE code = $1 AND used = FALSE AND expires_at > NOW()
+         RETURNING *`,
+        [code]
+      );
+      if (rows[0]) {
+        await client.query(`UPDATE authorization_codes SET email = NULL WHERE code = $1`, [code]);
+      }
+      await client.query('COMMIT');
+      if (!rows[0]) return null;
+      const r = rows[0];
+      r.scopes = parseJsonArray(r.scopes);
+      r.verified_methods = parseJsonArray(r.verified_methods);
+      r.email = r.email ?? null;
+      r.pseudonym = r.pseudonym ?? null;
+      return r;
+    } catch (err) {
+      try { await client.query('ROLLBACK'); } catch {}
+      console.error(`[DB] authCodes.claim failed: ${err.message}`);
+      throw err;
+    } finally {
+      client.release();
+    }
   },
 
   async cleanup() {
@@ -1095,7 +1241,12 @@ export const stats = {
 
 export async function cleanupExpired() {
   const { rows } = await q(`SELECT * FROM cleanup_expired()`);
-  return rows[0] || {};
+  const out = rows[0] || {};
+  // Phase 8: expired plaintext claims (D5) — not part of the SQL function so
+  // the function body in schema.sql stays untouched.
+  const { rowCount } = await q(`DELETE FROM identity_claims_cache WHERE expires_at < NOW()`);
+  out.deleted_claims_cache = rowCount;
+  return out;
 }
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────
