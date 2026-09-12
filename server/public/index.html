@@ -216,6 +216,7 @@ a{color:inherit}
     </button>
     <div class="panel hidden" id="panel-email">
       <input class="field" id="emailInput" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" aria-label="E-Mail">
+      <input class="field" id="pseudoInput" type="text" maxlength="32" autocomplete="nickname" data-i18n-ph="email.pseudo.ph" aria-label="Pseudonym" style="margin-top:10px">
       <div class="row"><button class="go" id="emailSend" onclick="emailStart()" style="flex:1" data-i18n="email.send"></button></div>
       <div class="hidden" id="emailCodeRow">
         <input class="field" id="emailCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="Code" style="margin-top:10px">
@@ -224,7 +225,7 @@ a{color:inherit}
       <div class="hint" id="emailHint"></div>
     </div>
 
-    <button class="m-btn" id="m-passkey" onclick="pick('passkey')">
+    <button class="m-btn" id="m-passkey" onclick="pick('passkey')" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="8" cy="10" r="4"/><path d="M8 14v6m0-3h3m8-7-4 4m0 0 2 2m-2-2 2-2"/></svg></span>
       <span class="lbl"><span data-i18n="m.passkey"></span><span class="sub" data-i18n="m.passkey.sub"></span></span>
       <span class="state" id="st-passkey"></span>
@@ -235,7 +236,7 @@ a{color:inherit}
       <div class="hint" id="passkeyHint"></div>
     </div>
 
-    <button class="m-btn" id="m-eudi" onclick="pick('eudi')">
+    <button class="m-btn" id="m-eudi" onclick="pick('eudi')" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 14.5h2"/></svg></span>
       <span class="lbl"><span data-i18n="m.eudi"></span><span class="sub" data-i18n="m.eudi.sub"></span></span>
       <span class="state" id="st-eudi"></span>
@@ -255,7 +256,7 @@ a{color:inherit}
       <div class="hint" id="eudiHint"></div>
     </div>
 
-    <button class="m-btn" id="m-age" onclick="pick('age')">
+    <button class="m-btn" id="m-age" onclick="pick('age')" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 4.5 5 .7-3.6 3.5.85 4.95L12 14.8l-4.45 2.35.85-4.95L4.8 8.2l5-.7L12 3Z"/><path d="M6.5 20.5h11"/></svg></span>
       <span class="lbl"><span data-i18n="m.age"></span><span class="sub" data-i18n="m.age.sub"></span></span>
       <span class="state" id="st-age"></span>
@@ -277,7 +278,7 @@ a{color:inherit}
       <div class="hint" id="ageHint"></div>
     </div>
 
-    <button class="m-btn" id="m-github" onclick="pick('github')">
+    <button class="m-btn" id="m-github" onclick="pick('github')" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24" stroke-width="0"><path fill="#0A0A0A" d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.3 9.3 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg></span>
       <span class="lbl"><span data-i18n="m.github"></span><span class="sub" data-i18n="m.github.sub"></span></span>
       <span class="state" id="st-github"></span>
@@ -303,6 +304,7 @@ a{color:inherit}
       <div class="hint" id="machineHint"></div>
       <div class="hint" id="machineKey" style="display:none;font-family:var(--font-mono);word-break:break-all"></div>
     </div>
+    <div class="hint" id="emailFirstHint" data-i18n="email.first"></div>
   </div>
 
   <div class="issue-wrap">
@@ -378,7 +380,9 @@ a{color:inherit}
 <script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
 <script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
 <script>
-/* iamhmn sign-in — World-ID-inspired. FOUR EQUAL entry methods.
+/* iamhmn sign-in — World-ID-inspired. EMAIL FIRST, then the other methods:
+   the confirmed e-mail is the identity anchor (AK-14); passkey, EUDI, GitHub
+   and age stay disabled until it is confirmed. The machine path is separate.
    CREDIBILITY RULE: a method is marked "confirmed" only after it REALLY
    completes against the server. Completing one OFFERS the others — never
    auto-credits them. The trust score is never shown (API/token only).
@@ -410,7 +414,9 @@ const T={
    'machine.locked':'Maschinen-Identität aktiv — menschliche Methoden sind gesperrt.',
    'token.done.machine':'Du bist als Maschine deklariert \u2713',
    'machine.done':'Als Maschine deklariert','machine.key':'Dein Maschinen-Schlüssel (sicher speichern):',
-   'email.send':'Code senden','email.verify':'Bestätigen',
+   'email.send':'Code senden','email.verify':'Bestätigen','email.pseudo.ph':'Pseudonym (optional)',
+   'email.first':'Zuerst E-Mail bestätigen — dann werden die weiteren Methoden freigeschaltet.',
+   'email.done':'E-Mail bestätigt · Pseudonym: {p}',
    'passkey.hint':'Dein Gerät fragt nach Fingerabdruck, Gesicht oder Geräte-PIN. Es verlässt nichts dein Gerät.','passkey.go':'Passkey verwenden',
    'eudi.hint':'Scanne den Code mit deinem EUDI-Wallet oder öffne es auf diesem Gerät.','eudi.go':'Identität bestätigen','eudi.age':'Alter bestätigen (18+)','eudi.ageDone':'✓ Alter bestätigt (18+)','eudi.open':'Im Wallet öffnen',
    'github.hint':'Du wirst kurz zu GitHub weitergeleitet und kommst bestätigt zurück.','github.go':'Weiter zu GitHub',
@@ -451,7 +457,9 @@ const T={
    'machine.locked':'Machine identity active — human methods are locked.',
    'token.done.machine':'You are declared as a machine \u2713',
    'machine.done':'Declared as a machine','machine.key':'Your machine key (store it safely):',
-   'email.send':'Send code','email.verify':'Confirm',
+   'email.send':'Send code','email.verify':'Confirm','email.pseudo.ph':'Pseudonym (optional)',
+   'email.first':'Confirm your email first — the other methods unlock afterwards.',
+   'email.done':'Email confirmed · pseudonym: {p}',
    'passkey.hint':'Your device asks for fingerprint, face or device PIN. Nothing leaves your device.','passkey.go':'Use passkey',
    'eudi.hint':'Scan the code with your EUDI Wallet, or open it on this device.','eudi.go':'Confirm identity','eudi.age':'Confirm age (18+)','eudi.ageDone':'✓ Age confirmed (18+)','eudi.open':'Open in wallet',
    'github.hint':'You will be briefly redirected to GitHub and return confirmed.','github.go':'Continue to GitHub',
@@ -480,6 +488,7 @@ function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.getAttribute('data-i18n'))});
   document.querySelector('.hero h1').innerHTML=tr('hero.a')+' <span class="em">'+tr('hero.em')+'</span>'+tr('hero.b');
   const mr=document.getElementById('machineRole'); if(mr) mr.placeholder=tr('machine.role.ph');
+  const pi=document.getElementById('pseudoInput'); if(pi) pi.placeholder=tr('email.pseudo.ph');
   const me=document.getElementById('machineEmail'); if(me) me.placeholder=tr('machine.email.ph');
   const ei=document.getElementById('escoInput'); if(ei) ei.placeholder=tr('role.search.ph');
   renderQualChips();
@@ -494,6 +503,13 @@ function pick(m){
     return;
   }
   if(confirmed[m])return;
+  const btn=document.getElementById('m-'+m);
+  if(btn&&btn.disabled){
+    /* AK-14: email first. The other human methods stay locked until the
+       email is confirmed (the server enforces the same rule with 403). */
+    try{document.getElementById('emailHint').textContent=tr('email.first');}catch(e){}
+    return;
+  }
   PANELS.forEach(x=>{const p=document.getElementById('panel-'+x);if(p)p.classList.toggle('hidden',x!==m)});
   const f=document.querySelector('#panel-'+m+' .field, #panel-'+m+' .go');if(f)setTimeout(()=>f.focus(),60);
 }
@@ -511,12 +527,19 @@ function markConfirmed(m){
   document.getElementById('panel-'+m)?.classList.add('hidden');
   document.getElementById('st-'+m).innerHTML='<span class="check"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4"/></svg></span>';
   document.getElementById('issueBtn').disabled=false;
+  if(m==='email')unlockMethods();
   renderProgress();
+}
+/* AK-14: once the email is confirmed, enable every gated method button and
+   drop the persistent "email first" hint. */
+function unlockMethods(){
+  document.querySelectorAll('[data-requires-email]').forEach(b=>{b.removeAttribute('disabled');});
+  const h=document.getElementById('emailFirstHint'); if(h)h.hidden=true;
 }
 
 /* ── Session bootstrap ─────────────────────────────────────────────────────
-   Any method may be first. session/start mints a method-neutral session;
-   email & passkey also create one. GitHub/EUDI need a session to exist. */
+   Email is always first (AK-14). session/start mints a method-neutral session;
+   every other method needs that session (and a confirmed email) to exist. */
 let pkUserId=null;
 async function ensureSession(){
   if(sessionId) return sessionId;
@@ -532,7 +555,8 @@ async function emailStart(){
   if(!/.+@.+\..+/.test(email)){hint.textContent=tr('err');return}
   try{
     await ensureSession();
-    const r=await fetch(API+'/hhttps/email/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,email})});
+    const pseudonym=(document.getElementById('pseudoInput')?.value||'').trim();
+    const r=await fetch(API+'/hhttps/email/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(pseudonym?{sessionId,email,pseudonym}:{sessionId,email})});
     const d=await r.json(); if(!r.ok)throw 0;
     document.getElementById('emailCodeRow').classList.remove('hidden');
     hint.textContent=tr('codeSent'); document.getElementById('emailCode').focus();
@@ -545,6 +569,14 @@ async function emailConfirm(){
     const r=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
     const d=await r.json(); if(!r.ok)throw 0;
     markConfirmed('email');
+    /* AK-8/AK-15: the server-assigned pseudonym is display-only. */
+    const pseudonym=(d.pseudonym||'').toString();
+    if(pseudonym){
+      const st=document.getElementById('st-email');
+      const sp=document.createElement('span'); sp.className='pseudo'; sp.textContent=pseudonym;
+      st.appendChild(document.createTextNode(' ')); st.appendChild(sp);
+      hint.textContent=tr('email.done').replace('{p}',pseudonym);
+    }
   }catch(e){hint.textContent=tr('err')}
 }
 
@@ -555,7 +587,10 @@ async function passkeyRun(){
   const L=window.SimpleWebAuthnBrowser;
   if(!L){hint.textContent='WebAuthn lib missing';return}
   try{
-    const rs=await fetch(API+'/hhttps/webauthn/register/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(pkUserId?{userId:pkUserId}:{})});
+    await ensureSession();
+    /* D4: the user handle is the session's stable userId; the server answers
+       403 email_verification_required until the email is confirmed. */
+    const rs=await fetch(API+'/hhttps/webauthn/register/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})});
     const ro=await rs.json(); if(!rs.ok)throw 0;
     pkUserId=ro.userId;
     const regResp=await L.startRegistration(ro.options);
