@@ -152,6 +152,59 @@ test('script header no longer claims four equal entry methods', () => {
   assert.match(js, /[Ee]-?[Mm]ail first/i, 'header explains the email-first rule');
 });
 
+// ── F-9 / K-4: returning passkey user — skip registration when credentials exist ──
+test('K-4: passkeyRun() skips register/finish when excludeCredentials is non-empty or InvalidStateError', () => {
+  const js = inlineScript();
+  const fn = js.match(/async function passkeyRun\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'passkeyRun() is defined');
+  const body = fn[1];
+  assert.match(body, /excludeCredentials/, 'passkeyRun inspects ro.options.excludeCredentials');
+  assert.match(body, /InvalidStateError/, 'passkeyRun handles InvalidStateError from startRegistration');
+  assert.match(body, /tr\(\s*'passkey\.existing'\s*\)/, "passkeyRun shows the 'passkey.existing' hint");
+  const auth = body.match(/\/hhttps\/webauthn\/auth\/start'[^\n]*body:JSON\.stringify\(([^\n]*?)\)\}\)/);
+  assert.ok(auth, 'auth/start is called with a JSON body');
+  assert.match(auth[1], /userId/, 'auth/start body carries userId');
+  const fin = body.match(/\/hhttps\/webauthn\/auth\/finish'[^\n]*body:JSON\.stringify\(([^\n]*?)\)\}\)/);
+  assert.ok(fin, 'auth/finish is called with a JSON body');
+  assert.match(fin[1], /priorSessionId:sessionId/, 'auth/finish merges the prior session');
+});
+
+test('K-4: i18n passkey.existing exists in de and en', () => {
+  assert.match(i18nBlock('de'), /'passkey\.existing':'Passkey erkannt — bitte bestätigen'/);
+  assert.match(i18nBlock('en'), /'passkey\.existing':'Passkey found — please confirm'/);
+});
+
+// ── F-9 / K-9: magic-link return (?email_verify=success&session=…&pseudonym=…) ──
+test('K-9: page evaluates email_verify query params on load and cleans the URL', () => {
+  const js = inlineScript();
+  assert.match(js, /URLSearchParams/, 'script uses URLSearchParams');
+  assert.match(js, /email_verify/, 'script reads the email_verify param');
+  assert.match(js, /['"]success['"]/, 'script handles email_verify=success');
+  assert.match(js, /['"]error['"]/, 'script handles email_verify=error');
+  assert.match(js, /['"]pseudonym['"]/, 'script reads the pseudonym param');
+  assert.match(js, /['"]reason['"]/, 'script reads the reason param');
+  assert.match(js, /markConfirmed\(\s*'email'\s*\)/, 'script marks email confirmed');
+  assert.match(js, /history\.replaceState/, 'script strips the query params via history.replaceState');
+});
+
+// ── F-9 / K-7: code fields accept pasted "123 456" / "123-456" ──
+test('K-7: #emailCode and #machineCode have no maxlength="6"; codes are normalised before sending', () => {
+  for (const id of ['emailCode', 'machineCode']) {
+    const m = html.match(new RegExp(`<input\\b[^>]*\\bid="${id}"[^>]*>`));
+    assert.ok(m, `#${id} exists`);
+    assert.doesNotMatch(m[0], /\bmaxlength="6"/, `#${id} has no maxlength="6"`);
+    const ml = m[0].match(/\bmaxlength="(\d+)"/);
+    if (ml) assert.ok(Number(ml[1]) >= 8, `#${id} maxlength is at least 8`);
+  }
+  const js = inlineScript();
+  const ec = js.match(/async function emailConfirm\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(ec, 'emailConfirm() is defined');
+  assert.ok(ec[1].includes(".replace(/[\\s-]/g,'')"), 'emailConfirm normalises the code');
+  const mr = js.match(/async function machineRun\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(mr, 'machineRun() is defined');
+  assert.ok(mr[1].includes(".replace(/[\\s-]/g,'')"), 'machineRun normalises the code');
+});
+
 // ── Syntax check of the inline script (compiled, never executed) ──
 test('inline script parses as JavaScript', () => {
   const js = inlineScript();

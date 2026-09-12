@@ -219,7 +219,7 @@ a{color:inherit}
       <input class="field" id="pseudoInput" type="text" maxlength="32" autocomplete="nickname" data-i18n-ph="email.pseudo.ph" aria-label="Pseudonym" style="margin-top:10px">
       <div class="row"><button class="go" id="emailSend" onclick="emailStart()" style="flex:1" data-i18n="email.send"></button></div>
       <div class="hidden" id="emailCodeRow">
-        <input class="field" id="emailCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="Code" style="margin-top:10px">
+        <input class="field" id="emailCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="••••••" aria-label="Code" style="margin-top:10px">
         <div class="row"><button class="go" id="emailVerify" onclick="emailConfirm()" style="flex:1" data-i18n="email.verify"></button></div>
       </div>
       <div class="hint" id="emailHint"></div>
@@ -297,7 +297,7 @@ a{color:inherit}
       <div class="hint" data-i18n="machine.hint"></div>
       <input class="field" id="machineEmail" type="email" autocomplete="email" aria-label="Betreiber-E-Mail" style="margin-top:4px" required>
       <div class="hidden" id="machineCodeRow">
-        <input class="field" id="machineCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••" aria-label="Code" style="margin-top:10px">
+        <input class="field" id="machineCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="••••••" aria-label="Code" style="margin-top:10px">
       </div>
       <input class="field" id="machineRole" type="text" autocomplete="off" aria-label="Rolle / Aufgabe" style="margin-top:4px">
       <div class="row"><button class="go" id="machineGo" onclick="machineRun()" style="flex:1" data-i18n="machine.go"></button></div>
@@ -417,7 +417,7 @@ const T={
    'email.send':'Code senden','email.verify':'Bestätigen','email.pseudo.ph':'Pseudonym (optional)',
    'email.first':'Zuerst E-Mail bestätigen — dann werden die weiteren Methoden freigeschaltet.',
    'email.done':'E-Mail bestätigt · Pseudonym: {p}',
-   'passkey.hint':'Dein Gerät fragt nach Fingerabdruck, Gesicht oder Geräte-PIN. Es verlässt nichts dein Gerät.','passkey.go':'Passkey verwenden',
+   'passkey.hint':'Dein Gerät fragt nach Fingerabdruck, Gesicht oder Geräte-PIN. Es verlässt nichts dein Gerät.','passkey.go':'Passkey verwenden','passkey.existing':'Passkey erkannt — bitte bestätigen',
    'eudi.hint':'Scanne den Code mit deinem EUDI-Wallet oder öffne es auf diesem Gerät.','eudi.go':'Identität bestätigen','eudi.age':'Alter bestätigen (18+)','eudi.ageDone':'✓ Alter bestätigt (18+)','eudi.open':'Im Wallet öffnen',
    'github.hint':'Du wirst kurz zu GitHub weitergeleitet und kommst bestätigt zurück.','github.go':'Weiter zu GitHub',
    'issue.btn':'Token ausstellen →','token.done':'Du bist als Mensch bestätigt',
@@ -460,7 +460,7 @@ const T={
    'email.send':'Send code','email.verify':'Confirm','email.pseudo.ph':'Pseudonym (optional)',
    'email.first':'Confirm your email first — the other methods unlock afterwards.',
    'email.done':'Email confirmed · pseudonym: {p}',
-   'passkey.hint':'Your device asks for fingerprint, face or device PIN. Nothing leaves your device.','passkey.go':'Use passkey',
+   'passkey.hint':'Your device asks for fingerprint, face or device PIN. Nothing leaves your device.','passkey.go':'Use passkey','passkey.existing':'Passkey found — please confirm',
    'eudi.hint':'Scan the code with your EUDI Wallet, or open it on this device.','eudi.go':'Confirm identity','eudi.age':'Confirm age (18+)','eudi.ageDone':'✓ Age confirmed (18+)','eudi.open':'Open in wallet',
    'github.hint':'You will be briefly redirected to GitHub and return confirmed.','github.go':'Continue to GitHub',
    'issue.btn':'Issue token →','token.done':'You are confirmed as human',
@@ -563,7 +563,7 @@ async function emailStart(){
   }catch(e){hint.textContent=tr('err')}
 }
 async function emailConfirm(){
-  const code=document.getElementById('emailCode').value.trim();
+  const code=document.getElementById('emailCode').value.trim().replace(/[\s-]/g,'');
   const hint=document.getElementById('emailHint');
   try{
     const r=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
@@ -581,7 +581,11 @@ async function emailConfirm(){
 }
 
 /* PASSKEY — register(start->finish) then auth(start->finish). auth/finish
-   creates the session and merges our prior one via priorSessionId. */
+   creates the session and merges our prior one via priorSessionId.
+   K-4: a RETURNING user (same email => same stable userId) already has a
+   credential; register/start then lists it in excludeCredentials and the
+   authenticator would refuse with InvalidStateError. In that case we skip
+   registration and go straight to auth/start. */
 async function passkeyRun(){
   const hint=document.getElementById('passkeyHint');
   const L=window.SimpleWebAuthnBrowser;
@@ -593,9 +597,20 @@ async function passkeyRun(){
     const rs=await fetch(API+'/hhttps/webauthn/register/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})});
     const ro=await rs.json(); if(!rs.ok)throw 0;
     pkUserId=ro.userId;
-    const regResp=await L.startRegistration(ro.options);
-    const rf=await fetch(API+'/hhttps/webauthn/register/finish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId,response:regResp})});
-    if(!rf.ok)throw 0;
+    const excl=(ro.options&&ro.options.excludeCredentials)||[];
+    let hasPasskey=excl.length>0;
+    if(!hasPasskey){
+      try{
+        const regResp=await L.startRegistration(ro.options);
+        const rf=await fetch(API+'/hhttps/webauthn/register/finish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId,response:regResp})});
+        if(!rf.ok)throw 0;
+      }catch(e){
+        /* The authenticator already holds a credential for this user handle
+           (e.g. registered on this device before the server knew about it). */
+        if(e&&e.name==='InvalidStateError')hasPasskey=true; else throw e;
+      }
+    }
+    if(hasPasskey)hint.textContent=tr('passkey.existing');
     const as=await fetch(API+'/hhttps/webauthn/auth/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId})});
     const ao=await as.json(); if(!as.ok)throw 0;
     const authResp=await L.startAuthentication(ao.options);
@@ -700,7 +715,7 @@ async function machineRun(){
   }
 
   /* Step B: confirm the code, then register + issue the machine token. */
-  const code=(document.getElementById('machineCode').value||'').trim();
+  const code=(document.getElementById('machineCode').value||'').trim().replace(/[\s-]/g,'');
   try{
     const rc=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
     if(!rc.ok){hint.textContent=tr('machine.codeErr');return;}
@@ -973,7 +988,40 @@ async function restoreIdentity(){
   _showTokenCard(identity);
 }
 
+/* ── K-9: return from the magic link ──────────────────────────────────────
+   GET /hhttps/email/verify redirects to
+   /?email_verify=success&session=<id>&pseudonym=<p>&… (or
+   ?email_verify=error&reason=<code>). Adopt the session, mark the email as
+   confirmed (unlocking the other methods) and clean the URL afterwards. */
+function handleEmailVerifyReturn(){
+  let params;
+  try{params=new URLSearchParams(window.location.search);}catch(e){return;}
+  const state=params.get('email_verify');
+  if(!state)return;
+  const hint=document.getElementById('emailHint');
+  if(state==='success'&&params.get('session')){
+    sessionId=params.get('session');
+    markConfirmed('email');
+    const pseudonym=(params.get('pseudonym')||'').toString();
+    if(pseudonym){
+      const st=document.getElementById('st-email');
+      const sp=document.createElement('span'); sp.className='pseudo'; sp.textContent=pseudonym;
+      st.appendChild(document.createTextNode(' ')); st.appendChild(sp);
+    }
+    if(hint)hint.textContent=tr('email.done').replace('{p}',pseudonym);
+  }else if(state==='error'){
+    if(hint)hint.textContent=tr('err')+' ('+(params.get('reason')||'')+')';
+    pick('email');
+  }
+  ['email_verify','session','pseudonym','reason','level','score','domain'].forEach(k=>params.delete(k));
+  try{
+    const q=params.toString();
+    history.replaceState(null,'',window.location.pathname+(q?'?'+q:'')+window.location.hash);
+  }catch(e){}
+}
+
 applyLang();
+handleEmailVerifyReturn();
 restoreIdentity();
 </script>
 </body>
