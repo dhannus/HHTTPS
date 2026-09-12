@@ -289,8 +289,18 @@ function generateCode6() {
  */
 export function renderVerificationEmail({ code, verifyUrl, role, classification }) {
   const t = SHELL_THEMES.light;
-  const label = roleDisplay(role);
-  const cls = classification || {};
+  // F-5 (S-7): only catalogued roles reach the mail (subject AND body); the
+  // label and the classification fields are HTML-escaped as defence in depth.
+  const safeRole = ROLES[role] ? role : 'citizen';
+  const textLabel = roleDisplay(safeRole);
+  const label = escapeHtml(textLabel);
+  const raw = classification || {};
+  const cls = {
+    domain:     escapeHtml(raw.domain),
+    level:      escapeHtml(raw.level),
+    category:   escapeHtml(raw.category),
+    trustBonus: Number(raw.trustBonus) || 0,
+  };
 
   const codeBox = `
     <div style="margin:24px 0 18px;padding:24px 16px;text-align:center;background:#F9F9F8;border:1px solid #E6E6E4;border-radius:16px;">
@@ -334,11 +344,11 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification 
   });
 
   const text = biText(
-    `HHTTPS — Email verification\n\nRole: ${label}\nDomain: ${cls.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (15 min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held only until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
-    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${label}\nDomain: ${cls.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur bis zur Übertragung an die Plattform, bei der du dich anmeldest, zwischengespeichert.\n\n— HHTTPS Project · hhttps.org`
+    `HHTTPS — Email verification\n\nRole: ${textLabel}\nDomain: ${raw.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (15 min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held only until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
+    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${textLabel}\nDomain: ${raw.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur bis zur Übertragung an die Plattform, bei der du dich anmeldest, zwischengespeichert.\n\n— HHTTPS Project · hhttps.org`
   );
 
-  const subject = `[HHTTPS] Verify email for role "${roleLabel(role, 'en')}" / E-Mail-Verifikation`;
+  const subject = `[HHTTPS] Verify email for role "${roleLabel(safeRole, 'en')}" / E-Mail-Verifikation`;
   return { subject, html, text };
 }
 

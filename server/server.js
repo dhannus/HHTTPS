@@ -2774,7 +2774,9 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
     // base identity so the mail does not read: role "undefined".
     // F-1: only the LAST send of a session stays valid (context and row agree).
     await db.emailVerifications.invalidateForSession(sessionId);
-    const result = await sendVerificationEmail({ email, role: role || 'citizen', sessionId, baseUrl: BASE_URL });
+    // F-5 (S-7): whitelist the role — an arbitrary string must never reach the mail.
+    const safeRole = ROLES[role] ? role : 'citizen';
+    const result = await sendVerificationEmail({ email, role: safeRole, sessionId, baseUrl: BASE_URL });
     // T4: park plaintext email + pseudonym wish until the code/link is confirmed.
     await db.challenges.create(
       emailContextId(sessionId),

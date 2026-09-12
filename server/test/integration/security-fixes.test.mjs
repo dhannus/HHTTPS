@@ -159,3 +159,16 @@ test('F-3/S-4: without EMAIL_DEV_MODE the code is never returned — 503 email_t
   assert.equal(s.json.devToken, undefined, 'no devToken');
   assert.equal(s.json.devMode, undefined, 'no devMode flag');
 });
+
+// ─── F-5 (S-7): role is whitelisted before it reaches the mail ──────────────
+
+test('F-5/S-7: an unknown role is replaced by citizen — the payload never reaches the mail pipeline', { skip }, async () => {
+  const sessionId = await newSession();
+  const A = freshEmail('f5');
+  const payload = '<img src=x onerror=alert(1)>';
+  const s = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email: A, role: payload } });
+  assert.equal(s.status, 200, s.text);
+  track(A);
+  // The dev-mode log line prints the role that went into the mail renderer.
+  assert.ok(!srv.logs().includes(payload), 'raw payload must not appear in the mail pipeline (dev log)');
+});

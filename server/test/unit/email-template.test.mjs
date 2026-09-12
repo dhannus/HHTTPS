@@ -35,3 +35,15 @@ test('renderVerificationEmail privacy note no longer claims "not stored" (AK-26)
   assert.ok(!html.includes('your email address is not stored'));
   assert.ok(subject.length > 0);
 });
+
+// F-5 (S-7): nothing caller-controlled reaches the mail unescaped.
+test('renderVerificationEmail escapes an injected role label, domain and level (F-5 / S-7)', () => {
+  const payload = '<img src=x onerror=alert(1)>';
+  const { html, subject } = renderVerificationEmail({
+    code: '482913', verifyUrl: 'https://x/y', role: payload,
+    classification: { domain: `${payload}.org`, level: `lvl${payload}`, trustBonus: 0, category: `cat${payload}` },
+  });
+  assert.ok(!html.includes(payload), 'html must not contain the raw payload');
+  assert.ok(!subject.includes(payload), 'subject must not contain the raw payload');
+  assert.ok(html.includes('&lt;img'), 'html contains the escaped label');
+});
