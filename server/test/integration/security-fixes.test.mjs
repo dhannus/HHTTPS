@@ -4,17 +4,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { startServer, pgAvailable } from '../helpers/server.mjs';
-import { sql, closeDb } from '../helpers/db.mjs';
+import { sql, closeDb, TEST_PEPPER } from '../helpers/db.mjs';
+import { rnd, freshEmail as mkEmail, newSession as startSession, sendCode, confirmCode, createTracker } from '../helpers/identity-flow.mjs';
 import { emailAnchorHash } from '../../identity.js';
 
 const skip = !pgAvailable() && 'TEST_PG_HOST not set';
-const PEPPER = 'test-pepper'; // matches testEnv() in helpers/server.mjs
+const PEPPER = TEST_PEPPER; // the harnessed server's pepper (helpers/server.mjs)
 
-const rnd = () => crypto.randomBytes(5).toString('hex');
-const freshEmail = (tag) => `sec-${tag}-${rnd()}@example.org`;
+const freshEmail = (tag) => mkEmail(`sec-${tag}`);
 
 let srv;
-const cleanup = { hashes: new Set(), userIds: new Set(), clientIds: new Set(), credentialIds: new Set() };
+const track = createTracker();
+const clientIds = new Set();
+const credentialIds = new Set();
 
 test.before(async () => {
   if (skip) return;
@@ -23,46 +25,25 @@ test.before(async () => {
 
 test.after(async () => {
   if (skip) return;
-  const hashes = [...cleanup.hashes]; const userIds = [...cleanup.userIds]; const clientIds = [...cleanup.clientIds];
-  if (clientIds.length) {
-    await sql('DELETE FROM authorization_codes WHERE client_id = ANY($1)', [clientIds]);
-    await sql('DELETE FROM oauth_clients WHERE client_id = ANY($1)', [clientIds]);
+  const ids = [...clientIds];
+  if (ids.length) {
+    await sql('DELETE FROM authorization_codes WHERE client_id = ANY($1)', [ids]);
+    await sql('DELETE FROM oauth_clients WHERE client_id = ANY($1)', [ids]);
   }
-  if (userIds.length) {
-    await sql('DELETE FROM refresh_tokens WHERE user_id = ANY($1)', [userIds]);
-    await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
-  }
-  if (hashes.length) await sql('DELETE FROM identity_anchors WHERE email_hash = ANY($1)', [hashes]);
-  const credentialIds = [...cleanup.credentialIds];
-  if (credentialIds.length) {
-    await sql('UPDATE sessions SET credential_id = NULL WHERE credential_id = ANY($1)', [credentialIds]);
-    await sql('DELETE FROM credentials WHERE credential_id = ANY($1)', [credentialIds]);
-  }
+  await track.cleanup(); // sessions go first — they reference the credentials below
+  const creds = [...credentialIds];
+  if (creds.length) await sql('DELETE FROM credentials WHERE credential_id = ANY($1)', [creds]);
   await srv.stop();
   await closeDb();
 });
 
-function track(email, userId) {
-  cleanup.hashes.add(emailAnchorHash(email, PEPPER));
-  if (userId) cleanup.userIds.add(userId);
-}
+function track_(email, userId) { track.add({ email, userId }); }
 
-async function newSession() {
-  const r = await srv.api('/hhttps/session/start', { method: 'POST', body: {} });
-  assert.equal(r.status, 200, r.text);
-  return r.json.sessionId;
-}
+const newSession = () => startSession(srv, {}, track);
+const confirm = (sessionId, code) => confirmCode(srv, sessionId, code);
 
-async function send(sessionId, email, extra = {}) {
-  const r = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email, ...extra } });
-  assert.equal(r.status, 200, r.text);
-  track(email);
-  return r.json;
-}
-
-async function confirm(sessionId, code) {
-  return srv.api('/hhttps/email/confirm-code', { method: 'POST', body: { sessionId, code } });
-}
+/** /email/send in dev mode (asserts 200); the address is tracked for removal. */
+const send = (sessionId, email, extra = {}) => sendCode(srv, sessionId, email, extra, track);
 
 /** GET /hhttps/email/verify without following the redirect → { status, location } */
 async function verifyLink(token, sessionId) {
@@ -147,7 +128,7 @@ test('F-1 sanity: the happy path (single send + correct code) still binds', { sk
   const s = await send(sessionId, A);
   const c = await confirm(sessionId, s.devCode);
   assert.equal(c.status, 200, c.text);
-  track(A, c.json.userId);
+  track_(A, c.json.userId);
   assert.equal(await anchorCount(A), 1);
 });
 
@@ -157,9 +138,9 @@ test('F-3/S-4: without EMAIL_DEV_MODE the code is never returned — 503 email_t
   // Separate boot: no SMTP, no sendmail binary in this environment, dev mode NOT enabled.
   const prod = await startServer({ env: { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', EMAIL_DEV_MODE: '' } });
   t.after(() => prod.stop());
-  const r = await prod.api('/hhttps/session/start', { method: 'POST', body: {} });
-  const sessionId = r.json.sessionId;
+  const sessionId = await startSession(prod, {}, track);
   const A = freshEmail('f3');
+  track.add({ email: A });
   const s = await prod.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email: A } });
   assert.equal(s.status, 503, s.text);
   assert.equal(s.json.error, 'email_transport_unavailable');
@@ -176,7 +157,7 @@ test('F-5/S-7: an unknown role is replaced by citizen — the payload never reac
   const payload = '<img src=x onerror=alert(1)>';
   const s = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email: A, role: payload } });
   assert.equal(s.status, 200, s.text);
-  track(A);
+  track_(A);
   // The dev-mode log line prints the role that went into the mail renderer.
   assert.ok(!srv.logs().includes(payload), 'raw payload must not appear in the mail pipeline (dev log)');
 });
@@ -198,7 +179,7 @@ test('F-6/K-5: a second address in an already anchored session → 409 email_alr
   const sa = await send(sessionId, A);
   const ca = await confirm(sessionId, sa.devCode);
   assert.equal(ca.status, 200, ca.text);
-  track(A, ca.json.userId);
+  track_(A, ca.json.userId);
 
   const sb = await send(sessionId, B);
   const cb = await confirm(sessionId, sb.devCode);
@@ -216,14 +197,14 @@ test('F-6/K-5: a session carrying a passkey credential is never rebound to a for
   const sa = await send(s1, A);
   const ca = await confirm(s1, sa.devCode);
   assert.equal(ca.status, 200, ca.text);
-  track(A, ca.json.userId);
+  track_(A, ca.json.userId);
 
   // Second session with a (simulated) passkey credential for another user.
   const s2 = await newSession();
   const [before] = await sql('SELECT user_id FROM sessions WHERE session_id = $1', [s2]);
   const credId = 'cred-' + rnd();
   await sql(`INSERT INTO credentials (credential_id, user_id, public_key, counter) VALUES ($1, $2, '\\x00', 0)`, [credId, before.user_id]);
-  cleanup.credentialIds.add(credId);
+  credentialIds.add(credId);
   await sql('UPDATE sessions SET credential_id = $2 WHERE session_id = $1', [s2, credId]);
 
   const sb = await send(s2, A);
@@ -248,7 +229,7 @@ async function createClient(allowedScopes) {
      VALUES ($1, NULL, $2, $3, $4, $5, 'pairwise', TRUE, TRUE, 'verified')`,
     [clientId, `SEC test client ${clientId}`, 'http://localhost', JSON.stringify([REDIRECT_URI]), JSON.stringify(allowedScopes)]
   );
-  cleanup.clientIds.add(clientId);
+  clientIds.add(clientId);
   return clientId;
 }
 
@@ -258,7 +239,7 @@ async function hhttpsToken() {
   const s = await send(sessionId, A);
   const c = await confirm(sessionId, s.devCode);
   assert.equal(c.status, 200, c.text);
-  track(A, c.json.userId);
+  track_(A, c.json.userId);
   const d = await srv.api('/hhttps/role/declare', { method: 'POST', body: { sessionId } });
   assert.equal(d.status, 200, d.text);
   return d.json.hhttps.token;

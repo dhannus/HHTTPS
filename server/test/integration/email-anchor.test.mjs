@@ -4,19 +4,18 @@
 // against the same Postgres via SQL.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import { startServer, pgAvailable } from '../helpers/server.mjs';
-import { sql, closeDb } from '../helpers/db.mjs';
+import { sql, closeDb, TEST_PEPPER } from '../helpers/db.mjs';
+import { freshEmail as mkEmail, newSession as startSession, sendCode, confirmCode, createTracker } from '../helpers/identity-flow.mjs';
 import { emailAnchorHash, sanitizePseudonym } from '../../identity.js';
 
 const skip = !pgAvailable() && 'TEST_PG_HOST not set';
-const PEPPER = 'test-pepper'; // matches testEnv() in helpers/server.mjs
+const PEPPER = TEST_PEPPER; // the harnessed server's pepper (helpers/server.mjs)
 
-const rnd = () => crypto.randomBytes(5).toString('hex');
-const freshEmail = () => `t4-${rnd()}@example.org`;
+const freshEmail = () => mkEmail('t4');
 
 let srv;
-const cleanup = { hashes: new Set(), userIds: new Set() };
+const track = createTracker();
 
 test.before(async () => {
   if (skip) return;
@@ -25,34 +24,16 @@ test.before(async () => {
 
 test.after(async () => {
   if (skip) return;
-  const hashes = [...cleanup.hashes]; const userIds = [...cleanup.userIds];
-  if (hashes.length) await sql('DELETE FROM identity_anchors WHERE email_hash = ANY($1)', [hashes]);
-  if (userIds.length) await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
+  await track.cleanup();
   await srv.stop();
   await closeDb();
 });
 
-function track(email, userId) {
-  cleanup.hashes.add(emailAnchorHash(email, PEPPER));
-  if (userId) cleanup.userIds.add(userId);
-}
+function track_(email, userId) { track.add({ email, userId }); }
 
-async function newSession(body = {}) {
-  const r = await srv.api('/hhttps/session/start', { method: 'POST', body });
-  assert.equal(r.status, 200, r.text);
-  return r.json.sessionId;
-}
-
-async function send(sessionId, email, extra = {}) {
-  const r = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email, ...extra } });
-  assert.equal(r.status, 200, r.text);
-  assert.equal(r.json.devMode, true, 'dev mode expected (no SMTP)');
-  return r.json;
-}
-
-async function confirm(sessionId, code) {
-  return srv.api('/hhttps/email/confirm-code', { method: 'POST', body: { sessionId, code } });
-}
+const newSession = (body = {}) => startSession(srv, body, track);
+const send = (sessionId, email, extra = {}) => sendCode(srv, sessionId, email, extra, track);
+const confirm = (sessionId, code) => confirmCode(srv, sessionId, code);
 
 async function sessionUserId(sessionId) {
   const rows = await sql('SELECT user_id, pseudonym FROM sessions WHERE session_id = $1', [sessionId]);
@@ -71,7 +52,7 @@ test('AK-1/AK-7: first confirmation creates an anchor, generated pseudonym, boun
   assert.match(r.json.pseudonym, /^iamhmn_[a-z0-9]{10}$/);
   assert.equal(r.json.anchorCreated, true);
   assert.ok(r.json.methods.includes('email'));
-  track(email, r.json.userId);
+  track_(email, r.json.userId);
 
   const s = await sessionUserId(a);
   assert.equal(s.user_id, r.json.userId, 'session bound to anchor userId');
@@ -94,7 +75,7 @@ test('AK-2/AK-8: same email (other case/whitespace) in a new session rebinds to 
   const a = await newSession();
   const first = await confirm(a, (await send(a, email)).devCode);
   assert.equal(first.status, 200, first.text);
-  track(email, first.json.userId);
+  track_(email, first.json.userId);
 
   const b = await newSession();
   const bBefore = await sessionUserId(b);
@@ -122,7 +103,7 @@ test('AK-6: a user-supplied pseudonym is sanitized and stored in the anchor', { 
   const c = await newSession();
   const r = await confirm(c, (await send(c, email, { pseudonym: raw })).devCode);
   assert.equal(r.status, 200, r.text);
-  track(email, r.json.userId);
+  track_(email, r.json.userId);
   assert.equal(r.json.pseudonym, expected);
 
   const anchor = await sql('SELECT pseudonym FROM identity_anchors WHERE email_hash = $1', [emailAnchorHash(email, PEPPER)]);
@@ -146,7 +127,7 @@ test('AK-1 via magic link: /hhttps/email/verify binds the session and redirects 
 
   const anchor = await sql('SELECT user_id, pseudonym FROM identity_anchors WHERE email_hash = $1', [emailAnchorHash(email, PEPPER)]);
   assert.equal(anchor.length, 1);
-  track(email, anchor[0].user_id);
+  track_(email, anchor[0].user_id);
   const s = await sessionUserId(d);
   assert.equal(s.user_id, anchor[0].user_id);
   assert.equal(s.pseudonym, pseudonym);

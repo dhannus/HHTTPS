@@ -14,18 +14,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { startServer, pgAvailable } from '../helpers/server.mjs';
-import { sql, closeDb } from '../helpers/db.mjs';
-import { emailAnchorHash } from '../../identity.js';
+import { closeDb, TEST_EUDI_SECRET } from '../helpers/db.mjs';
+import { rnd, freshEmail, newSession as startSession, verifyEmail, decodeJwtPayload, createTracker } from '../helpers/identity-flow.mjs';
 
 const skip = !pgAvailable() && 'TEST_PG_HOST not set';
-const PEPPER = 'test-pepper';          // matches testEnv() in helpers/server.mjs
-const EUDI_SECRET = 'test-secret';     // matches testEnv() in helpers/server.mjs
-
-const rnd = () => crypto.randomBytes(5).toString('hex');
-const freshEmail = () => `t5-${rnd()}@example.org`;
 
 let srv;
-const cleanup = { hashes: new Set(), userIds: new Set() };
+const track = createTracker();
 
 test.before(async () => {
   if (skip) return;
@@ -34,41 +29,19 @@ test.before(async () => {
 
 test.after(async () => {
   if (skip) return;
-  const hashes = [...cleanup.hashes]; const userIds = [...cleanup.userIds];
-  if (hashes.length) await sql('DELETE FROM identity_anchors WHERE email_hash = ANY($1)', [hashes]);
-  if (userIds.length) await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
+  await track.cleanup();
   await srv.stop();
   await closeDb();
 });
 
-async function newSession() {
-  const r = await srv.api('/hhttps/session/start', { method: 'POST', body: {} });
-  assert.equal(r.status, 200, r.text);
-  return r.json.sessionId;
-}
+const newSession = () => startSession(srv, {}, track);
 
 /** Full email flow: returns { sessionId, userId, pseudonym } of an email-verified session. */
-async function verifiedSession(extra = {}) {
-  const sessionId = await newSession();
-  const email = freshEmail();
-  const s = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email, ...extra } });
-  assert.equal(s.status, 200, s.text);
-  assert.equal(s.json.devMode, true, 'dev mode expected (no SMTP)');
-  const c = await srv.api('/hhttps/email/confirm-code', { method: 'POST', body: { sessionId, code: s.json.devCode } });
-  assert.equal(c.status, 200, c.text);
-  cleanup.hashes.add(emailAnchorHash(email, PEPPER));
-  cleanup.userIds.add(c.json.userId);
-  return { sessionId, userId: c.json.userId, pseudonym: c.json.pseudonym };
-}
-
-function decodeJwtPayload(token) {
-  const [, payload] = String(token).split('.');
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-}
+const verifiedSession = () => verifyEmail(srv, freshEmail('t5'), undefined, track);
 
 function eidAssertion(sessionId, nonce, iat) {
   const canonical = JSON.stringify({ sessionId, eidVerified: true, nonce, iat });
-  return crypto.createHmac('sha256', EUDI_SECRET).update(canonical).digest('hex');
+  return crypto.createHmac('sha256', TEST_EUDI_SECRET).update(canonical).digest('hex');
 }
 
 function assertGate(r) {

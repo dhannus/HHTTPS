@@ -6,16 +6,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { sql, closeDb } from '../helpers/db.mjs';
+import { sql, closeDb, TEST_DB } from '../helpers/db.mjs';
 
-const skip = !process.env.TEST_PG_HOST && 'TEST_PG_HOST not set';
+const skip = !TEST_DB.host && 'TEST_PG_HOST not set';
 
-// db.js reads DB_* at import time — set them before the dynamic import.
-if (process.env.TEST_PG_HOST) {
-  process.env.DB_HOST = process.env.TEST_PG_HOST;
-  process.env.DB_USER = 'hhttps';
-  process.env.DB_NAME = 'hhttps';
-  process.env.DB_PASSWORD = 'x';
+// db.js reads DB_* at import time — set them (from the shared TEST_DB config,
+// W-27) before the dynamic import.
+if (TEST_DB.host) {
+  process.env.DB_HOST = TEST_DB.host;
+  process.env.DB_USER = TEST_DB.user;
+  process.env.DB_NAME = TEST_DB.database;
+  process.env.DB_PASSWORD = TEST_DB.password;
 }
 const db = skip ? null : await import('../../db.js');
 

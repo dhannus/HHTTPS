@@ -4,20 +4,19 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, pgAvailable } from '../helpers/server.mjs';
 import { sql, closeDb } from '../helpers/db.mjs';
+import { freshEmail, newSession, createTracker } from '../helpers/identity-flow.mjs';
 
 test('POST /hhttps/email/send answers devMode:true with a 6-digit devCode', { skip: !pgAvailable() && 'TEST_PG_HOST not set' }, async (t) => {
   const srv = await startServer({ env: { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '' } });
-  t.after(async () => { await srv.stop(); await closeDb(); });
+  const track = createTracker();
+  t.after(async () => { await track.cleanup(); await srv.stop(); await closeDb(); });
 
-  const start = await srv.api('/hhttps/session/start', { method: 'POST', body: {} });
-  assert.equal(start.status, 200, start.text);
-  const { sessionId } = start.json;
+  const sessionId = await newSession(srv, {}, track);
   assert.ok(sessionId);
 
-  const send = await srv.api('/hhttps/email/send', {
-    method: 'POST',
-    body: { sessionId, email: 'devmode@example.org' },
-  });
+  const email = freshEmail('devmode');
+  const send = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email } });
+  track.add({ email });
   assert.equal(send.status, 200, send.text);
   assert.equal(send.json.devMode, true);
   assert.match(String(send.json.devCode), /^\d{6}$/);

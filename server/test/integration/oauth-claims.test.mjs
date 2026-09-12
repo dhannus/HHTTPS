@@ -15,17 +15,16 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { startServer, pgAvailable } from '../helpers/server.mjs';
 import { sql, closeDb } from '../helpers/db.mjs';
-import { emailAnchorHash } from '../../identity.js';
+import { rnd, freshEmail as mkEmail, verifyEmail, decodeJwtPayload, createTracker } from '../helpers/identity-flow.mjs';
 
 const skip = !pgAvailable() && 'TEST_PG_HOST not set';
-const PEPPER = 'test-pepper'; // matches testEnv() in helpers/server.mjs
 const REDIRECT_URI = 'http://localhost/cb';
 
-const rnd = () => crypto.randomBytes(5).toString('hex');
-const freshEmail = () => `t6-${rnd()}@example.org`;
+const freshEmail = () => mkEmail('t6');
 
 let srv;
-const cleanup = { hashes: new Set(), userIds: new Set(), clientIds: new Set() };
+const track = createTracker();
+const clientIds = new Set();
 
 test.before(async () => {
   if (skip) return;
@@ -34,17 +33,13 @@ test.before(async () => {
 
 test.after(async () => {
   if (skip) return;
-  const hashes = [...cleanup.hashes]; const userIds = [...cleanup.userIds]; const clientIds = [...cleanup.clientIds];
-  if (clientIds.length) {
-    await sql('DELETE FROM authorization_codes WHERE client_id = ANY($1)', [clientIds]);
-    await sql('DELETE FROM connected_platforms WHERE client_id = ANY($1)', [clientIds]);
-    await sql('DELETE FROM oauth_clients WHERE client_id = ANY($1)', [clientIds]);
+  const ids = [...clientIds];
+  if (ids.length) {
+    await sql('DELETE FROM authorization_codes WHERE client_id = ANY($1)', [ids]);
+    await sql('DELETE FROM connected_platforms WHERE client_id = ANY($1)', [ids]);
+    await sql('DELETE FROM oauth_clients WHERE client_id = ANY($1)', [ids]);
   }
-  if (userIds.length) {
-    await sql('DELETE FROM refresh_tokens WHERE user_id = ANY($1)', [userIds]);
-    await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
-  }
-  if (hashes.length) await sql('DELETE FROM identity_anchors WHERE email_hash = ANY($1)', [hashes]);
+  await track.cleanup();
   await srv.stop();
   await closeDb();
 });
@@ -61,13 +56,8 @@ async function createClient(allowedScopes = ['openid', 'role', 'email']) {
      VALUES ($1, NULL, $2, $3, $4, $5, 'pairwise', TRUE, TRUE, 'verified')`,
     [clientId, `T6 test client ${clientId}`, 'http://localhost', JSON.stringify([REDIRECT_URI]), JSON.stringify(allowedScopes)]
   );
-  cleanup.clientIds.add(clientId);
+  clientIds.add(clientId);
   return clientId;
-}
-
-function decodeJwtPayload(token) {
-  const [, payload] = String(token).split('.');
-  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
 }
 
 function pkce() {
@@ -76,25 +66,12 @@ function pkce() {
   return { verifier, challenge };
 }
 
-async function newSession() {
-  const r = await srv.api('/hhttps/session/start', { method: 'POST', body: {} });
-  assert.equal(r.status, 200, r.text);
-  return r.json.sessionId;
-}
-
 /** Email flow + role/declare → { token (HHTTPS access token), userId, pseudonym }. */
 async function hhttpsToken(email, extra = {}) {
-  const sessionId = await newSession();
-  const s = await srv.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email, ...extra } });
-  assert.equal(s.status, 200, s.text);
-  assert.equal(s.json.devMode, true, 'dev mode expected (no SMTP)');
-  const c = await srv.api('/hhttps/email/confirm-code', { method: 'POST', body: { sessionId, code: s.json.devCode } });
-  assert.equal(c.status, 200, c.text);
-  cleanup.hashes.add(emailAnchorHash(email, PEPPER));
-  cleanup.userIds.add(c.json.userId);
+  const { sessionId, userId, pseudonym } = await verifyEmail(srv, email, extra.pseudonym, track);
   const d = await srv.api('/hhttps/role/declare', { method: 'POST', body: { sessionId } });
   assert.equal(d.status, 200, d.text);
-  return { token: d.json.hhttps.token, userId: c.json.userId, pseudonym: c.json.pseudonym };
+  return { token: d.json.hhttps.token, userId, pseudonym };
 }
 
 /** approve → code → token exchange. Returns { code, tokens }. */

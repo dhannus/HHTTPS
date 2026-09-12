@@ -6,33 +6,49 @@
 //   const { status, json } = await srv.api('/hhttps/info');
 //   await srv.stop();
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { TEST_DB, TEST_PEPPER, TEST_EUDI_SECRET } from './db.mjs';
 
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const READY_TIMEOUT_MS = 20_000;
 const POLL_MS = 150;
 
 export function pgAvailable() {
-  return !!process.env.TEST_PG_HOST;
+  return !!TEST_DB.host;
 }
 
 export function testEnv(port, overrides = {}) {
   return {
     ...process.env,
     PORT: String(port),
-    DB_HOST: process.env.TEST_PG_HOST,
-    DB_USER: 'hhttps',
-    DB_NAME: 'hhttps',
-    DB_PASSWORD: 'x',
+    DB_HOST: TEST_DB.host,
+    DB_USER: TEST_DB.user,
+    DB_NAME: TEST_DB.database,
+    DB_PASSWORD: TEST_DB.password,
     RP_ID: 'localhost',
     ORIGIN: `http://localhost:${port}`,
     BASE_URL: `http://localhost:${port}`,
-    HHTTPS_VERIFICATION_PEPPER: 'test-pepper',
-    EUDI_VERIFIER_SECRET: 'test-secret',
+    HHTTPS_VERIFICATION_PEPPER: TEST_PEPPER,
+    EUDI_VERIFIER_SECRET: TEST_EUDI_SECRET,
     EMAIL_DEV_MODE: '1', // F-3: dev mode (code in the API response) is opt-in
     ...overrides,
   };
+}
+
+// P-7 / W-23: let the OS hand out a free port (listen(0)) instead of picking a
+// random one — the integration files boot their servers in parallel.
+export function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.on('error', reject);
+    probe.listen(0, () => {
+      const { port } = probe.address();
+      probe.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
 }
 
 function sleep(ms) {
@@ -42,7 +58,7 @@ function sleep(ms) {
 export async function startServer({ env = {} } = {}) {
   if (!pgAvailable()) throw new Error('startServer: TEST_PG_HOST is not set');
 
-  const port = 3900 + Math.floor(Math.random() * 1000);
+  const port = await freePort();
   const baseUrl = `http://localhost:${port}`;
   const output = [];
 
