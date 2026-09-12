@@ -2,8 +2,11 @@
  * HHTTPS Email Module
  *
  * Two purposes:
- *   1. User email verification — legacy flow during role declaration.
+ *   1. User email verification — the MANDATORY first step of every sign-in
+ *      (Phase 8, email-anchored identity: the confirmed address is the
+ *      identity anchor; passkey/EUDI/GitHub are unlocked only afterwards).
  *      Function: sendVerificationEmail({ email, role, sessionId, baseUrl })
+ *      Checks:   verifyEmailCode(code, sessionId) / verifyEmailToken(rawToken)
  *
  *   2. Platform registration confirmation (Phase 3b).
  *      Function: sendPlatformRegistrationEmail({ to, platformName, homepageUrl,
@@ -16,10 +19,16 @@
  *
  * Transport modes:
  *   - SMTP (production) — via nodemailer (Strato, Brevo, Mailgun, ...)
- *   - sendmail fallback (system MTA)
- *   - Console (dev fallback) — prints to stdout if no SMTP configured
+ *   - sendmail fallback (system MTA, only if /usr/sbin/sendmail exists)
+ *   - Dev mode (EMAIL_DEV_MODE=1, never in production) — code/link in the API
+ *     response; otherwise the send fails closed (D8).
  *
- * Zero personal data storage. Token persisted as hash only, never the raw email.
+ * Data at rest: `email_verifications` holds the code and token as sha256 and
+ * the address as sha256 only. The PLAINTEXT address is kept elsewhere for a
+ * bounded time: as `email:<sessionId>` context (challenges, 15 min) until the
+ * code is confirmed, and in `identity_claims_cache` for up to 7 days so it can
+ * be handed to the platform the user signs in to (scope `email`). See
+ * docs/specs/email-anchored-identity/design.md, D5.
  */
 
 import crypto     from 'crypto';
@@ -29,6 +38,11 @@ import { emailVerifications } from './db.js';
 import { ROLES } from './roles.js';
 import { roleLabel } from './roles.i18n.js';
 import { normalizeCode, isValidCode } from './identity.js';
+
+// ─── Constants ─────────────────────────────────────────────────────────────
+// W-5: single source of truth for the validity of a verification mail (code,
+// magic-link token and the server-side e-mail context share it).
+export const EMAIL_VERIFICATION_TTL_MS = 15 * 60 * 1000;
 
 // ─── Config (from environment) ─────────────────────────────────────────────
 const SMTP_HOST = process.env.SMTP_HOST || null;
@@ -327,11 +341,13 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification 
     t.line
   );
 
-  // AK-26: truthful privacy note — the address is held only until it has been
-  // handed over to the platform the user signs in to (identity claims cache).
+  // AK-26 / S-8: truthful privacy note — the address is cached for at most
+  // 7 days (identity claims cache, D5) so it can be handed over to the
+  // platform the user signs in to; the copy on the authorization code is
+  // deleted at transfer.
   const footerNote =
-    `<strong style="color:${t.strong}">Privacy:</strong> your email address is held temporarily, only until it has been passed on to the platform you sign in to. The code expires automatically after 15 minutes. — ` +
-    `<strong style="color:${t.strong}">Datenschutz:</strong> Deine E-Mail-Adresse wird nur bis zur Übertragung an die Plattform, bei der du dich anmeldest, zwischengespeichert. Der Code verfällt automatisch nach 15 Minuten.`;
+    `<strong style="color:${t.strong}">Privacy:</strong> your email address is held temporarily — for up to 7 days, or until it has been passed on to the platform you sign in to. The code expires automatically after 15 minutes. — ` +
+    `<strong style="color:${t.strong}">Datenschutz:</strong> Deine E-Mail-Adresse wird nur vorübergehend zwischengespeichert — bis zu 7 Tage bzw. bis zur Übertragung an die Plattform, bei der du dich anmeldest. Der Code verfällt automatisch nach 15 Minuten.`;
 
   const html = emailShell({
     theme:     'light',
@@ -344,8 +360,8 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification 
   });
 
   const text = biText(
-    `HHTTPS — Email verification\n\nRole: ${textLabel}\nDomain: ${raw.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (15 min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held only until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
-    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${textLabel}\nDomain: ${raw.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur bis zur Übertragung an die Plattform, bei der du dich anmeldest, zwischengespeichert.\n\n— HHTTPS Project · hhttps.org`
+    `HHTTPS — Email verification\n\nRole: ${textLabel}\nDomain: ${raw.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (15 min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held temporarily — for up to 7 days, or until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
+    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${textLabel}\nDomain: ${raw.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur vorübergehend zwischengespeichert — bis zu 7 Tage bzw. bis zur Übertragung an die Plattform, bei der du dich anmeldest.\n\n— HHTTPS Project · hhttps.org`
   );
 
   const subject = `[HHTTPS] Verify email for role "${roleLabel(safeRole, 'en')}" / E-Mail-Verifikation`;
@@ -378,7 +394,7 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
     trustBonus: classification.trustBonus,
     category:   classification.category,
     sessionId,
-    ttlMs:      15 * 60 * 1000
+    ttlMs:      EMAIL_VERIFICATION_TTL_MS
   });
 
   const verifyUrl = `${base}/hhttps/email/verify?token=${rawToken}&session=${sessionId}`;
@@ -751,7 +767,8 @@ export async function verifyEmailToken(rawToken) {
 // the call to the SAME session that requested the code (defence in depth).
 export async function verifyEmailCode(code, sessionId) {
   // AK-23/24: tolerate spaces, tabs and dashes ("482 913", " 482913 "), then
-  // require exactly 6 digits. The hash is computed over the normalized code.
+  // require exactly 6 digits. Normalized ONCE here (W-28: isValidCode is a
+  // pure check); the hash is computed over the normalized code.
   const normalized = normalizeCode(code);
   if (!isValidCode(normalized)) {
     return { valid: false, error: 'Code must be 6 digits.' };

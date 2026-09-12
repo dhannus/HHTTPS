@@ -42,7 +42,7 @@ import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
 import {
   sendVerificationEmail, verifyEmailToken, verifyEmailCode, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail,
-  sendAdminPlatformNotification
+  sendAdminPlatformNotification, EMAIL_VERIFICATION_TTL_MS
 } from './email.js';
 import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
@@ -2677,7 +2677,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
 // pseudonym wish are NOT in email_verifications (sha256 only) — /email/send
 // parks them in a short-lived `email:<sessionId>` challenge row (AK-16 needs
 // the plaintext for the claims cache).
-const EMAIL_CONTEXT_TTL_MS = 900_000; // = verification-mail validity (15 min)
+const EMAIL_CONTEXT_TTL_MS = EMAIL_VERIFICATION_TTL_MS; // W-5: = verification-mail validity (15 min), single source in email.js
 const emailContextId = (sessionId) => `email:${sessionId}`;
 
 async function readEmailContext(sessionId) {

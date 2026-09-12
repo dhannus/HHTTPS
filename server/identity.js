@@ -61,9 +61,12 @@ export function normalizeCode(input) {
   return String(input).replace(/[\s-]/g, '');
 }
 
-/** AK-24: exactly 6 digits after normalization. */
+/**
+ * AK-24 / W-28: pure check — exactly 6 digits, nothing else. Does NOT
+ * normalize; callers run normalizeCode() once and pass the result.
+ */
 export function isValidCode(code) {
-  return /^\d{6}$/.test(normalizeCode(code));
+  return typeof code === 'string' && /^\d{6}$/.test(code);
 }
 
 const FLAG_METHODS = ['email', 'passkey', 'github', 'eudi'];

@@ -118,11 +118,15 @@ describe('normalizeCode / isValidCode (AK-23, AK-24)', () => {
     assert.equal(normalizeCode(undefined), '');
     assert.equal(normalizeCode(482913), '482913');
   });
-  test('valid codes', () => {
-    assert.equal(isValidCode('482 913'), true);
-    assert.equal(isValidCode(' 482913 '), true);
-    assert.equal(isValidCode('482-913'), true);
+  test('isValidCode is a pure ^\\d{6}$ check — the caller normalizes first (W-28)', () => {
     assert.equal(isValidCode('482913'), true);
+    assert.equal(isValidCode(normalizeCode('482 913')), true);
+    assert.equal(isValidCode(normalizeCode(' 482913 ')), true);
+    assert.equal(isValidCode(normalizeCode('482-913')), true);
+    // un-normalized input is NOT tolerated by the pure check itself
+    assert.equal(isValidCode('482 913'), false);
+    assert.equal(isValidCode(' 482913 '), false);
+    assert.equal(isValidCode('482-913'), false);
   });
   test('invalid codes', () => {
     assert.equal(isValidCode('48291'), false);
@@ -131,6 +135,7 @@ describe('normalizeCode / isValidCode (AK-23, AK-24)', () => {
     assert.equal(isValidCode(''), false);
     assert.equal(isValidCode(null), false);
     assert.equal(isValidCode(undefined), false);
+    assert.equal(isValidCode(482913), false, 'numbers are not accepted — normalizeCode() turns them into strings');
   });
 });
 
