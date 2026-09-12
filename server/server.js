@@ -48,7 +48,7 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym } from './identity.js';
+import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags } from './identity.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -666,6 +666,16 @@ async function issueAccessToken(payload) {
   return { token: tok, jti };
 }
 
+// D4 / AK-10..AK-13: email-first gate. Every other method (passkey, GitHub,
+// EUDI) and token issuance require a session whose email has been confirmed.
+function requireEmailVerified(session, res) {
+  if (!session?.emailVerified) {
+    res.status(403).json({ error: 'email_verification_required', detail: 'Verify your email first.' });
+    return false;
+  }
+  return true;
+}
+
 async function issueRefreshToken(userId, credId, role, surface = {}) {
   const jti = uuid();
   const tok = signToken({
@@ -676,7 +686,10 @@ async function issueRefreshToken(userId, credId, role, surface = {}) {
     // Nothing is persisted server-side (zero-PII) — the signature is the integrity.
     ...(Array.isArray(surface.verifiedMethods) ? { verified_methods: surface.verifiedMethods } : {}),
     ...(surface.trustScore != null ? { trustScore: surface.trustScore } : {}),
-    ...(surface.emailDomain ? { emailDomain: surface.emailDomain } : {})
+    ...(surface.emailDomain ? { emailDomain: surface.emailDomain } : {}),
+    // AK-9 / D3: the account pseudonym travels in the refresh token so a refreshed
+    // access token carries it without a session lookup.
+    ...(surface.pseudonym ? { pseudonym: surface.pseudonym } : {})
     // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
   }, { expiresIn: REFRESH_TTL });
   await db.refreshTokens.create({
@@ -2271,8 +2284,21 @@ app.get('/hhttps/roles', (req, res) => {
 
 app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => {
   try {
-    const userId    = req.body.userId || uuid();
-    const userIdBuf = Buffer.from(userId);
+    // D4 / AK-4 / AK-10: a passkey is registered ONLY on an email-verified
+    // session, and the WebAuthn user handle is the session's stable userId.
+    // The legacy anonymous path (`userId` in the body or a fresh uuid) is gone:
+    // without `sessionId` the request is refused; with `sessionId` the body
+    // `userId` is ignored.
+    const { sessionId } = req.body || {};
+    let session = null;
+    if (sessionId) {
+      session = await db.sessions.get(sessionId);
+      if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    }
+    if (!requireEmailVerified(session, res)) return;
+
+    const userId    = session.userId;
+    const userIdBuf = Buffer.from(userId);   // user handle == stable userId (AK-4)
     const existingCreds = await db.credentials.findByUserId(userId);
 
     // CRITICAL: convert credentialId from base64url string to Buffer for the library
@@ -2284,7 +2310,8 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
 
     const options = await generateRegistrationOptions({
       rpName: RP_NAME, rpID: RP_ID, userID: userIdBuf,
-      userName: `human-${userId.slice(0, 8)}`, userDisplayName: 'iamhmn Nutzer',
+      userName: session.pseudonym || `human-${userId.slice(0, 8)}`,
+      userDisplayName: session.pseudonym || `human-${userId.slice(0, 8)}`,
       attestationType: 'none',
       excludeCredentials,
       // CRITICAL: NO authenticatorAttachment — allows YubiKey, smartphone, platform auth
@@ -2432,6 +2459,9 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       trustScore:   50,
       ...priorMerge,
     }, 1800_000); // 30 min
+    // sessions.create does not write `pseudonym` — persist the merged account
+    // pseudonym explicitly (D3: it travels anchor → session → token).
+    if (priorMerge.pseudonym) await db.sessions.update(sid, { pseudonym: priorMerge.pseudonym });
     await db.stats.increment('verifications');
 
     res.json({
@@ -2465,6 +2495,7 @@ app.post('/hhttps/token/refresh', async (req, res) => {
     const methods    = Array.isArray(d.verified_methods) ? d.verified_methods : [];
     const trustScore = (typeof d.trustScore === 'number') ? d.trustScore : 20;  // email floor
     const domainVal  = d.emailDomain || null;
+    const pseudonym  = d.pseudonym || null;
 
     const { token: newAccess } = await issueAccessToken({
       userId:     stored.user_id,
@@ -2475,8 +2506,10 @@ app.post('/hhttps/token/refresh', async (req, res) => {
       method:     'verification-methods',
       deviceType: cred?.deviceType || 'unknown',
       verified_methods:    methods,
+      ...methodFlags(methods),          // AK-9 / AK-18: email/passkey/github/eudi_verified
       verification_status: 'verified',
-      ...(domainVal ? { domain_name: domainVal } : {})
+      ...(domainVal ? { domain_name: domainVal } : {}),
+      ...(pseudonym ? { pseudonym } : {})
     });
 
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
@@ -2811,6 +2844,7 @@ app.get('/hhttps/verify/github/start', async (req, res) => {
 
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).send('Invalid session.');
+  if (!requireEmailVerified(session, res)) return;   // AK-11: gate BEFORE the config check
 
   if (!isGithubConfigured()) {
     return res.status(503).json({
@@ -2900,13 +2934,16 @@ app.post('/hhttps/role/declare', async (req, res) => {
   const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body;
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
+  // AK-13 / D4: email is the mandatory method — passkey/GitHub/EUDI alone no longer suffice.
+  if (!requireEmailVerified(session, res)) return;
 
-  // Pseudonym is optional and human-readable. It travels two paths:
-  //   1) via the email-first flow's session-merge (already on the session), or
-  //   2) directly in verificationData when the user typed it on the role page.
-  // We sanitize aggressively (letters/digits/dash/dot/space + German umlauts,
-  // max 32 chars) and prefer the request-fresh value over the session copy.
-  let pseudonym = (verificationData && verificationData.pseudonym) || session.pseudonym || null;
+  // Pseudonym is human-readable and travels two paths:
+  //   1) the account pseudonym bound to the session at email confirmation (D3), or
+  //   2) legacy: directly in verificationData when the user typed it on the role page.
+  // The account pseudonym wins (AK-8: stable per account); the typed value is
+  // only a fallback. Sanitized aggressively (letters/digits/dash/dot/space +
+  // German umlauts, max 32 chars).
+  let pseudonym = session.pseudonym || (verificationData && verificationData.pseudonym) || null;
   if (pseudonym) {
     pseudonym = String(pseudonym)
       .replace(/[^\w\-. äöüÄÖÜß]/gu, '')
@@ -2979,13 +3016,14 @@ app.post('/hhttps/role/declare', async (req, res) => {
     method:     'verification-methods',
     deviceType: session.deviceType,
     verified_methods:    v.methods,
+    ...methodFlags(v.methods),          // AK-9 / AK-18: email/passkey/github/eudi_verified
     verification_status: 'verified',
     ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
     ...(pseudonym ? { pseudonym } : {}),
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
-    verifiedMethods: v.methods, trustScore, emailDomain: session.emailDomain || null
+    verifiedMethods: v.methods, trustScore, emailDomain: session.emailDomain || null, pseudonym
   });
 
   // Zero-PII: role / methods / trust are NOT persisted against the user. The
@@ -3381,6 +3419,8 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
     if (!session?.verified) {
       return res.status(404).json({ error: 'Unknown or expired session.' });
     }
+    // AK-12 / D4: valid assertion, but no token without a confirmed email.
+    if (!requireEmailVerified(session, res)) return;
 
     // eID lives in the TOKEN, not the session (like age) — no session column and
     // no DB migration. The +40 rides in the reissued access + refresh tokens.
@@ -3423,14 +3463,17 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       method:     'verification-methods',
       deviceType: session.deviceType,
       verified_methods:    v.methods,
+      ...methodFlags(v.methods),        // AK-9 / AK-18: email/passkey/github/eudi_verified
       verification_status: 'verified',
       eudi_verified:       true,
       ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
+      ...(session.pseudonym ? { pseudonym: session.pseudonym } : {}),
       ...ageCarry
     });
     // Reissue the refresh token so the +40 survives the 1h access-token expiry.
     const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
-      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null
+      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null,
+      pseudonym: session.pseudonym || null
     });
 
     // NOTE: server-to-server call — this Set-Cookie reaches the eudi-verifier, not
