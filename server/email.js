@@ -120,6 +120,14 @@ function roleDisplay(role) {
 }
 
 // ─── Transport factory ─────────────────────────────────────────────────────
+// F-3 (S-4): surfacing the verification code in the API response is a DEV
+// convenience only. It must be opted in explicitly and is never available in
+// production — otherwise a missing MTA would silently turn email verification
+// into a no-op.
+export function emailDevModeAllowed(env = process.env) {
+  return env.EMAIL_DEV_MODE === '1' && env.NODE_ENV !== 'production';
+}
+
 function createTransport() {
   if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
     return nodemailer.createTransport({
@@ -368,6 +376,11 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
 
   const transporter = createTransport();
   if (!transporter) {
+    if (!emailDevModeAllowed()) {
+      const err = new Error('email_transport_unavailable');
+      err.code = 'email_transport_unavailable';
+      throw err;
+    }
     devLog('User email verification', email, verifyUrl, { role, classification, code: code6 });
     return { sent: false, devMode: true, verifyUrl, code: code6, classification, rawToken };
   }

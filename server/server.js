@@ -2794,7 +2794,11 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
       if (result.verifyUrl) resp.devVerifyUrl = result.verifyUrl;
     }
     res.json(resp);
-  } catch (err) { res.status(500).json({ error: 'E-Mail-Fehler: ' + err.message }); }
+  } catch (err) {
+    // F-3 (S-4): no transport and no explicit dev mode → fail closed, no code.
+    if (err.code === 'email_transport_unavailable') return res.status(503).json({ error: 'email_transport_unavailable' });
+    res.status(500).json({ error: 'E-Mail-Fehler: ' + err.message });
+  }
 });
 
 app.get('/hhttps/email/verify', async (req, res) => {

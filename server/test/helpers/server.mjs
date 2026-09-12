@@ -30,6 +30,7 @@ export function testEnv(port, overrides = {}) {
     BASE_URL: `http://localhost:${port}`,
     HHTTPS_VERIFICATION_PEPPER: 'test-pepper',
     EUDI_VERIFIER_SECRET: 'test-secret',
+    EMAIL_DEV_MODE: '1', // F-3: dev mode (code in the API response) is opt-in
     ...overrides,
   };
 }

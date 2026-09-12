@@ -142,3 +142,20 @@ test('F-1 sanity: the happy path (single send + correct code) still binds', { sk
   track(A, c.json.userId);
   assert.equal(await anchorCount(A), 1);
 });
+
+// ─── F-3 (S-4): no fail-open dev mode without EMAIL_DEV_MODE=1 ──────────────
+
+test('F-3/S-4: without EMAIL_DEV_MODE the code is never returned — 503 email_transport_unavailable', { skip }, async (t) => {
+  // Separate boot: no SMTP, no sendmail binary in this environment, dev mode NOT enabled.
+  const prod = await startServer({ env: { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', EMAIL_DEV_MODE: '' } });
+  t.after(() => prod.stop());
+  const r = await prod.api('/hhttps/session/start', { method: 'POST', body: {} });
+  const sessionId = r.json.sessionId;
+  const A = freshEmail('f3');
+  const s = await prod.api('/hhttps/email/send', { method: 'POST', body: { sessionId, email: A } });
+  assert.equal(s.status, 503, s.text);
+  assert.equal(s.json.error, 'email_transport_unavailable');
+  assert.equal(s.json.devCode, undefined, 'no devCode');
+  assert.equal(s.json.devToken, undefined, 'no devToken');
+  assert.equal(s.json.devMode, undefined, 'no devMode flag');
+});
