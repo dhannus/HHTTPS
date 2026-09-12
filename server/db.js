@@ -146,14 +146,16 @@ export const challenges = {
 
 export const sessions = {
   async create(sessionId, data, ttlMs = 600_000) {
+    // Phase 8 (P-4/W-4): `pseudonym` is written on INSERT (D3: it travels
+    // anchor → session → token) — no follow-up UPDATE needed.
     await q(
       `INSERT INTO sessions (
         session_id, user_id, credential_id, device_type, backed_up,
-        verified, trust_score, expires_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + ($8 || ' milliseconds')::interval)`,
+        verified, trust_score, pseudonym, expires_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + ($9 || ' milliseconds')::interval)`,
       [
         sessionId, data.userId, data.credentialId, data.deviceType, data.backedUp,
-        data.verified !== false, data.trustScore || 60, ttlMs
+        data.verified !== false, data.trustScore || 60, data.pseudonym || null, ttlMs
       ]
     );
   },

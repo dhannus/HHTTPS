@@ -2516,11 +2516,8 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       // We seed with 50 — the human-confirmed threshold (email+passkey) — so a
       // caller that reads the session before /role/declare sees a sane number.
       trustScore:   50,
-      ...priorMerge,
+      ...priorMerge,   // incl. the merged account pseudonym (D3) — written on INSERT
     }, 1800_000); // 30 min
-    // sessions.create does not write `pseudonym` — persist the merged account
-    // pseudonym explicitly (D3: it travels anchor → session → token).
-    if (priorMerge.pseudonym) await db.sessions.update(sid, { pseudonym: priorMerge.pseudonym });
     await db.stats.increment('verifications');
 
     res.json({
@@ -2632,9 +2629,8 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
       backedUp:     false,
       verified:     true,   // session gilt als verified für /hhttps/email/send
       trustScore:   0,      // email pending — 0 until the email is confirmed (then 20)
+      pseudonym:    cleanPseudo, // T4/D3: session carries the wish
     }, 900_000); // 15 min — ausreichend für E-Mail-Zustellung und Bestätigung
-
-    if (cleanPseudo) await db.sessions.update(sid, { pseudonym: cleanPseudo }); // T4/D3: session carries the wish
 
     await db.stats.increment('verifications');
 
@@ -2676,9 +2672,8 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
       backedUp:     false,
       verified:     true,        // "session exists" — NOT a trust statement (trust stays 0)
       trustScore:   0,
+      pseudonym:    cleanPseudo, // T4/D3: session carries the wish
     }, 900_000); // 15 min
-
-    if (cleanPseudo) await db.sessions.update(sid, { pseudonym: cleanPseudo }); // T4/D3: session carries the wish
 
     await db.stats.increment('verifications');
 
