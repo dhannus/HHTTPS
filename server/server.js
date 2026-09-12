@@ -4789,6 +4789,14 @@ async function main() {
     process.exit(1);
   }
 
+  // 2b. F-7 (K-6): the phase-8 schema must be in place BEFORE we listen.
+  try {
+    await db.ensurePhase8Schema();
+  } catch (e) {
+    console.error('\n❌ Phase-8 schema migration failed:', e.message, '\n');
+    process.exit(1);
+  }
+
 mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
 mountPopVerify(app, { db, verifyToken, RP_ID, BASE_URL }); // POP-VERIFY
   app.listen(PORT, () => {

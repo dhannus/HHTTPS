@@ -383,28 +383,55 @@ ensureCodeColumn().catch(() => {});
 // ─── PHASE 8: EMAIL-ANCHORED IDENTITY ─────────────────────────────────────────
 //
 // Schema: sql/migration-phase-8-email-anchored-identity.sql is the single
-// reference (for operators AND for the boot-time migration). Instead of
-// duplicating the statements here, the file is read and executed as ONE
-// multi-statement query. pg sends a query without parameters over the simple
-// protocol, which allows several statements (including the DO $$ block) in one
-// round trip. Every statement in the file is idempotent, so re-running on each
-// boot is safe. Memoised: returns the same promise on repeated calls.
+// reference (for operators AND for the boot-time migration). The file has two
+// sections separated by the marker below: the BOOT-DDL section (tables /
+// columns / indexes, idempotent) and the OPERATOR section (data update of
+// oauth_clients.allowed_scopes + grants). F-7 (K-6 / P-2): the boot runs ONLY
+// the DDL section, only when an applied-check shows it is missing, and main()
+// awaits it before listening. The operator section is never run automatically.
+const PHASE8_MIGRATION_FILE = 'migration-phase-8-email-anchored-identity.sql';
+const PHASE8_BOOT_DDL_END   = '-- >>> BOOT-DDL END';
+
+/** The DDL-only section of the phase-8 migration file (everything above the marker). */
+export function phase8BootDdl() {
+  const file = fs.readFileSync(path.join(SQL_DIR, PHASE8_MIGRATION_FILE), 'utf8');
+  const idx = file.indexOf(PHASE8_BOOT_DDL_END);
+  if (idx < 0) throw new Error(`[db] ${PHASE8_MIGRATION_FILE}: marker "${PHASE8_BOOT_DDL_END}" not found`);
+  return file.slice(0, idx);
+}
+
+/** true when the phase-8 DDL is already present (last column added + cache table). */
+export async function phase8SchemaApplied() {
+  const { rows } = await q(
+    `SELECT
+       EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'authorization_codes' AND column_name = 'verified_methods') AS col,
+       to_regclass('identity_claims_cache') IS NOT NULL AS tbl`
+  );
+  return rows[0]?.col === true && rows[0]?.tbl === true;
+}
+
+// Memoised: returns the same promise on repeated calls; a failure clears the
+// memo so an explicit retry is possible. NOT started on import — the caller
+// (server.js main) awaits it explicitly.
 let _phase8Ready = null;
 export function ensurePhase8Schema() {
   if (_phase8Ready) return _phase8Ready;
   _phase8Ready = (async () => {
     try {
-      const file = path.join(SQL_DIR, 'migration-phase-8-email-anchored-identity.sql');
-      await q(fs.readFileSync(file, 'utf8'));
+      if (await phase8SchemaApplied()) return;
+      // pg sends a parameter-less query over the simple protocol, which allows
+      // several statements in one round trip.
+      await q(phase8BootDdl());
+      console.log('[db] phase-8 schema applied (DDL only — run the OPERATOR section of the migration file for the data update)');
     } catch (e) {
       console.error('[db] ensurePhase8Schema:', e.message);
-      _phase8Ready = null; // allow a retry on the next explicit call
+      _phase8Ready = null;
       throw e;
     }
   })();
   return _phase8Ready;
 }
-ensurePhase8Schema().catch(() => {});
 
 // identity_anchors: HMAC(email) → stable user_id + pseudonym (D1/D2/D3)
 export const identityAnchors = {

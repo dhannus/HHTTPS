@@ -132,25 +132,52 @@ test('authCodes.claim without the new fields yields defaults', { skip }, async (
   assert.deepEqual(claimed.verified_methods, []);
 });
 
-test('migration SQL is idempotent and appends "email" to allowed_scopes', { skip }, async (t) => {
-  const clientId = 'test-t3-' + rnd();
-  t.after(() => sql('DELETE FROM oauth_clients WHERE client_id = $1', [clientId]));
-  await sql(
-    `INSERT INTO oauth_clients (client_id, name, redirect_uris, allowed_scopes)
-     VALUES ($1, 'T3 legacy client', '[]', '["openid","role"]')`, [clientId]);
+// F-7 (K-6 / P-2 / W-11): the boot path runs ONLY the DDL section of the
+// migration file (guarded by an applied-check); the data update
+// (allowed_scopes += email) and the grants stay an explicit operator step.
+test('F-7: boot DDL section contains no data update / grants and is idempotent', { skip }, async () => {
+  const ddl = db.phase8BootDdl();
+  const statements = ddl.replace(/--[^\n]*/g, ''); // statements only, no comments
+  assert.ok(/CREATE TABLE IF NOT EXISTS identity_anchors/.test(ddl), 'DDL: identity_anchors');
+  assert.ok(/CREATE TABLE IF NOT EXISTS identity_claims_cache/.test(ddl), 'DDL: identity_claims_cache');
+  assert.ok(/ALTER TABLE authorization_codes/.test(ddl), 'DDL: authorization_codes columns');
+  assert.ok(!/UPDATE\s+oauth_clients/i.test(statements), 'boot DDL must not update oauth_clients');
+  assert.ok(!/GRANT|OWNER TO/i.test(statements), 'boot DDL must not contain grants');
 
-  const migration = fs.readFileSync(MIGRATION, 'utf8');
-  await sql(migration);
-  await sql(migration); // safe to re-run
+  await sql(ddl);
+  await sql(ddl); // safe to re-run
+  assert.equal(await db.phase8SchemaApplied(), true);
 
-  const [row] = await sql('SELECT allowed_scopes FROM oauth_clients WHERE client_id = $1', [clientId]);
-  assert.deepEqual(JSON.parse(row.allowed_scopes), ['openid', 'role', 'email']);
-
-  // Columns/tables exist after the migration.
+  // Columns/tables exist after the DDL.
   const cols = await sql(
     `SELECT table_name, column_name FROM information_schema.columns
      WHERE (table_name = 'sessions' AND column_name = 'pseudonym')
         OR (table_name = 'authorization_codes' AND column_name IN ('email','pseudonym','verified_methods'))
         OR (table_name IN ('identity_anchors','identity_claims_cache') AND column_name = 'user_id')`);
   assert.equal(cols.length, 6, JSON.stringify(cols));
+});
+
+test('F-7: the operator data-update block appends "email" to allowed_scopes (checked on a test client only)', { skip }, async (t) => {
+  const clientId = 'test-t3-' + rnd();
+  t.after(() => sql('DELETE FROM oauth_clients WHERE client_id = $1', [clientId]));
+  await sql(
+    `INSERT INTO oauth_clients (client_id, name, redirect_uris, allowed_scopes)
+     VALUES ($1, 'T3 legacy client', '[]', '["openid","role"]')`, [clientId]);
+
+  // The boot DDL leaves the client untouched …
+  await db.ensurePhase8Schema();
+  let [row] = await sql('SELECT allowed_scopes FROM oauth_clients WHERE client_id = $1', [clientId]);
+  assert.deepEqual(JSON.parse(row.allowed_scopes), ['openid', 'role']);
+
+  // … the operator section's UPDATE (from the file, scoped to this client) does the job.
+  const file = fs.readFileSync(MIGRATION, 'utf8');
+  const operator = file.split('-- >>> BOOT-DDL END')[1];
+  assert.ok(operator, 'marker "-- >>> BOOT-DDL END" splits the file');
+  const m = operator.match(/UPDATE\s+oauth_clients[\s\S]*?;/i);
+  assert.ok(m, 'operator section contains the UPDATE oauth_clients statement');
+  const scoped = m[0].replace(/WHERE\s+NOT/i, 'WHERE client_id = $1 AND NOT');
+  await sql(scoped, [clientId]);
+  await sql(scoped, [clientId]); // idempotent
+  [row] = await sql('SELECT allowed_scopes FROM oauth_clients WHERE client_id = $1', [clientId]);
+  assert.deepEqual(JSON.parse(row.allowed_scopes), ['openid', 'role', 'email']);
 });

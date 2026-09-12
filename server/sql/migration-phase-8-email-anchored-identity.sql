@@ -19,14 +19,25 @@
 --   - oauth_clients.allowed_scopes += "email" for existing clients.
 --
 -- Idempotent: safe to run multiple times (IF NOT EXISTS / WHERE NOT ...).
--- The server also executes this file on boot (db.js: ensurePhase8Schema), so
--- a manual run is only needed for operators who want to migrate ahead of a
--- deploy or who run the app user without DDL rights.
+--
+-- The file has TWO sections (F-7 / K-6, P-2):
+--   1. BOOT-DDL  — tables / columns / indexes only. The server runs this
+--                  section on boot (db.js: ensurePhase8Schema) when an
+--                  applied-check shows the schema is missing, and awaits it
+--                  before listening. Nothing below the marker is ever run
+--                  automatically.
+--   2. OPERATOR  — the data update (allowed_scopes += "email") and the
+--                  grants. Run this section deliberately, once, as part of
+--                  the deploy (or remove the UPDATE if you do not want every
+--                  existing client to get scope `email`).
 --
 -- IMPORTANT: run this migration AS THE APP USER, not postgres:
 --   PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
 --     -f server/sql/migration-phase-8-email-anchored-identity.sql
 -- ════════════════════════════════════════════════════════════════════════════
+
+-- ════════════════════════════ 1. BOOT-DDL ══════════════════════════════════
+-- (executed by db.js on boot when not yet applied — DDL only, idempotent)
 
 -- ─── Identity anchors (email hash → stable user id) ────────────────────────
 CREATE TABLE IF NOT EXISTS identity_anchors (
@@ -57,6 +68,13 @@ ALTER TABLE authorization_codes
   ADD COLUMN IF NOT EXISTS email            TEXT,  -- only when scope `email`; NULLed on claim
   ADD COLUMN IF NOT EXISTS pseudonym        TEXT,
   ADD COLUMN IF NOT EXISTS verified_methods TEXT;  -- JSON array as text (like `scopes`)
+
+-- >>> BOOT-DDL END
+-- Everything below this marker is NEVER executed by the server. db.js reads
+-- the file only up to the marker (see phase8BootDdl in db.js).
+
+-- ════════════════════════════ 2. OPERATOR ══════════════════════════════════
+-- (run once, explicitly, by the operator — data update + grants)
 
 -- ─── Scope `email` for existing clients ────────────────────────────────────
 -- Deliberate assumption from requirements.md §6: already registered clients
