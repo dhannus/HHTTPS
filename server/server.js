@@ -48,7 +48,7 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags } from './identity.js';
+import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, resolvePasskeySession } from './identity.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -2479,33 +2479,23 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     // the new passkey session so none of those confirmations are lost, then
     // delete the old session so the user keeps exactly ONE active session.
     // `emailSessionId` is kept as a backward-compatible alias for `priorSessionId`.
-    let priorMerge = {};
+    // F-2 (K-3/S-2): the credential decides the userId; the userId parked by
+    // auth/start (request body) must match it, and a prior session is merged
+    // only when it belongs to the same user (resolvePasskeySession, identity.js).
     const priorId = priorSessionId || emailSessionId;
-    if (priorId) {
-      const prior = await db.sessions.get(priorId);
-      if (prior) {
-        priorMerge = {
-          ...(prior.emailVerified ? {
-            emailVerified:   true,
-            emailDomain:     prior.emailDomain     || null,
-            emailLevel:      prior.emailLevel      || null,
-            emailTrustBonus: prior.emailTrustBonus || 0,
-          } : {}),
-          ...(prior.githubVerified ? { githubVerified: true } : {}),
-          ...(prior.eudiVerified   ? { eudiVerified:   true } : {}),
-          ...(prior.pseudonym      ? { pseudonym: prior.pseudonym } : {}),
-        };
-        if (Object.keys(priorMerge).length) {
-          try { await db.sessions.delete(priorId); } catch (e) {}
-        }
-      }
+    const prior = priorId ? await db.sessions.get(priorId) : null;
+    const resolved = resolvePasskeySession({ storedUserId: stored.userId, cred, prior });
+    if (resolved.error) return res.status(401).json({ error: resolved.error });
+    const { priorMerge } = resolved;
+    if (prior && Object.keys(priorMerge).length) {
+      try { await db.sessions.delete(priorId); } catch (e) {}
     }
 
     // Create the (merged) verified session. TTL 30 min — long enough for the
     // user to think about pseudonym / role selection / age group.
     const sid = uuid();
     await db.sessions.create(sid, {
-      userId:       stored.userId || cred.userId,
+      userId:       resolved.userId,
       credentialId: cred.credentialId,
       deviceType:   cred.deviceType,
       backedUp:     cred.backedUp,

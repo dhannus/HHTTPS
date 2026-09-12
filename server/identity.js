@@ -64,3 +64,34 @@ export function methodFlags(methods) {
   for (const m of FLAG_METHODS) flags[`${m}_verified`] = list.includes(m);
   return flags;
 }
+
+/**
+ * F-2 (K-3/S-2): decide the identity of a freshly authenticated passkey session.
+ * The credential row is the ONLY source of truth for the userId — the userId
+ * parked by /webauthn/auth/start comes from the request body and may be an
+ * attacker's value. A prior session is merged only when it belongs to the
+ * same user; a foreign prior session is ignored (never merged, never deleted).
+ *
+ * @returns {{ userId: string, priorMerge: object } | { error: 'credential_user_mismatch' }}
+ */
+export function resolvePasskeySession({ storedUserId, cred, prior }) {
+  const userId = cred?.userId;
+  if (!userId) return { error: 'credential_user_mismatch' };
+  if (storedUserId && storedUserId !== userId) return { error: 'credential_user_mismatch' };
+
+  let priorMerge = {};
+  if (prior && prior.userId === userId) {
+    priorMerge = {
+      ...(prior.emailVerified ? {
+        emailVerified:   true,
+        emailDomain:     prior.emailDomain     || null,
+        emailLevel:      prior.emailLevel      || null,
+        emailTrustBonus: prior.emailTrustBonus || 0,
+      } : {}),
+      ...(prior.githubVerified ? { githubVerified: true } : {}),
+      ...(prior.eudiVerified   ? { eudiVerified:   true } : {}),
+      ...(prior.pseudonym      ? { pseudonym: prior.pseudonym } : {}),
+    };
+  }
+  return { userId, priorMerge };
+}

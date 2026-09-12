@@ -13,6 +13,7 @@ import {
   normalizeCode,
   isValidCode,
   methodFlags,
+  resolvePasskeySession,
 } from '../../identity.js';
 
 describe('normalizeEmail (AK-2)', () => {
@@ -160,5 +161,39 @@ describe('methodFlags (AK-18)', () => {
     assert.deepEqual(methodFlags(undefined), allFalse);
     assert.deepEqual(methodFlags('email'), allFalse);
     assert.deepEqual(methodFlags([]), allFalse);
+  });
+});
+
+// F-2 (K-3/S-2): the passkey session is bound to the credential's userId, never
+// to the caller-supplied userId from /webauthn/auth/start.
+describe('resolvePasskeySession (F-2 / K-3)', () => {
+  const cred = { userId: 'u-cred' };
+  test('userId is always cred.userId', () => {
+    const r = resolvePasskeySession({ storedUserId: null, cred, prior: null });
+    assert.deepEqual(r, { userId: 'u-cred', priorMerge: {} });
+    const r2 = resolvePasskeySession({ storedUserId: 'u-cred', cred, prior: null });
+    assert.equal(r2.userId, 'u-cred');
+  });
+  test('stored (attacker) userId ≠ cred.userId → error credential_user_mismatch', () => {
+    const r = resolvePasskeySession({ storedUserId: 'u-victim', cred, prior: null });
+    assert.equal(r.error, 'credential_user_mismatch');
+    assert.equal(r.userId, undefined);
+  });
+  test('prior session merges only when prior.userId === cred.userId', () => {
+    const prior = { userId: 'u-cred', emailVerified: true, emailDomain: 'example.org', emailLevel: 'email-verified',
+                    emailTrustBonus: 0, githubVerified: true, pseudonym: 'anna' };
+    const r = resolvePasskeySession({ storedUserId: null, cred, prior });
+    assert.deepEqual(r.priorMerge, {
+      emailVerified: true, emailDomain: 'example.org', emailLevel: 'email-verified', emailTrustBonus: 0,
+      githubVerified: true, pseudonym: 'anna',
+    });
+  });
+  test('prior session of ANOTHER user is ignored (no merge, no error)', () => {
+    const prior = { userId: 'u-other', emailVerified: true, emailDomain: 'x', pseudonym: 'mallory' };
+    const r = resolvePasskeySession({ storedUserId: null, cred, prior });
+    assert.deepEqual(r, { userId: 'u-cred', priorMerge: {} });
+  });
+  test('credential without userId → error', () => {
+    assert.equal(resolvePasskeySession({ storedUserId: null, cred: {}, prior: null }).error, 'credential_user_mismatch');
   });
 });
