@@ -13,6 +13,7 @@ import {
   normalizeCode,
   isValidCode,
   methodFlags,
+  buildIdentityClaims,
   resolvePasskeySession,
   assertPepperConfigured,
 } from '../../identity.js';
@@ -130,6 +131,41 @@ describe('normalizeCode / isValidCode (AK-23, AK-24)', () => {
     assert.equal(isValidCode(''), false);
     assert.equal(isValidCode(null), false);
     assert.equal(isValidCode(undefined), false);
+  });
+});
+
+describe('buildIdentityClaims (AK-17/AK-18, W-2)', () => {
+  test('full bundle: methods, flags, preferred_username, email (scope email)', () => {
+    assert.deepEqual(
+      buildIdentityClaims({ methods: ['email', 'passkey'], pseudonym: 'Anna', email: 'anna@example.org', scopes: ['openid', 'email'] }),
+      {
+        verified_methods: ['email', 'passkey'],
+        email_verified: true, passkey_verified: true, github_verified: false, eudi_verified: false,
+        preferred_username: 'Anna',
+        email: 'anna@example.org',
+      });
+  });
+  test('without scope email the address is omitted; email_verified still follows the methods', () => {
+    const c = buildIdentityClaims({ methods: ['email'], pseudonym: 'Anna', email: 'anna@example.org', scopes: ['openid'] });
+    assert.equal(c.email, undefined);
+    assert.equal(c.email_verified, true);
+    assert.equal(c.preferred_username, 'Anna');
+  });
+  test('scope email but no cached address → no email claim, flag from methods only', () => {
+    const c = buildIdentityClaims({ methods: ['passkey'], pseudonym: null, email: null, scopes: ['openid', 'email'] });
+    assert.equal(c.email, undefined);
+    assert.equal(c.email_verified, false);
+    assert.equal('preferred_username' in c, false);
+  });
+  test('email present with scope email forces email_verified true (address is only cached after proof)', () => {
+    const c = buildIdentityClaims({ methods: [], pseudonym: null, email: 'a@b.c', scopes: ['email'] });
+    assert.equal(c.email, 'a@b.c');
+    assert.equal(c.email_verified, true);
+    assert.deepEqual(c.verified_methods, []);
+  });
+  test('tolerates non-array methods and missing scopes', () => {
+    const c = buildIdentityClaims({ methods: undefined, pseudonym: undefined, email: undefined, scopes: undefined });
+    assert.deepEqual(c, { verified_methods: [], email_verified: false, passkey_verified: false, github_verified: false, eudi_verified: false });
   });
 });
 

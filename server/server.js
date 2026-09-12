@@ -48,7 +48,7 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, resolvePasskeySession, assertPepperConfigured } from './identity.js';
+import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -1531,15 +1531,17 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
     // e-mail (scope `email`) and a pseudonym fallback. The token pseudonym
     // wins over the consent-page input.
     const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
+    // P-5: the cache is consulted only when it can contribute something —
+    // the plaintext address (scope `email`) or a pseudonym the token lacks.
     let cache = null;
-    if (!isMachine) {
+    if (!isMachine && (scopes.includes('email') || !d.pseudonym)) {
       try { cache = await db.identityClaimsCache.get(userId); }
       catch (e) { console.error('[OAUTH] claims cache read failed:', e.message); }
     }
-    const cleanPseudo = pseudonym
-      ? (String(pseudonym).replace(/[^\w\-. äöüÄÖÜß]/gu, '').slice(0, 32).trim() || null)
-      : null;
+    const cleanPseudo = sanitizePseudonym(pseudonym);
     const accountPseudonym = d.pseudonym || cache?.pseudonym || null;
+    // D3: the code row covers every case (token > cache > consent input);
+    // the former `pseudo:<code>` challenge detour is gone (W-7).
     const codePseudonym = accountPseudonym || cleanPseudo || null;
     const codeEmail = (scopes.includes('email') && cache?.email) ? cache.email : null;
 
@@ -1566,13 +1568,6 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
       verifiedMethods:    methods,
       ttlSec:             OAUTH_CODE_TTL
     });
-
-    // Legacy `pseudo:<code>` challenge — kept as fallback only when the token
-    // carries no account pseudonym (D3); otherwise the code row wins.
-    if (cleanPseudo && !accountPseudonym) {
-      try { await db.challenges.create('pseudo:' + code, cleanPseudo, null, 'pseudonym', 120000); }
-      catch (e) { console.error('[OAUTH] pseudonym bind failed:', e.message); }
-    }
 
     await db.oauthClients.touchLastUsed(client_id);
     await db.stats.increment('oauth_authorizations');
@@ -1641,14 +1636,10 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     }
     // Phase 8 (AK-18): identity claims travel inside the refresh JWT itself
     // (stateless — nothing is read from a per-user table on refresh).
-    const rMethods  = Array.isArray(rd.verified_methods) ? rd.verified_methods : [];
     const rScopes   = String(rd.scope || 'openid').split(' ').filter(Boolean);
-    const rIdentity = {
-      verified_methods: rMethods,
-      ...methodFlags(rMethods),
-      ...(rd.preferred_username ? { preferred_username: rd.preferred_username } : {}),
-      ...(rScopes.includes('email') && rd.email ? { email: rd.email, email_verified: true } : {})
-    };
+    const rIdentity = buildIdentityClaims({
+      methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes: rScopes
+    });
     const newRefresh = signToken({
       sub: 'oauth_refresh', jti: newJti, client_id,
       ouid: rd.ouid, scope: rd.scope || 'openid',
@@ -1751,29 +1742,15 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   const roleDef = ROLES[claimed.role] || ROLES.citizen;
   const vMethod = VERIFICATION_LEVELS[claimed.verification_method] || {};
 
-  let _preferredUsername = null;
-  try {
-    const _pr = await db.challenges.get('pseudo:' + code);
-    if (_pr && _pr.challenge) {
-      _preferredUsername = _pr.challenge;
-      await db.challenges.delete('pseudo:' + code);
-    }
-  } catch (e) { /* none bound */ }
-
-  // Phase 8 (AK-17/AK-18): identity claims from the code row. The code row's
-  // pseudonym (account property, D3) wins over the legacy challenge value;
-  // `email` only with scope `email` (the plaintext copy on the code row was
-  // wiped by claim() — transferred ⇒ deleted).
-  const methods   = Array.isArray(claimed.verified_methods) ? claimed.verified_methods : [];
-  const flags     = methodFlags(methods);
-  const preferred = claimed.pseudonym || _preferredUsername || null;
-  const identityClaims = {
-    verified_methods: methods,
-    ...flags,
-    ...(preferred ? { preferred_username: preferred } : {}),
-    ...(claimed.scopes.includes('email') && claimed.email
-        ? { email: claimed.email, email_verified: true } : {})
-  };
+  // Phase 8 (AK-17/AK-18): identity claims come from the code row alone
+  // (pseudonym = account property, D3); `email` only with scope `email` (the
+  // plaintext copy on the code row was wiped by claim() — transferred ⇒ deleted).
+  const identityClaims = buildIdentityClaims({
+    methods:   claimed.verified_methods,
+    pseudonym: claimed.pseudonym,
+    email:     claimed.email,
+    scopes:    claimed.scopes
+  });
 
   const accessToken = signToken({
     iss:        `https://${RP_ID}`,
@@ -1894,11 +1871,9 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
       iss: d.iss
     };
     // Phase 8 (AK-17/AK-18): stateless — everything comes from the access token.
-    const uMethods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
-    out.verified_methods = uMethods;
-    Object.assign(out, methodFlags(uMethods));
-    if (d.preferred_username) { out.preferred_username = d.preferred_username; }
-    if (scopes.includes('email') && d.email) { out.email = d.email; out.email_verified = true; }
+    Object.assign(out, buildIdentityClaims({
+      methods: d.verified_methods, pseudonym: d.preferred_username, email: d.email, scopes
+    }));
     if (scopes.includes('role')) {
       const roleDef = ROLES[d.role] || ROLES.citizen;
       out.role        = d.role;
@@ -2349,6 +2324,22 @@ app.get('/hhttps/roles', (req, res) => {
   });
 });
 
+// ─── Token surface (W-3) ─────────────────────────────────────────────────────
+// The method-neutral identity claims of an HHTTPS access token (AK-9 / AK-18):
+// verified_methods + the four *_verified flags, the domain value and the
+// account pseudonym (D3). Shared by /role/declare, /eid/upgrade and
+// /token/refresh so the three never drift apart.
+function tokenSurface(session, v, pseudonym = session?.pseudonym || null) {
+  const methods = Array.isArray(v?.methods) ? v.methods : [];
+  return {
+    verified_methods:    methods,
+    ...methodFlags(methods),          // email/passkey/github/eudi_verified
+    verification_status: 'verified',
+    ...(session?.emailDomain ? { domain_name: session.emailDomain } : {}),
+    ...(pseudonym ? { pseudonym } : {})
+  };
+}
+
 // ─── WebAuthn Registration ────────────────────────────────────────────────────
 
 app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => {
@@ -2561,11 +2552,7 @@ app.post('/hhttps/token/refresh', async (req, res) => {
       trustScore,
       method:     'verification-methods',
       deviceType: cred?.deviceType || 'unknown',
-      verified_methods:    methods,
-      ...methodFlags(methods),          // AK-9 / AK-18: email/passkey/github/eudi_verified
-      verification_status: 'verified',
-      ...(domainVal ? { domain_name: domainVal } : {}),
-      ...(pseudonym ? { pseudonym } : {})
+      ...tokenSurface({ emailDomain: domainVal }, { methods }, pseudonym)
     });
 
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
@@ -2609,13 +2596,7 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
   try {
     const { pseudonym } = req.body || {};
 
-    // Pseudonym: max 32 Zeichen, nur sichere Zeichen
-    const cleanPseudo = pseudonym
-      ? String(pseudonym)
-          .replace(/[^\w\-. äöüÄÖÜß]/gu, '')
-          .slice(0, 32)
-          .trim() || null
-      : null;
+    const cleanPseudo = sanitizePseudonym(pseudonym); // AK-6: max 32 chars, safe charset
 
     const userId = uuid();
     const sid    = uuid();
@@ -2658,9 +2639,7 @@ app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
 app.post('/hhttps/session/start', limit.email, async (req, res) => {
   try {
     const { pseudonym } = req.body || {};
-    const cleanPseudo = pseudonym
-      ? String(pseudonym).replace(/[^\w\-. äöüÄÖÜß]/gu, '').slice(0, 32).trim() || null
-      : null;
+    const cleanPseudo = sanitizePseudonym(pseudonym); // AK-6: max 32 chars, safe charset
 
     const userId = uuid();
     const sid    = uuid();
@@ -2769,12 +2748,17 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
     eudi:        !!session.eudiVerified
   });
 
-  await db.identityClaimsCache.upsert({
-    userId:          anchor.userId,
-    email:           normalizeEmail(email),
-    pseudonym:       anchor.pseudonym,
-    verifiedMethods: v.methods,
-  });
+  // P-3: the cache upsert and the removal of the consumed e-mail context are
+  // independent writes — run them in parallel (one roundtrip less).
+  await Promise.all([
+    db.identityClaimsCache.upsert({
+      userId:          anchor.userId,
+      email:           normalizeEmail(email),
+      pseudonym:       anchor.pseudonym,
+      verifiedMethods: v.methods,
+    }),
+    db.challenges.delete(emailContextId(sessionId)),
+  ]);
 
   return { userId: anchor.userId, pseudonym: anchor.pseudonym, created: anchor.created, methods: v.methods, trust: v.trust };
 }
@@ -2849,7 +2833,6 @@ app.get('/hhttps/email/verify', async (req, res) => {
     bound = await bindSessionToEmailAnchor({
       session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
     });
-    await db.challenges.delete(emailContextId(sessionId));
   } catch (e) {
     if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
     console.error('[email/verify] anchor bind failed:', e.message);
@@ -2899,7 +2882,6 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     bound = await bindSessionToEmailAnchor({
       session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
     });
-    await db.challenges.delete(emailContextId(sessionId));
   } catch (e) {
     if (e.status === 409) return res.status(409).json({ error: e.code });
     console.error('[email/confirm-code] anchor bind failed:', e.message);
@@ -3039,15 +3021,9 @@ app.post('/hhttps/role/declare', async (req, res) => {
   //   1) the account pseudonym bound to the session at email confirmation (D3), or
   //   2) legacy: directly in verificationData when the user typed it on the role page.
   // The account pseudonym wins (AK-8: stable per account); the typed value is
-  // only a fallback. Sanitized aggressively (letters/digits/dash/dot/space +
-  // German umlauts, max 32 chars).
-  let pseudonym = session.pseudonym || (verificationData && verificationData.pseudonym) || null;
-  if (pseudonym) {
-    pseudonym = String(pseudonym)
-      .replace(/[^\w\-. äöüÄÖÜß]/gu, '')
-      .slice(0, 32)
-      .trim() || null;
-  }
+  // only a fallback. Sanitized via sanitizePseudonym (AK-6: letters/digits/
+  // dash/dot/space + German umlauts, max 32 chars).
+  const pseudonym = sanitizePseudonym(session.pseudonym || (verificationData && verificationData.pseudonym) || null);
 
   // v0.5: roles are no longer self-declared. The base identity is simply "human".
   // A professional role arrives ONLY via an EUDI (Q)EAA (handled by eudi-verifier),
@@ -3113,11 +3089,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
     trustScore,
     method:     'verification-methods',
     deviceType: session.deviceType,
-    verified_methods:    v.methods,
-    ...methodFlags(v.methods),          // AK-9 / AK-18: email/passkey/github/eudi_verified
-    verification_status: 'verified',
-    ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
-    ...(pseudonym ? { pseudonym } : {}),
+    ...tokenSurface(session, v, pseudonym),
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
@@ -3560,12 +3532,8 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       trustScore: v.trust,
       method:     'verification-methods',
       deviceType: session.deviceType,
-      verified_methods:    v.methods,
-      ...methodFlags(v.methods),        // AK-9 / AK-18: email/passkey/github/eudi_verified
-      verification_status: 'verified',
+      ...tokenSurface(session, v),
       eudi_verified:       true,
-      ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
-      ...(session.pseudonym ? { pseudonym: session.pseudonym } : {}),
       ...ageCarry
     });
     // Reissue the refresh token so the +40 survives the 1h access-token expiry.

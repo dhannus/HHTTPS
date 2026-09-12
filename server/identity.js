@@ -77,6 +77,27 @@ export function methodFlags(methods) {
 }
 
 /**
+ * AK-17 / AK-18 / W-2: the identity claim bundle handed to OAuth clients —
+ * used by the code grant, the refresh grant and /userinfo alike.
+ *   verified_methods  — the array as-is (non-array → [])
+ *   *_verified flags  — derived via methodFlags()
+ *   preferred_username — the account pseudonym (only when present)
+ *   email              — only with scope `email` AND a known address; an
+ *                        address is cached only after proof, so it also
+ *                        forces email_verified = true.
+ */
+export function buildIdentityClaims({ methods, pseudonym, email, scopes } = {}) {
+  const list = Array.isArray(methods) ? methods : [];
+  const scopeList = Array.isArray(scopes) ? scopes : [];
+  return {
+    verified_methods: list,
+    ...methodFlags(list),
+    ...(pseudonym ? { preferred_username: pseudonym } : {}),
+    ...(scopeList.includes('email') && email ? { email, email_verified: true } : {})
+  };
+}
+
+/**
  * F-2 (K-3/S-2): decide the identity of a freshly authenticated passkey session.
  * The credential row is the ONLY source of truth for the userId — the userId
  * parked by /webauthn/auth/start comes from the request body and may be an
