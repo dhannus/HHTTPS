@@ -839,6 +839,8 @@ app.get('/hhttps/info', async (req, res) => {
       'POST /hhttps/webauthn/auth/{start,finish}':     'Passkey authentication (returning users)',
       'POST /hhttps/role/declare':              'Issue HHTTPS token (requires a verified email; carries pseudonym + verified_methods)',
       'POST /hhttps/eid/upgrade':               'EUDI Wallet upgrade (requires a verified email)',
+      'POST /hhttps/age/upgrade':               'Age upgrade via eudi-verifier (internal; requires a verified email — AK-27)',
+      'POST /hhttps/age/direct':                'Session-less age bootstrap DISABLED: always 403 email_verification_required (AK-28)',
       'GET  /hhttps/verify/github/start':       'GitHub verification (requires a verified email)',
       'POST /hhttps/token/refresh':             'Refresh access token',
       'GET  /hhttps/oauth/authorize':           'OAuth/OIDC authorization (consent page)',
@@ -3225,6 +3227,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     if (!session?.verified) {
       return res.status(404).json({ error: 'Unknown or expired session.' });
     }
+    // AK-27: email-first gate — age proof only on a session with a verified email
+    // (same position as in /hhttps/eid/upgrade: after the assertion, before any token).
+    if (!requireEmailVerified(session, res)) return;
 
     // Map the disclosed EUDI booleans to the narrowest age band (Phase 3 bridge).
     const ageGroupId = ageGroupFromEudiClaims(ageOver);
@@ -3313,19 +3318,19 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
 // ─── DIRECT AV attestation acceptance (EU AV Profile) ────────────────────────
 //
 // INTERNAL endpoint (called by the eudi-verifier, HMAC-asserted like
-// /hhttps/age/upgrade). DIRECT acceptance of an EU AV Profile Proof of Age
-// attestation (doctype eu.europa.ec.av.1): NO prior session is required — the
-// validated attestation itself bootstraps a fresh HHTTPS identity. This is the
-// entry path for users of the EU Age Verification App ("mini wallet") who have
-// no HHTTPS account yet: verify age first, add methods (email/passkey/…) later.
+// /hhttps/age/upgrade). Historically this was the DIRECT acceptance of an EU AV
+// Profile Proof of Age attestation (doctype eu.europa.ec.av.1) WITHOUT a prior
+// session — the attestation bootstrapped a fresh HHTTPS identity.
+//
+// BOOTSTRAP DEACTIVATED (AK-28, email-anchored-identity, decision 2026-09-12):
+// email is the mandatory first method, so an age proof is only possible on a
+// session with a verified email — via /hhttps/age/upgrade. This handler still
+// validates the assertion (so the verifier contract is unchanged and forged
+// calls are still rejected with 401), but then answers 403
+// email_verification_required and creates NO session and NO token.
 //
 // The canonical DIFFERS from the upgrade canonical (direct:true instead of a
 // sessionId) so assertions cannot be replayed across the two endpoints.
-//
-// ZERO-PII: no attestation attribute beyond the age_over_NN booleans is read;
-// nothing about the person is stored — session row carries only opaque UUIDs,
-// and the verified age group rides in the SIGNED token (client-driven design).
-// Age is TRUST-NEUTRAL: verified_methods = ['age'], trust stays 0.
 //
 // Body: { ageOver, assertion, nonce, iat }
 //   assertion = HMAC-SHA256 over canonical { direct:true, ageOver, nonce, iat }
@@ -3372,79 +3377,12 @@ app.post('/hhttps/age/direct', async (req, res) => {
       }
     }
 
-    // At least one age boolean must actually be proven.
-    const proven = ['age_over_14', 'age_over_16', 'age_over_18']
-      .some(k => ageOver[k] === true);
-    if (!proven) {
-      return res.status(400).json({ error: 'No age claim proven in the attestation.' });
-    }
-
-    // Bootstrap a fresh method-neutral identity (mirrors /hhttps/session/start):
-    // the attestation is the FIRST thing this identity ever proved. The session
-    // lets the holder continue immediately (add email/passkey, declare a role).
-    const userId = uuid();
-    const sid    = uuid();
-    await db.sessions.create(sid, {
-      userId,
-      credentialId: null,
-      deviceType:   'pending',   // neutral: confirmed method(s) describe the identity
-      backedUp:     false,
-      verified:     true,        // "session exists" — NOT a trust statement (trust stays 0)
-      trustScore:   0,
-    }, 900_000); // 15 min
-
-    // Map the disclosed booleans to the narrowest band and issue the token with
-    // VERIFIED age claims. Age is TRUST-NEUTRAL (trust stays 0, no role).
-    const ageGroupId = ageGroupFromEudiClaims(ageOver);
-    const ag = AGE_GROUPS[ageGroupId];
-    const avMethod = AGE_VERIFICATION_METHODS['av-app'];
-
-    const v = computeVerification({ age: true });
-
-    const { token } = await issueAccessToken({
-      userId,
-      role:       null,
-      roleLabel:  null,
-      roleLevel:  null,
-      trustScore: v.trust,                          // 0 — age is trust-neutral by design
-      method:     'verification-methods',
-      deviceType: 'pending',
-      verified_methods:        v.methods,           // ['age']
-      verification_status:     'verified',
-      age_group:               ag.id,
-      age_verified:            true,                // cryptographically verified
-      age_verification_method: avMethod.id          // 'av-app'
-    });
-    const refresh = await issueRefreshToken(userId, null, null, {
-      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: null
-    });
-
-    // Server-to-server response: this Set-Cookie reaches the eudi-verifier, NOT
-    // the browser. The browser cookie is set by the /eudi/av/status handler,
-    // which adopts this token (same pattern as age/upgrade — see note there).
-    setIdentityCookie(res, token);
-
-    console.log(`[AGE-DIRECT] new identity ${userId.slice(0,8)}… → ${ag.id} (av-app, verified, no prior session)`);
-    await db.stats.increment('age_verifications');
-    fireEvent('age.verified', { ageGroup: ag.id, method: 'av-app', direct: true });
-
-    res.json({
-      hhttps: {
-        version: '0.5.0',
-        token,
-        refreshToken: refresh,
-        sessionId: sid,
-        userId,
-        trustScore: v.trust,
-        verifiedMethods: v.methods
-      },
-      ageGroup: {
-        id:       ag.id,
-        label:    ag.label,
-        verified: true,
-        method:   avMethod.id
-      },
-      message: `✓ Age verified: ${ag.label} (EU AV attestation, direct)`
+    // AK-28: no session-less age bootstrap. The assertion was valid, but an age
+    // proof requires a session with a verified email → /hhttps/age/upgrade.
+    console.warn('[AGE-DIRECT] valid assertion, but session-less age bootstrap is disabled (AK-28) — 403.');
+    return res.status(403).json({
+      error:  'email_verification_required',
+      detail: 'Age proof requires a session with a verified email. Use /hhttps/age/upgrade.'
     });
   } catch (e) {
     console.error('[AGE-DIRECT] error:', e.message);

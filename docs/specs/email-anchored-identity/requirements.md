@@ -24,7 +24,7 @@ verifizierte Methoden zuverlässig erhalten wollen.
 **Scope**
 - E-Mail-Verifikation wird Pflicht und ist der stabile Identitätsanker (gleiche E-Mail ⇒ gleiche `userId` ⇒ gleicher pairwise `sub` pro Plattform).
 - Pseudonym als Pflichtbestandteil der Identität; automatisch `iamhmn_<zufall>` falls leer; stabil pro Konto.
-- Alle anderen Methoden (Passkey, GitHub, EUDI, Alter) sind erst nach E-Mail-Verifikation nutzbar (UI ausgegraut/nicht klickbar; Backend lehnt ab).
+- Alle anderen Methoden (Passkey, GitHub, EUDI, Alter) sind erst nach E-Mail-Verifikation nutzbar (UI ausgegraut/nicht klickbar; Backend lehnt ab). „Alter“ ist dabei explizit gegated (AK-27/AK-28): der Alters-Bootstrap ohne Session (`/hhttps/age/direct`) entfällt; Altersnachweis nur noch per `/hhttps/age/upgrade` auf einer Session mit bestätigter E-Mail.
 - Passkeys werden an die stabile `userId` gebunden (WebAuthn user handle = `userId`).
 - Klartext-E-Mail wird serverseitig zwischengespeichert, bis sie an die Plattform übertragen wurde; Übertragung von `email`, `pseudonym` (`preferred_username`) und Methoden-Flags über ID-Token, Access-Token und `/hhttps/oauth/userinfo`.
 - Code-Mail: Code ohne Leerzeichen; Eingabe toleriert Leerzeichen; Design an hhttps.org (hell, WorldID-Anlehnung) angepasst.
@@ -58,6 +58,8 @@ verifizierte Methoden zuverlässig erhalten wollen.
 - **AK-13** IF eine Session ohne bestätigte E-Mail `/hhttps/role/declare` aufruft, THEN the system SHALL mit HTTP 403 antworten (E-Mail ist Pflichtmethode; Passkey/GitHub/EUDI allein reichen nicht mehr).
 - **AK-14** WHILE die E-Mail in der Sign-in-Seite (`server/public/index.html`) noch nicht bestätigt ist, THE system SHALL die Methoden-Buttons Passkey, EUDI, GitHub und Alter als `disabled` (ausgegraut, nicht klickbar) rendern; WHEN die E-Mail bestätigt wurde, THE system SHALL sie aktivieren.
 - **AK-15** WHILE die Sign-in-Seite das E-Mail-Panel zeigt, THE system SHALL ein optionales Pseudonym-Eingabefeld anbieten und es beim Senden des Codes (`/hhttps/email/send`, Feld `pseudonym`) mitschicken.
+- **AK-27** IF für eine Session ohne bestätigte E-Mail `/hhttps/age/upgrade` aufgerufen wird, THEN the system SHALL mit HTTP 403 und `error: 'email_verification_required'` antworten (kein Token).
+- **AK-28** IF `/hhttps/age/direct` (Alters-Bootstrap ohne bestehende Session) aufgerufen wird, THEN the system SHALL mit HTTP 403 und `error: 'email_verification_required'` antworten; ein Altersnachweis ist nur auf einer Session mit bestätigter E-Mail möglich (über `/hhttps/age/upgrade`).
 
 ### D. Übertragung an die Plattform (OAuth/OIDC)
 - **AK-16** WHEN die E-Mail bestätigt wird, THE system SHALL die Klartext-E-Mail zusammen mit `pseudonym` und `verified_methods` in einem serverseitigen Cache (`identity_claims_cache`, Schlüssel `userId`, Ablauf ≤ 7 Tage) ablegen.
@@ -93,3 +95,4 @@ verifizierte Methoden zuverlässig erhalten wollen.
 ## 6. Offene Fragen (nicht blockierend, Annahmen dokumentiert)
 - Annahme: „Issuer“ in der Anforderung meint die OAuth-Client-Plattform (ask.iamhmn.org, WordPress-Plugin), an die HHTTPS die Daten liefert.
 - Annahme: Bestehende registrierte Clients bekommen `email` per Migration in `allowed_scopes` ergänzt (damit die Übertragung sofort möglich ist). Falls unerwünscht: Migrationsblock entfernen.
+- Entscheidung Daniel 2026-09-12 (Abnahme, Lücke B-2): Das E-Mail-Gate wird für die Age-Endpunkte nachgezogen (AK-27, AK-28). Der Direkt-Bootstrap über eine EU-AV-Attestation ohne Session entfällt damit bewusst; wer Alter nachweisen will, bestätigt zuerst die E-Mail.

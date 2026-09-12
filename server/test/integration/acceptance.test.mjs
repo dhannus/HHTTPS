@@ -521,13 +521,11 @@ test('AK-3: two sessions ALIVE AT THE SAME TIME carry the same userId → same s
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Spec gaps — executable reproductions. Marked `todo`: they document behaviour
-// the spec's scope section ("alle anderen Methoden … Backend lehnt ab") implies
-// but no AK requires. A failing todo does not fail the gate.
+// AK-27 / AK-28 — email gate on the age endpoints (T8, decision 2026-09-12).
 // ═══════════════════════════════════════════════════════════════════════════
 
-test('SPEC-GAP age: /hhttps/age/direct issues an HHTTPS token for a NEW identity without any email (scope says "Alter erst nach E-Mail")',
-  { skip, todo: 'no AK covers the age endpoints; observed: 200 + token without email/pseudonym' }, async () => {
+test('AK-28: /hhttps/age/direct with a VALID assertion → 403 email_verification_required, no identity bootstrapped',
+  { skip }, async () => {
   const nonce = rnd(); const iat = Date.now();
   const ageOver = { age_over_14: true, age_over_16: true, age_over_18: true };
   const canonical = JSON.stringify({ direct: true, ageOver, nonce, iat });
@@ -535,10 +533,12 @@ test('SPEC-GAP age: /hhttps/age/direct issues an HHTTPS token for a NEW identity
   const r = await srv.api('/hhttps/age/direct', { method: 'POST', body: { ageOver, assertion, nonce, iat } });
   if (r.json?.hhttps?.userId) track.add({ userId: r.json.hhttps.userId, sessionId: r.json.hhttps.sessionId });
   assert.equal(r.status, 403, `expected email gate, observed ${r.status}: ${r.text.slice(0, 200)}`);
+  assert.equal(r.json.error, 'email_verification_required');
+  assert.equal(r.json.hhttps, undefined, 'no hhttps block / token must be issued');
 });
 
-test('SPEC-GAP age: /hhttps/age/upgrade on a session WITHOUT confirmed email issues a token (no email gate)',
-  { skip, todo: 'no AK covers the age endpoints' }, async () => {
+test('AK-27: /hhttps/age/upgrade on a session WITHOUT confirmed email → 403 email_verification_required, no token',
+  { skip }, async () => {
   const sessionId = await newSession();
   const nonce = rnd(); const iat = Date.now();
   const ageOver = { age_over_14: true, age_over_16: true, age_over_18: true };
@@ -546,21 +546,21 @@ test('SPEC-GAP age: /hhttps/age/upgrade on a session WITHOUT confirmed email iss
   const assertion = crypto.createHmac('sha256', TEST_EUDI_SECRET).update(canonical).digest('hex');
   const r = await srv.api('/hhttps/age/upgrade', { method: 'POST', body: { sessionId, ageOver, assertion, nonce, iat } });
   assert.equal(r.status, 403, `expected email gate, observed ${r.status}: ${r.text.slice(0, 200)}`);
+  assert.equal(r.json.error, 'email_verification_required');
+  assert.equal(r.json.hhttps, undefined, 'no hhttps block / token must be issued');
 });
 
-test('SPEC-GAP AK-9: an age-only refresh token → /token/refresh issues an access token WITHOUT pseudonym',
-  { skip, todo: 'AK-9 lists token/refresh but the age path has no anchor/pseudonym' }, async () => {
+test('AK-28: /hhttps/age/direct never issues an hhttps.token (age-only identity without pseudonym is impossible)',
+  { skip }, async () => {
   const nonce = rnd(); const iat = Date.now();
   const ageOver = { age_over_18: true };
   const canonical = JSON.stringify({ direct: true, ageOver: { age_over_14: false, age_over_16: false, age_over_18: true }, nonce, iat });
   const assertion = crypto.createHmac('sha256', TEST_EUDI_SECRET).update(canonical).digest('hex');
   const r = await srv.api('/hhttps/age/direct', { method: 'POST', body: { ageOver, assertion, nonce, iat } });
-  assert.equal(r.status, 200, r.text);
-  track.add({ userId: r.json.hhttps.userId, sessionId: r.json.hhttps.sessionId });
-  const rf = await srv.api('/hhttps/token/refresh', { method: 'POST', body: { refreshToken: r.json.hhttps.refreshToken } });
-  assert.equal(rf.status, 200, rf.text);
-  const p = decodeJwtPayload(rf.json.token);
-  assert.ok(p.pseudonym, `AK-9 expects a non-empty pseudonym; observed ${JSON.stringify(p.pseudonym)}`);
+  if (r.json?.hhttps?.userId) track.add({ userId: r.json.hhttps.userId, sessionId: r.json.hhttps.sessionId });
+  assert.equal(r.status, 403, r.text);
+  assert.equal(r.json?.hhttps?.token, undefined, `no token expected; observed ${r.text.slice(0, 200)}`);
+  assert.equal(r.json?.hhttps?.refreshToken, undefined, 'no refresh token expected');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
