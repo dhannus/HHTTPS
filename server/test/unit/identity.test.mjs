@@ -14,6 +14,7 @@ import {
   isValidCode,
   methodFlags,
   resolvePasskeySession,
+  assertPepperConfigured,
 } from '../../identity.js';
 
 describe('normalizeEmail (AK-2)', () => {
@@ -195,5 +196,30 @@ describe('resolvePasskeySession (F-2 / K-3)', () => {
   });
   test('credential without userId → error', () => {
     assert.equal(resolvePasskeySession({ storedUserId: null, cred: {}, prior: null }).error, 'credential_user_mismatch');
+  });
+});
+
+// F-4 (S-5): production without HHTTPS_VERIFICATION_PEPPER must not boot.
+describe('assertPepperConfigured (F-4 / S-5)', () => {
+  const saved = { NODE_ENV: process.env.NODE_ENV, PEPPER: process.env.HHTTPS_VERIFICATION_PEPPER };
+  const restore = () => {
+    if (saved.NODE_ENV === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = saved.NODE_ENV;
+    if (saved.PEPPER === undefined) delete process.env.HHTTPS_VERIFICATION_PEPPER; else process.env.HHTTPS_VERIFICATION_PEPPER = saved.PEPPER;
+  };
+  test('production without pepper → throws', () => {
+    process.env.NODE_ENV = 'production'; delete process.env.HHTTPS_VERIFICATION_PEPPER;
+    try { assert.throws(() => assertPepperConfigured(), /HHTTPS_VERIFICATION_PEPPER/); } finally { restore(); }
+  });
+  test('production with empty pepper → throws', () => {
+    process.env.NODE_ENV = 'production'; process.env.HHTTPS_VERIFICATION_PEPPER = '';
+    try { assert.throws(() => assertPepperConfigured()); } finally { restore(); }
+  });
+  test('production with pepper → ok', () => {
+    process.env.NODE_ENV = 'production'; process.env.HHTTPS_VERIFICATION_PEPPER = 'p';
+    try { assert.doesNotThrow(() => assertPepperConfigured()); } finally { restore(); }
+  });
+  test('non-production without pepper → ok (dev fallback stays)', () => {
+    process.env.NODE_ENV = 'development'; delete process.env.HHTTPS_VERIFICATION_PEPPER;
+    try { assert.doesNotThrow(() => assertPepperConfigured()); } finally { restore(); }
   });
 });

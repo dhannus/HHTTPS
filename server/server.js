@@ -48,7 +48,7 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, resolvePasskeySession } from './identity.js';
+import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, resolvePasskeySession, assertPepperConfigured } from './identity.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -4745,6 +4745,9 @@ app.get('/hhttps/stats', async (req, res) => {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 async function main() {
+  // 0. F-4 (S-5): refuse to boot in production without the anchor pepper.
+  assertPepperConfigured();
+
   // 1. Init keys
   loadOrCreateKeys();
 

@@ -24,6 +24,17 @@ export function emailAnchorHash(email, pepper = process.env.HHTTPS_VERIFICATION_
   return crypto.createHmac('sha256', key).update(normalizeEmail(email)).digest('hex');
 }
 
+/**
+ * F-4 (S-5): in production the pepper is mandatory — without it every anchor
+ * hash would be computed with the public 'dev-pepper' (dictionary-attackable)
+ * and a later rotation would silently detach all anchors. Called once at boot.
+ */
+export function assertPepperConfigured(env = process.env) {
+  if (env.NODE_ENV === 'production' && !env.HHTTPS_VERIFICATION_PEPPER) {
+    throw new Error('HHTTPS_VERIFICATION_PEPPER must be set in production (identity anchors depend on it).');
+  }
+}
+
 /** AK-6: charset [\w\-. äöüÄÖÜß], max 32 chars, trimmed. Empty → null. */
 export function sanitizePseudonym(input) {
   if (input === null || input === undefined) return null;
