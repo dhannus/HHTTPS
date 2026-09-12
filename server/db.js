@@ -1178,42 +1178,31 @@ export const authCodes = {
   },
 
   /**
-   * Atomic single-use claim. Returns the row (with `scopes` and
-   * `verified_methods` parsed as arrays) only if the code was unused and not
-   * expired, otherwise null. The e-mail copy on the code row is deleted in the
-   * same transaction (transferred ⇒ deleted, AK-17) but the value from BEFORE
-   * the wipe is returned to the caller. Two statements in one transaction —
-   * a data-modifying CTE may not update the same row twice in one statement.
+   * Atomic single-use claim in ONE statement (P-1). Returns the row (with
+   * `scopes` and `verified_methods` parsed as arrays) only if the code was
+   * unused and not expired, otherwise null. The e-mail copy on the code row is
+   * wiped in the same UPDATE (transferred ⇒ deleted, AK-17); the value from
+   * BEFORE the wipe is read via the `old` CTE (a plain SELECT — the row is
+   * modified only once, so this is legal in PostgreSQL) and returned as
+   * `email` to the caller.
    */
   async claim(code) {
-    const client = await pool().connect();
-    try {
-      await client.query('BEGIN');
-      const { rows } = await client.query(
-        `UPDATE authorization_codes
-         SET used = TRUE, used_at = NOW()
-         WHERE code = $1 AND used = FALSE AND expires_at > NOW()
-         RETURNING *`,
-        [code]
-      );
-      if (rows[0]) {
-        await client.query(`UPDATE authorization_codes SET email = NULL WHERE code = $1`, [code]);
-      }
-      await client.query('COMMIT');
-      if (!rows[0]) return null;
-      const r = rows[0];
-      r.scopes = parseJsonArray(r.scopes);
-      r.verified_methods = parseJsonArray(r.verified_methods);
-      r.email = r.email ?? null;
-      r.pseudonym = r.pseudonym ?? null;
-      return r;
-    } catch (err) {
-      try { await client.query('ROLLBACK'); } catch {}
-      console.error(`[DB] authCodes.claim failed: ${err.message}`);
-      throw err;
-    } finally {
-      client.release();
-    }
+    const { rows } = await q(
+      `WITH old AS (SELECT email FROM authorization_codes WHERE code = $1)
+       UPDATE authorization_codes a
+       SET used = TRUE, used_at = NOW(), email = NULL
+       WHERE a.code = $1 AND a.used = FALSE AND a.expires_at > NOW()
+       RETURNING a.*, (SELECT email FROM old) AS email_before`,
+      [code]
+    );
+    if (!rows[0]) return null;
+    const r = rows[0];
+    r.scopes = parseJsonArray(r.scopes);
+    r.verified_methods = parseJsonArray(r.verified_methods);
+    r.email = r.email_before ?? null;
+    delete r.email_before;
+    r.pseudonym = r.pseudonym ?? null;
+    return r;
   },
 
   async cleanup() {
