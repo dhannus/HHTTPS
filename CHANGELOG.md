@@ -5,6 +5,47 @@ All notable changes to the HHTTPS protocol and reference implementation are docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Phase 8: email-anchored identity
+
+### Added
+- **E-mail identity anchor** (`identity_anchors`): the same verified e-mail address (trimmed, lower-cased) always resolves to the same stable `userId` — and therefore to the same pairwise `sub` per platform — on every device and browser. The anchor stores `HMAC-SHA256(HHTTPS_VERIFICATION_PEPPER, email)` only, never the address (`server/identity.js`, `server/db.js`).
+- **Account pseudonym**: chosen by the user at first e-mail verification (max. 32 chars) or generated as `iamhmn_<10 chars>`; stable per account, carried in `sessions.pseudonym`, in the HHTTPS access/refresh token (`pseudonym`) and delivered to platforms as `preferred_username`. Optional `pseudonym` field on `POST /hhttps/email/send`.
+- **Passkeys bound to the stable identity**: the WebAuthn user handle is the session's `userId`; a returning user gets the same identity on every device.
+- **OAuth scope `email`**: delivers the verified address as `email` + `email_verified: true` in ID token, access token and `/hhttps/oauth/userinfo`. Requires user consent and `email` in the client's `allowed_scopes`; new clients get it by default.
+- **New OIDC claims on every `openid` login**: `verified_methods[]`, `email_verified`, `passkey_verified`, `github_verified`, `eudi_verified`, `preferred_username` — in ID token, access token, `/oauth/userinfo`, and surviving OAuth refresh grants. Discovery lists `email` in `scopes_supported` and the new claims in `claims_supported`.
+- **`POST /hhttps/email/confirm-code`** documented as the primary same-tab verification path.
+- **`identity_claims_cache`**: server-side plaintext cache (e-mail, pseudonym, methods) per `userId`, 7-day expiry after the last confirmation, so the address can be transferred to platforms the user authorises.
+- **Migration phase 8** (`server/sql/migration-phase-8-email-anchored-identity.sql`), idempotent, in two sections: *BOOT-DDL* (applied by the server at boot after an applied-check; boot aborts if it fails) and *OPERATOR* (`allowed_scopes += "email"` for existing clients + grants — run once manually via `psql`).
+- **Test and lint infrastructure**: `npm test` (`node --test`; unit tests for `identity.js` and the mail template, integration tests booting `server.js` against a local Postgres via `TEST_PG_HOST`) and `npm run lint` (ESLint 9 flat config). npm is the package manager (pnpm runs the same scripts).
+- `.env.example` documents `HHTTPS_VERIFICATION_PEPPER`, `EMAIL_DEV_MODE`, `GITHUB_CLIENT_ID/SECRET`, `EUDI_VERIFIER_SECRET`, `NODE_ENV`.
+
+### Changed
+- **Verification mail**: the 6-digit code is rendered without spaces (`123456`, previously `123 456`) in HTML and text so it can be copied; new light template matching hhttps.org (background `#F9F9F8`, ink `#0A0A0A`, Inter/Syne, pill button); privacy note states truthfully that the address is cached until transferred / for up to 7 days. Platform-registration mails keep the previous dark shell.
+- **Code entry is tolerant**: `/hhttps/email/confirm-code` strips whitespace, tabs and hyphens before validating (`"482 913"` → `482913`); anything that is not exactly 6 digits after normalisation → `400`.
+- `/hhttps/email/send` keeps only the **last** verification of a session valid.
+- Docs: README (tests, migration, scopes/claims), `docs/oauth-integration.md`, `docs/security.md` and `docs/spec.md` no longer claim "zero PII storage"; the storage table lists `identity_anchors`, `identity_claims_cache`, the e-mail context in `challenges` and the e-mail copy on `authorization_codes`.
+
+### Breaking
+- **E-mail verification is mandatory and first.** `POST /hhttps/role/declare`, `POST /hhttps/eid/upgrade` and `GET /hhttps/verify/github/start` answer `403 {"error":"email_verification_required"}` for a session without a confirmed e-mail. Passkey, GitHub or EUDI alone no longer yield a token.
+- **`POST /hhttps/webauthn/register/start` requires `sessionId`** of an e-mail-verified session; the legacy body `userId` / anonymous registration path is gone (a body `userId` is ignored, the session's stable `userId` is used).
+- **`POST /hhttps/webauthn/auth/finish`** answers `401 credential_user_mismatch` when the `userId` parked at `auth/start` does not match the credential's owner; a prior session is merged only when it belongs to the same `userId`.
+- **`GET /hhttps/email/verify`** (magic link) binds only the session the link was issued for (`session_mismatch` otherwise); code and link must match the address the session requested (`409 email_context_mismatch`).
+- **Second address in an anchored session** → `409 email_already_bound`; an anchor that would move a session with a passkey/GitHub/EUDI proof to another identity → `409 identity_conflict` (previously `500`).
+- **Dev mail mode is opt-in**: the code is returned in the `/hhttps/email/send` response only with `EMAIL_DEV_MODE=1` and `NODE_ENV !== 'production'`; without a mail transport the endpoint now answers `503 email_transport_unavailable`.
+- **`HHTTPS_VERIFICATION_PEPPER` is mandatory in production** — the server refuses to boot without it. It must never be rotated without re-hashing all anchors.
+- **Operators must run the OPERATOR section of the phase-8 migration** once; until then existing clients cannot request scope `email` (`invalid_scope`).
+
+### Security
+Fixes from the phase-8 review (details in `docs/specs/email-anchored-identity/verifikation.md`):
+- **F-1** Anchor binding coupled to the proven address: the consumed verification row must match the parked e-mail context; magic link bound to its originating session (account pre-hijacking via a second `/email/send` or a foreign link).
+- **F-2** Passkey session identity taken from the credential row only; body `userId` mismatch → `401`; no merge of foreign prior sessions.
+- **F-3** No fail-open dev mode: verification codes leave the API only with `EMAIL_DEV_MODE=1` outside production.
+- **F-4** Boot refuses to start in production without `HHTTPS_VERIFICATION_PEPPER` (dictionary-attackable anchors, silent identity loss on rotation).
+- **F-5** HTML/subject injection in the verification mail closed: `role` whitelisted against `ROLES`, labels/domain HTML-escaped.
+- **F-6** Anchor conflicts answered as `409` instead of `500`; no cross-anchor rebinding of sessions that carry another proof.
+- **F-7** Phase-8 migration awaited before `listen`, DDL-only with applied-check; the data update (`allowed_scopes += email`) is no longer run on every boot.
+- **F-8** `/hhttps/oauth/approve` enforces the client's `allowed_scopes` like `/authorize` (scope `email` could be obtained by a direct approve call).
+
 ## [0.4.1] — 2026-05-11
 
 ### Added
