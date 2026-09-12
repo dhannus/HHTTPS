@@ -65,3 +65,4 @@ _backup_*/
 
 # PM2 ecosystem
 ecosystem.config.local.js
+server/package-lock.json
