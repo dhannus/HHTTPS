@@ -340,6 +340,17 @@ export const emailVerifications = {
     return rows[0] || null;
   },
 
+  // F-1 (K-1): a re-send in the same session invalidates every older open
+  // row of that session, so a code/token for address A can never be played
+  // against a context that meanwhile points to address B.
+  async invalidateForSession(sessionId) {
+    await q(
+      `UPDATE email_verifications SET used = TRUE
+       WHERE session_id = $1 AND used = FALSE`,
+      [sessionId]
+    );
+  },
+
   // Code path (primary). Binds to session_id as defence-in-depth: a code
   // posted from a different browser/session cannot consume the row.
   async getAndConsumeByCode(codeHash, sessionId) {

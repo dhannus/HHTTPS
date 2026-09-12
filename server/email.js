@@ -715,6 +715,7 @@ export async function verifyEmailToken(rawToken) {
   return {
     valid:      true,
     sessionId:  entry.session_id,
+    emailHash:  entry.email,   // sha256(lowercased address) — F-1: caller must match it against its context
     domain:     entry.domain,
     level:      entry.level,
     trustBonus: entry.trust_bonus,
@@ -743,6 +744,7 @@ export async function verifyEmailCode(code, sessionId) {
   return {
     valid:      true,
     sessionId:  entry.session_id,
+    emailHash:  entry.email,   // sha256(lowercased address) — F-1: caller must match it against its context
     domain:     entry.domain,
     level:      entry.level,
     trustBonus: entry.trust_bonus,

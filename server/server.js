@@ -2712,6 +2712,15 @@ async function readEmailContext(sessionId) {
   try { return JSON.parse(row.challenge); } catch { return null; }
 }
 
+// F-1 (K-1/S-1): the consumed email_verifications row stores sha256(lower(email)).
+// The parked context must describe the SAME address, otherwise a code/token for
+// address A would bind the session to whatever address the context holds now.
+function emailContextMatches(ctx, verification) {
+  if (!ctx?.email || !verification?.emailHash) return false;
+  const h = crypto.createHash('sha256').update(normalizeEmail(ctx.email)).digest('hex');
+  return h === verification.emailHash;
+}
+
 /**
  * @returns {{ userId, pseudonym, created, methods, trust }}
  * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
@@ -2773,6 +2782,8 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   try {
     // v0.5: the sign-in page no longer declares a role here — fall back to the
     // base identity so the mail does not read: role "undefined".
+    // F-1: only the LAST send of a session stays valid (context and row agree).
+    await db.emailVerifications.invalidateForSession(sessionId);
     const result = await sendVerificationEmail({ email, role: role || 'citizen', sessionId, baseUrl: BASE_URL });
     // T4: park plaintext email + pseudonym wish until the code/link is confirmed.
     await db.challenges.create(
@@ -2802,12 +2813,15 @@ app.get('/hhttps/email/verify', async (req, res) => {
 
   const result = await verifyEmailToken(token);
   if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
+  // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
+  if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
 
   const session = await db.sessions.get(sessionId);
   if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
 
   const ctx = await readEmailContext(sessionId);
   if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
+  if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
 
   let bound;
   try {
@@ -2850,6 +2864,8 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   // T4: the plaintext email was parked by /email/send in the same session.
   const ctx = await readEmailContext(sessionId);
   if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
+  // F-1 (K-1/S-1): the code must belong to the address the context describes.
+  if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
 
   // Bind the session to the stable identity anchor (AK-1/AK-2), store the
   // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
