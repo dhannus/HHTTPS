@@ -6,6 +6,6 @@
 - [ ] Testprotokoll
 - [ ] Abnahme
 - [ ] Gate 2 / MR
-Nächster Schritt: Review-Findings verifizieren.
+Nächster Schritt: Tester (testprotokoll.md), dann Abnahme.
 Umgebung: lokale Postgres 16 unter /var/lib/pgtest (Socket-Dir), DB `hhttps`, User `hhttps`, trust. Testlauf: `cd server && TEST_PG_HOST=/var/lib/pgtest pnpm test && pnpm lint`.
 Branch: `claude/kind-pasteur-kweqf1` (Umgebungsvorgabe, ersetzt feat/<slug>).
