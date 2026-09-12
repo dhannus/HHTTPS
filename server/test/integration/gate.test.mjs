@@ -84,9 +84,10 @@ test('AK-10: register/start with a session without confirmed email → 403 email
   assertGate(r);
 });
 
-test('AK-10: register/start without sessionId → 403 (anonymous legacy path is gone)', { skip }, async () => {
+test('W-19: register/start without sessionId → 400 sessionId required (anonymous legacy path is gone)', { skip }, async () => {
   const r = await srv.api('/hhttps/webauthn/register/start', { method: 'POST', body: { userId: crypto.randomUUID() } });
-  assertGate(r);
+  assert.equal(r.status, 400, r.text);
+  assert.equal(r.json?.error, 'sessionId required', r.text);
 });
 
 test('register/start with an unknown sessionId → 404', { skip }, async () => {

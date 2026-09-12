@@ -822,18 +822,29 @@ app.get('/hhttps/info', async (req, res) => {
     },
     roles_model: 'esco-dynamic',
     base_identity: { id: ROLES.citizen.id, label: ROLES.citizen.label, icon: ROLES.citizen.icon },
+    // W-18: endpoint catalog for the email-first flow (Phase 8): session →
+    // email/send → email/confirm-code (or the magic link) → further methods.
     endpoints: {
       'GET  /.well-known/hhttps-configuration': 'Discovery',
       'GET  /.well-known/jwks.json':            'Public key (JWKS)',
+      'GET  /.well-known/openid-configuration': 'OIDC discovery (scopes: openid, role, age_group, email)',
       'POST /hhttps/check':                     '★ Human/machine + role check',
-      'GET  /hhttps/roles':                     'Role registry (15 roles)',
-      'POST /hhttps/webauthn/register/{start,finish}': 'Passkey registration',
-      'POST /hhttps/webauthn/auth/{start,finish}':     'Passkey authentication',
+      'GET  /hhttps/roles':                     'Role registry (ESCO-dynamic)',
+      'POST /hhttps/session/start':             'Create a method-neutral session (step 1; optional pseudonym)',
+      'POST /hhttps/session/email/start':       'Alias of session/start (legacy name)',
+      'POST /hhttps/email/send':                'Send the 6-digit verification code (step 2; email is the mandatory first method)',
+      'POST /hhttps/email/confirm-code':        'Confirm the code in the same tab → session bound to the identity anchor (step 3)',
+      'GET  /hhttps/email/verify':              'Confirm via magic link (same session only)',
+      'POST /hhttps/webauthn/register/{start,finish}': 'Passkey registration (requires sessionId with a verified email; 400 without sessionId, 403 without email)',
+      'POST /hhttps/webauthn/auth/{start,finish}':     'Passkey authentication (returning users)',
+      'POST /hhttps/role/declare':              'Issue HHTTPS token (requires a verified email; carries pseudonym + verified_methods)',
+      'POST /hhttps/eid/upgrade':               'EUDI Wallet upgrade (requires a verified email)',
+      'GET  /hhttps/verify/github/start':       'GitHub verification (requires a verified email)',
       'POST /hhttps/token/refresh':             'Refresh access token',
-      'POST /hhttps/session/email/start':       'Create email-only session (no WebAuthn required)',
-      'POST /hhttps/email/send':                'Send email verification',
-      'GET  /hhttps/email/verify':              'Confirm email',
-      'POST /hhttps/role/declare':              'Declare role → token',
+      'GET  /hhttps/oauth/authorize':           'OAuth/OIDC authorization (consent page)',
+      'POST /hhttps/oauth/approve':             'OAuth consent → authorization code',
+      'POST /hhttps/oauth/token':               'Code / refresh_token grant → id_token, access_token (scope email → email claim)',
+      'GET  /hhttps/oauth/userinfo':            'OIDC userinfo (preferred_username, verified_methods, *_verified, email with scope email)',
       'POST /hhttps/revoke':                    'Revoke token',
       'POST /hhttps/validate':                  'Validate token',
       'POST /hhttps/machine/{register,token}':  'Machine token issuance',
@@ -2347,14 +2358,13 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
     // D4 / AK-4 / AK-10: a passkey is registered ONLY on an email-verified
     // session, and the WebAuthn user handle is the session's stable userId.
     // The legacy anonymous path (`userId` in the body or a fresh uuid) is gone:
-    // without `sessionId` the request is refused; with `sessionId` the body
-    // `userId` is ignored.
+    // without `sessionId` the request is refused with 400 (W-19 — a missing
+    // parameter, not a gate violation); with `sessionId` the body `userId` is
+    // ignored.
     const { sessionId } = req.body || {};
-    let session = null;
-    if (sessionId) {
-      session = await db.sessions.get(sessionId);
-      if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
-    }
+    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
     if (!requireEmailVerified(session, res)) return;
 
     const userId    = session.userId;
