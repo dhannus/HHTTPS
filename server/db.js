@@ -705,7 +705,7 @@ export const oauthClients = {
       [clientId, clientSecretHash || null, name, description || null,
        homepageUrl || null,
        JSON.stringify(redirectUris || []),
-       JSON.stringify(allowedScopes || ['openid', 'role']),
+       JSON.stringify(allowedScopes || ['openid', 'role', 'email']),
        subjectType || 'pairwise',
        logoUrl || null, contactEmail || null, ownerUserId || null]
     );
@@ -767,7 +767,7 @@ export const oauthClients = {
                FALSE, TRUE)`,
       [clientId, name, description || null, homepageUrl,
        JSON.stringify(redirectUris || []),
-       JSON.stringify(['openid', 'role']),
+       JSON.stringify(['openid', 'role', 'email']),
        contactEmail, impressumUrl || null, logoUrl || null,
        ownerUserId, !!domainEmailMatch,
        emailToken, emailTokenExpiresAt, dnsToken || null]

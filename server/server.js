@@ -1354,7 +1354,7 @@ app.get('/s/:slug', (req, res) => {
 const OAUTH_CODE_TTL  = 60;         // seconds
 const OAUTH_TOKEN_TTL = 5 * 60;     // 5 min for third-party access tokens
 const OAUTH_REFRESH_TTL = 30 * 24 * 3600; // 30 days — RFC 6749 §6 refresh grant
-const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method', 'age_group']);
+const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method', 'age_group', 'email']);
 
 // Discovery (RFC 8414 / OpenID Connect Discovery 1.0)
 app.get('/.well-known/openid-configuration', (req, res) => {
@@ -1365,7 +1365,7 @@ app.get('/.well-known/openid-configuration', (req, res) => {
     userinfo_endpoint:               `${BASE_URL}/hhttps/oauth/userinfo`,
     revocation_endpoint:              `${BASE_URL}/hhttps/oauth/revoke`,
     jwks_uri:                         `${BASE_URL}/.well-known/jwks.json`,
-    scopes_supported:                 ['openid', 'role', 'verification_method', 'age_group'],
+    scopes_supported:                 ['openid', 'role', 'verification_method', 'age_group', 'email'],
     response_types_supported:         ['code'],
     grant_types_supported:            ['authorization_code', 'refresh_token'],
     subject_types_supported:          ['pairwise', 'public'],
@@ -1376,7 +1376,10 @@ app.get('/.well-known/openid-configuration', (req, res) => {
       'sub', 'iss', 'aud', 'exp', 'iat', 'auth_time',
       'role', 'role_label', 'role_icon', 'trust_score',
       'verification_method', 'verification_method_label',
-      'age_group', 'age_verified', 'age_verification_method'
+      'age_group', 'age_verified', 'age_verification_method',
+      // Phase 8 (AK-20): e-mail anchored identity
+      'email', 'email_verified', 'passkey_verified', 'github_verified', 'eudi_verified',
+      'verified_methods', 'preferred_username'
     ]
   }, {
     title: 'OpenID Connect Discovery',
@@ -1510,11 +1513,30 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
     // Generate authorization code
     const code = 'hp-' + crypto.randomBytes(24).toString('base64url');
 
+    const userId = isMachine ? ('machine:' + (d.operatorId || 'unknown'))
+                             : (d.uid || d.userId || d.sub);
+
+    // Phase 8 (D3/D5): the SIGNED HHTTPS token is the source of truth for
+    // the verified methods; the claims cache only supplies the plaintext
+    // e-mail (scope `email`) and a pseudonym fallback. The token pseudonym
+    // wins over the consent-page input.
+    const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
+    let cache = null;
+    if (!isMachine) {
+      try { cache = await db.identityClaimsCache.get(userId); }
+      catch (e) { console.error('[OAUTH] claims cache read failed:', e.message); }
+    }
+    const cleanPseudo = pseudonym
+      ? (String(pseudonym).replace(/[^\w\-. äöüÄÖÜß]/gu, '').slice(0, 32).trim() || null)
+      : null;
+    const accountPseudonym = d.pseudonym || cache?.pseudonym || null;
+    const codePseudonym = accountPseudonym || cleanPseudo || null;
+    const codeEmail = (scopes.includes('email') && cache?.email) ? cache.email : null;
+
     await db.authCodes.create({
       code,
       clientId:           client_id,
-      userId:             isMachine ? ('machine:' + (d.operatorId || 'unknown'))
-                                     : (d.uid || d.userId || d.sub),
+      userId,
       redirectUri:        redirect_uri,
       scopes,
       pkceChallenge:      code_challenge,
@@ -1529,13 +1551,15 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
       ageGroup:               d.age_group || null,
       ageVerified:            d.age_verified ?? null,
       ageVerificationMethod:  d.age_verification_method || null,
+      email:              codeEmail,
+      pseudonym:          codePseudonym,
+      verifiedMethods:    methods,
       ttlSec:             OAUTH_CODE_TTL
     });
 
-    const cleanPseudo = pseudonym
-      ? (String(pseudonym).replace(/[^\w\-. äöüÄÖÜß]/gu, '').slice(0, 32).trim() || null)
-      : null;
-    if (cleanPseudo) {
+    // Legacy `pseudo:<code>` challenge — kept as fallback only when the token
+    // carries no account pseudonym (D3); otherwise the code row wins.
+    if (cleanPseudo && !accountPseudonym) {
       try { await db.challenges.create('pseudo:' + code, cleanPseudo, null, 'pseudonym', 120000); }
       catch (e) { console.error('[OAUTH] pseudonym bind failed:', e.message); }
     }
@@ -1605,6 +1629,16 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       console.error('[OAUTH] refresh rotation failed:', err.message);
       return res.status(500).json({ error: 'server_error' });
     }
+    // Phase 8 (AK-18): identity claims travel inside the refresh JWT itself
+    // (stateless — nothing is read from a per-user table on refresh).
+    const rMethods  = Array.isArray(rd.verified_methods) ? rd.verified_methods : [];
+    const rScopes   = String(rd.scope || 'openid').split(' ').filter(Boolean);
+    const rIdentity = {
+      verified_methods: rMethods,
+      ...methodFlags(rMethods),
+      ...(rd.preferred_username ? { preferred_username: rd.preferred_username } : {}),
+      ...(rScopes.includes('email') && rd.email ? { email: rd.email, email_verified: true } : {})
+    };
     const newRefresh = signToken({
       sub: 'oauth_refresh', jti: newJti, client_id,
       ouid: rd.ouid, scope: rd.scope || 'openid',
@@ -1612,12 +1646,12 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       verification_method: rd.verification_method || null,
       ...(rd.age_group ? { age_group: rd.age_group,
         age_verified: rd.age_verified ?? false,
-        age_verification_method: rd.age_verification_method || 'self-declared' } : {})
+        age_verification_method: rd.age_verification_method || 'self-declared' } : {}),
+      ...rIdentity
     }, { expiresIn: OAUTH_REFRESH_TTL });
 
     // Frischer Access-Token — dieselben Claims wie im Code-Zweig.
     const rPairwise = pairwiseSubjectId(rd.ouid, client_id, rClient.subject_type);
-    const rScopes = String(rd.scope || 'openid').split(' ').filter(Boolean);
     const newAccess = signToken({
       iss:        `https://${RP_ID}`,
       hhttps_iss: `hhttps://${RP_ID}`,
@@ -1627,6 +1661,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       scope:      rScopes.join(' '),
       role:       rd.role || null,
       trustScore: rd.trust_score ?? 0,
+      ...rIdentity,
       ...(rd.verification_method === 'machine-token'
           ? { actor_type: 'bot', human: false } : {}),
       ...(rScopes.includes('age_group') && rd.age_group ? {
@@ -1715,6 +1750,21 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     }
   } catch (e) { /* none bound */ }
 
+  // Phase 8 (AK-17/AK-18): identity claims from the code row. The code row's
+  // pseudonym (account property, D3) wins over the legacy challenge value;
+  // `email` only with scope `email` (the plaintext copy on the code row was
+  // wiped by claim() — transferred ⇒ deleted).
+  const methods   = Array.isArray(claimed.verified_methods) ? claimed.verified_methods : [];
+  const flags     = methodFlags(methods);
+  const preferred = claimed.pseudonym || _preferredUsername || null;
+  const identityClaims = {
+    verified_methods: methods,
+    ...flags,
+    ...(preferred ? { preferred_username: preferred } : {}),
+    ...(claimed.scopes.includes('email') && claimed.email
+        ? { email: claimed.email, email_verified: true } : {})
+  };
+
   const accessToken = signToken({
     iss:        `https://${RP_ID}`,
     hhttps_iss: `hhttps://${RP_ID}`,
@@ -1724,7 +1774,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     scope:      claimed.scopes.join(' '),
     role:       claimed.role,
     trustScore: claimed.trust_score,
-    ...(_preferredUsername ? { preferred_username: _preferredUsername } : {}),
+    ...identityClaims,
     // Actor type survives the code flow: 'machine-token' in the code row
     // becomes explicit bot claims here (and in the ID token below).
     ...(claimed.verification_method === 'machine-token'
@@ -1763,7 +1813,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     idTokenClaims.age_verified            = claimed.age_verified ?? false;
     idTokenClaims.age_verification_method = claimed.age_verification_method || 'self-declared';
   }
-  if (_preferredUsername) { idTokenClaims.preferred_username = _preferredUsername; }
+  Object.assign(idTokenClaims, identityClaims);
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
 
   await db.stats.increment('oauth_tokens_issued');
@@ -1800,7 +1850,8 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       verification_method: claimed.verification_method || null,
       ...(claimed.age_group ? { age_group: claimed.age_group,
         age_verified: claimed.age_verified ?? false,
-        age_verification_method: claimed.age_verification_method || 'self-declared' } : {})
+        age_verification_method: claimed.age_verification_method || 'self-declared' } : {}),
+      ...identityClaims
     }, { expiresIn: OAUTH_REFRESH_TTL });
   } catch (err) {
     console.error('[OAUTH] refresh issuance failed:', err.message);
@@ -1832,7 +1883,12 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
       sub: d.sub,
       iss: d.iss
     };
+    // Phase 8 (AK-17/AK-18): stateless — everything comes from the access token.
+    const uMethods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
+    out.verified_methods = uMethods;
+    Object.assign(out, methodFlags(uMethods));
     if (d.preferred_username) { out.preferred_username = d.preferred_username; }
+    if (scopes.includes('email') && d.email) { out.email = d.email; out.email_verified = true; }
     if (scopes.includes('role')) {
       const roleDef = ROLES[d.role] || ROLES.citizen;
       out.role        = d.role;
@@ -1909,7 +1965,8 @@ function renderConsentPage({ client, scopes, params }) {
       'openid':              { icon: '🆔', title: 'Anonyme Identität',  desc: 'Eine pseudonyme Kennung, die nur diese Plattform sieht.' },
       'role':                { icon: '🎭', title: 'Berufsrolle', desc: 'Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).' },
       'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' },
-      'age_group':           { icon: '🔞', title: 'Altersgruppe', desc: 'Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.' }
+      'age_group':           { icon: '🔞', title: 'Altersgruppe', desc: 'Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.' },
+      'email':               { icon: '✉️', title: 'E-Mail-Adresse', desc: 'Deine verifizierte E-Mail-Adresse wird an diese Plattform übertragen.' }
     }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
     return `<div class="scope-row" data-scope="${s}">
       <span class="scope-icon">${label.icon}</span>
@@ -2206,7 +2263,8 @@ const CONSENT_I18N = {
     "scope.openid.title":"Anonyme Identität","scope.openid.desc":"Eine pseudonyme Kennung, die nur diese Plattform sieht.",
     "scope.role.title":"Berufsrolle","scope.role.desc":"Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).",
     "scope.verification_method.title":"Verifikationsmethode","scope.verification_method.desc":"Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).",
-    "scope.age_group.title":"Altersgruppe","scope.age_group.desc":"Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe."
+    "scope.age_group.title":"Altersgruppe","scope.age_group.desc":"Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.",
+    "scope.email.title":"E-Mail-Adresse","scope.email.desc":"Deine verifizierte E-Mail-Adresse wird an diese Plattform übertragen."
   },
   en: {
     "consent.verified":"✓ Verified platform","consent.unverified":"⚠ Not verified",
@@ -2223,7 +2281,8 @@ const CONSENT_I18N = {
     "scope.openid.title":"Anonymous identity","scope.openid.desc":"A pseudonymous identifier that only this platform sees.",
     "scope.role.title":"Professional role","scope.role.desc":"Your verified professional role — only if present (e.g. via EUDI wallet).",
     "scope.verification_method.title":"Verification method","scope.verification_method.desc":"How your role was verified (e.g. ORCID, press card).",
-    "scope.age_group.title":"Age group","scope.age_group.desc":"Your rough age group (e.g. 18+), not your date of birth. Currently self-declared."
+    "scope.age_group.title":"Age group","scope.age_group.desc":"Your rough age group (e.g. 18+), not your date of birth. Currently self-declared.",
+    "scope.email.title":"E-mail address","scope.email.desc":"Your verified e-mail address is passed on to this platform."
   }
 };
 let CONSENT_LANG = 'de';
