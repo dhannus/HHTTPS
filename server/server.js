@@ -398,7 +398,11 @@ app.use(helmet({
       imgSrc:     ["'self'", 'data:']
     }
   },
-  crossOriginEmbedderPolicy: false  // required for WebAuthn
+  crossOriginEmbedderPolicy: false,  // required for WebAuthn
+  // Allow our own login popup to keep its window.opener reference so it
+  // can postMessage the result back to the platform page. Still blocks
+  // foreign embedding/opening. Default 'same-origin' would break popups.
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' }
 }));
 
 // Rate limiters
@@ -1381,7 +1385,16 @@ function pairwiseSubjectId(userId, clientId, subjectType) {
 }
 
 // Authorize endpoint: shows consent page or auto-approves with active session
-app.get('/hhttps/oauth/authorize', async (req, res) => {
+// COOP-POPUP-ROUTE: the pages a login popup actually renders (the consent
+// screen at authorize, and the approve result) must NOT isolate, or the
+// opener relationship to the platform page breaks and postMessage fails.
+// Per the COOP spec the popup target must send unsafe-none while the opener
+// sends same-origin-allow-popups. We scope unsafe-none to these routes only.
+function popupCoop(_req, res, next) {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  next();
+}
+app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
   const {
     response_type,
     client_id,
@@ -1413,24 +1426,24 @@ app.get('/hhttps/oauth/authorize', async (req, res) => {
   // PKCE: required for public clients (no client_secret_hash)
   const isPublicClient = !client.client_secret_hash;
   if (isPublicClient && !code_challenge) {
-    return redirectWithError(redirect_uri, state, 'invalid_request',
+    return redirectWithError(res, redirect_uri, state, 'invalid_request',
       'PKCE code_challenge is required for public clients.');
   }
 
   // Scope validation
   const requestedScopes = (scope || 'openid').split(/\s+/).filter(Boolean);
   if (!requestedScopes.includes('openid')) {
-    return redirectWithError(redirect_uri, state, 'invalid_scope',
+    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
       'The "openid" scope is required.');
   }
   const unknownScopes = requestedScopes.filter(s => !SCOPES_KNOWN.has(s));
   if (unknownScopes.length > 0) {
-    return redirectWithError(redirect_uri, state, 'invalid_scope',
+    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
       `Unknown scopes: ${unknownScopes.join(', ')}`);
   }
   const deniedScopes = requestedScopes.filter(s => !client.allowed_scopes.includes(s));
   if (deniedScopes.length > 0) {
-    return redirectWithError(redirect_uri, state, 'invalid_scope',
+    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
       `Platform may not request these scopes: ${deniedScopes.join(', ')}`);
   }
 
@@ -1456,7 +1469,7 @@ app.get('/hhttps/oauth/authorize', async (req, res) => {
 // Approve endpoint: called from the consent page after the user has
 // authenticated (passkey) and confirmed. Exchanges the user's session for a
 // short-lived authorization code.
-app.post('/hhttps/oauth/approve', async (req, res) => {
+app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
   const { token, client_id, redirect_uri, scope, state, nonce,
           code_challenge, code_challenge_method, pseudonym } = req.body || {};
 
@@ -1839,16 +1852,17 @@ app.post('/hhttps/oauth/revoke', async (req, res) => {
 
 // ─── OAuth helper rendering ──────────────────────────────────────────────────
 
-function redirectWithError(redirectUri, state, errorCode, errorDescription) {
+function redirectWithError(res, redirectUri, state, errorCode, errorDescription) {
+  let url;
   try {
-    const url = new URL(redirectUri);
-    url.searchParams.set('error', errorCode);
-    if (errorDescription) url.searchParams.set('error_description', errorDescription);
-    if (state) url.searchParams.set('state', state);
-    return { redirect: url.toString() };
+    url = new URL(redirectUri);
   } catch (e) {
-    return null;
+    return res.status(400).send(renderOAuthError('redirect_uri is not a valid URL.', 400));
   }
+  url.searchParams.set('error', errorCode);
+  if (errorDescription) url.searchParams.set('error_description', errorDescription);
+  if (state) url.searchParams.set('state', state);
+  return res.redirect(302, url.toString());
 }
 
 function renderOAuthError(message, status) {
