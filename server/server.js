@@ -2717,12 +2717,32 @@ function emailContextMatches(ctx, verification) {
  * An existing anchor always wins (AK-8): its stored userId/pseudonym are returned
  * by resolveOrCreate and the session is rebound to them (AK-2).
  */
+function anchorConflict(code) {
+  const err = new Error(code);
+  err.code = code;
+  err.status = 409;
+  return err;
+}
+
 async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymInput, verification }) {
   const emailHash = emailAnchorHash(email);
   const wish      = sanitizePseudonym(pseudonymInput) ?? session.pseudonym ?? null;
-  const anchor    = await db.identityAnchors.resolveOrCreate({
+
+  // F-6 (K-5/S-6): a session that is already anchored keeps its anchor — a
+  // second, different address is refused instead of tripping UNIQUE(user_id).
+  if (session.emailVerified) {
+    const existing = await db.identityAnchors.getByUserId(session.userId);
+    if (existing && existing.emailHash !== emailHash) throw anchorConflict('email_already_bound');
+  }
+
+  const anchor = await db.identityAnchors.resolveOrCreate({
     emailHash, userId: session.userId, pseudonym: resolvePseudonym(wish)
   });
+
+  // F-6: a session that already proves another identity (passkey credential,
+  // GitHub, EUDI) is never silently rebound to a foreign anchor's userId.
+  const hasOtherMethod = !!(session.credentialId || session.hasPasskey || session.githubVerified || session.eudiVerified);
+  if (hasOtherMethod && anchor.userId !== session.userId) throw anchorConflict('identity_conflict');
 
   await db.sessions.update(sessionId, {
     userId:          anchor.userId,
@@ -2826,6 +2846,7 @@ app.get('/hhttps/email/verify', async (req, res) => {
     });
     await db.challenges.delete(emailContextId(sessionId));
   } catch (e) {
+    if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
     console.error('[email/verify] anchor bind failed:', e.message);
     return res.redirect('/?email_verify=error&reason=anchor_failed');
   }
@@ -2875,6 +2896,7 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     });
     await db.challenges.delete(emailContextId(sessionId));
   } catch (e) {
+    if (e.status === 409) return res.status(409).json({ error: e.code });
     console.error('[email/confirm-code] anchor bind failed:', e.message);
     return res.status(500).json({ error: 'anchor_bind_failed' });
   }

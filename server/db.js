@@ -415,13 +415,27 @@ export const identityAnchors = {
    * (`created: false`) — the caller must rebind the session to them (AK-2/8).
    */
   async resolveOrCreate({ emailHash, userId, pseudonym }) {
-    const { rows } = await q(
-      `INSERT INTO identity_anchors (email_hash, user_id, pseudonym)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (email_hash) DO UPDATE SET last_seen_at = NOW()
-       RETURNING user_id, pseudonym, (xmax = 0) AS created`,
-      [emailHash, userId, pseudonym]
-    );
+    let rows;
+    try {
+      ({ rows } = await q(
+        `INSERT INTO identity_anchors (email_hash, user_id, pseudonym)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (email_hash) DO UPDATE SET last_seen_at = NOW()
+         RETURNING user_id, pseudonym, (xmax = 0) AS created`,
+        [emailHash, userId, pseudonym]
+      ));
+    } catch (e) {
+      // F-6 (K-5/S-6): ON CONFLICT covers email_hash only. A UNIQUE(user_id)
+      // violation means this userId is already anchored to ANOTHER address —
+      // surface it as a typed conflict, not as a generic 500.
+      if (e.code === '23505') {
+        const err = new Error('email_already_bound');
+        err.code = 'email_already_bound';
+        err.status = 409;
+        throw err;
+      }
+      throw e;
+    }
     const r = rows[0];
     return { userId: r.user_id, pseudonym: r.pseudonym, created: r.created === true };
   },

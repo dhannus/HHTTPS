@@ -14,7 +14,7 @@ const rnd = () => crypto.randomBytes(5).toString('hex');
 const freshEmail = (tag) => `sec-${tag}-${rnd()}@example.org`;
 
 let srv;
-const cleanup = { hashes: new Set(), userIds: new Set(), clientIds: new Set() };
+const cleanup = { hashes: new Set(), userIds: new Set(), clientIds: new Set(), credentialIds: new Set() };
 
 test.before(async () => {
   if (skip) return;
@@ -30,6 +30,11 @@ test.after(async () => {
   }
   if (userIds.length) await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
   if (hashes.length) await sql('DELETE FROM identity_anchors WHERE email_hash = ANY($1)', [hashes]);
+  const credentialIds = [...cleanup.credentialIds];
+  if (credentialIds.length) {
+    await sql('UPDATE sessions SET credential_id = NULL WHERE credential_id = ANY($1)', [credentialIds]);
+    await sql('DELETE FROM credentials WHERE credential_id = ANY($1)', [credentialIds]);
+  }
   await srv.stop();
   await closeDb();
 });
@@ -171,4 +176,58 @@ test('F-5/S-7: an unknown role is replaced by citizen — the payload never reac
   track(A);
   // The dev-mode log line prints the role that went into the mail renderer.
   assert.ok(!srv.logs().includes(payload), 'raw payload must not appear in the mail pipeline (dev log)');
+});
+
+// The email limiter (30 requests / 60 min per IP, in-process) also counts
+// /session/start. Everything above already used ~2/3 of it, so the remaining
+// groups run against a fresh server process (same DB, same env).
+test('(harness) fresh server process for F-6..F-8', { skip }, async () => {
+  await srv.stop();
+  srv = await startServer({ env: { SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '' } });
+});
+
+// ─── F-6 (K-5/S-6): identity conflicts answer 409, never 500 ────────────────
+
+test('F-6/K-5: a second address in an already anchored session → 409 email_already_bound (not 500)', { skip }, async () => {
+  const sessionId = await newSession();
+  const A = freshEmail('k5a'); const B = freshEmail('k5b');
+
+  const sa = await send(sessionId, A);
+  const ca = await confirm(sessionId, sa.devCode);
+  assert.equal(ca.status, 200, ca.text);
+  track(A, ca.json.userId);
+
+  const sb = await send(sessionId, B);
+  const cb = await confirm(sessionId, sb.devCode);
+  assert.equal(cb.status, 409, cb.text);
+  assert.equal(cb.json.error, 'email_already_bound');
+  assert.equal(await anchorCount(B), 0, 'no anchor for B');
+  const [row] = await sql('SELECT user_id FROM sessions WHERE session_id = $1', [sessionId]);
+  assert.equal(row.user_id, ca.json.userId, 'session keeps the first anchor');
+});
+
+test('F-6/K-5: a session carrying a passkey credential is never rebound to a foreign anchor → 409 identity_conflict', { skip }, async () => {
+  // Victim: email A anchored to U_A.
+  const s1 = await newSession();
+  const A = freshEmail('k5c');
+  const sa = await send(s1, A);
+  const ca = await confirm(s1, sa.devCode);
+  assert.equal(ca.status, 200, ca.text);
+  track(A, ca.json.userId);
+
+  // Second session with a (simulated) passkey credential for another user.
+  const s2 = await newSession();
+  const [before] = await sql('SELECT user_id FROM sessions WHERE session_id = $1', [s2]);
+  const credId = 'cred-' + rnd();
+  await sql(`INSERT INTO credentials (credential_id, user_id, public_key, counter) VALUES ($1, $2, '\\x00', 0)`, [credId, before.user_id]);
+  cleanup.credentialIds.add(credId);
+  await sql('UPDATE sessions SET credential_id = $2 WHERE session_id = $1', [s2, credId]);
+
+  const sb = await send(s2, A);
+  const cb = await confirm(s2, sb.devCode);
+  assert.equal(cb.status, 409, cb.text);
+  assert.equal(cb.json.error, 'identity_conflict');
+  const [after] = await sql('SELECT user_id, email_verified FROM sessions WHERE session_id = $1', [s2]);
+  assert.equal(after.user_id, before.user_id, 'session userId unchanged');
+  assert.equal(after.email_verified, false);
 });
