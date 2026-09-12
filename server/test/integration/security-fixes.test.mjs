@@ -28,7 +28,10 @@ test.after(async () => {
     await sql('DELETE FROM authorization_codes WHERE client_id = ANY($1)', [clientIds]);
     await sql('DELETE FROM oauth_clients WHERE client_id = ANY($1)', [clientIds]);
   }
-  if (userIds.length) await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
+  if (userIds.length) {
+    await sql('DELETE FROM refresh_tokens WHERE user_id = ANY($1)', [userIds]);
+    await sql('DELETE FROM identity_claims_cache WHERE user_id = ANY($1)', [userIds]);
+  }
   if (hashes.length) await sql('DELETE FROM identity_anchors WHERE email_hash = ANY($1)', [hashes]);
   const credentialIds = [...cleanup.credentialIds];
   if (credentialIds.length) {
@@ -230,4 +233,63 @@ test('F-6/K-5: a session carrying a passkey credential is never rebound to a for
   const [after] = await sql('SELECT user_id, email_verified FROM sessions WHERE session_id = $1', [s2]);
   assert.equal(after.user_id, before.user_id, 'session userId unchanged');
   assert.equal(after.email_verified, false);
+});
+
+// ─── F-8 (K-8/S-9b): /oauth/approve enforces allowed_scopes ─────────────────
+
+const REDIRECT_URI = 'http://localhost/cb';
+
+async function createClient(allowedScopes) {
+  const clientId = `test-sec-${rnd()}`;
+  await sql(
+    `INSERT INTO oauth_clients
+       (client_id, client_secret_hash, name, homepage_url, redirect_uris, allowed_scopes,
+        subject_type, verified, is_active, verification_status)
+     VALUES ($1, NULL, $2, $3, $4, $5, 'pairwise', TRUE, TRUE, 'verified')`,
+    [clientId, `SEC test client ${clientId}`, 'http://localhost', JSON.stringify([REDIRECT_URI]), JSON.stringify(allowedScopes)]
+  );
+  cleanup.clientIds.add(clientId);
+  return clientId;
+}
+
+async function hhttpsToken() {
+  const sessionId = await newSession();
+  const A = freshEmail('f8');
+  const s = await send(sessionId, A);
+  const c = await confirm(sessionId, s.devCode);
+  assert.equal(c.status, 200, c.text);
+  track(A, c.json.userId);
+  const d = await srv.api('/hhttps/role/declare', { method: 'POST', body: { sessionId } });
+  assert.equal(d.status, 200, d.text);
+  return d.json.hhttps.token;
+}
+
+async function approve(token, clientId, scope) {
+  const challenge = crypto.createHash('sha256').update(crypto.randomBytes(32)).digest('base64url');
+  return srv.api('/hhttps/oauth/approve', {
+    method: 'POST',
+    body: { token, client_id: clientId, redirect_uri: REDIRECT_URI, scope,
+            code_challenge: challenge, code_challenge_method: 'S256' }
+  });
+}
+
+test('F-8/K-8: approve with a scope the client may not request → 400 invalid_scope, no code row', { skip }, async () => {
+  const token = await hhttpsToken();
+  const clientId = await createClient(['openid', 'role']); // no `email`
+
+  const denied = await approve(token, clientId, 'openid email');
+  assert.equal(denied.status, 400, denied.text);
+  assert.equal(denied.json.error, 'invalid_scope');
+
+  const unknown = await approve(token, clientId, 'openid does-not-exist');
+  assert.equal(unknown.status, 400, unknown.text);
+  assert.equal(unknown.json.error, 'invalid_scope');
+
+  const rows = await sql('SELECT 1 FROM authorization_codes WHERE client_id = $1', [clientId]);
+  assert.equal(rows.length, 0, 'no authorization code was issued');
+
+  // Sanity: an allowed scope set still works.
+  const ok = await approve(token, clientId, 'openid role');
+  assert.equal(ok.status, 200, ok.text);
+  assert.ok(new URL(ok.json.redirect).searchParams.get('code'));
 });

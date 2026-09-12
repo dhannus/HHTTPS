@@ -1509,6 +1509,16 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
     if (!scopes.includes('openid')) {
       return res.status(400).json({ error: 'openid scope required' });
     }
+    // F-8 (K-8/S-9b): same scope policy as /authorize — a direct approve call
+    // must not obtain scopes (e.g. `email`) the client was never granted.
+    const unknownScopes = scopes.filter(s => !SCOPES_KNOWN.has(s));
+    if (unknownScopes.length > 0) {
+      return res.status(400).json({ error: 'invalid_scope', error_description: `Unknown scopes: ${unknownScopes.join(', ')}` });
+    }
+    const deniedScopes = scopes.filter(s => !client.allowed_scopes.includes(s));
+    if (deniedScopes.length > 0) {
+      return res.status(400).json({ error: 'invalid_scope', error_description: `Platform may not request these scopes: ${deniedScopes.join(', ')}` });
+    }
 
     // Generate authorization code
     const code = 'hp-' + crypto.randomBytes(24).toString('base64url');
