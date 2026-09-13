@@ -3694,110 +3694,122 @@ app.get('/hhttps/protected', async (req, res) => {
 // ─── Machine Tokens ───────────────────────────────────────────────────────────
 
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
-  const { operatorName, operatorUrl, purpose, contactEmail, role, sessionId, publicKeyJwk } = req.body;
-  if (!operatorName || !purpose)
-    return res.status(400).json({ error: 'operatorName and purpose are required.' });
-  // The ONE rule for machines: an operator contact e-mail is required.
-  // This is reachability, not a trust event — machine trustScore stays 0.
-  if (!contactEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(contactEmail)))
-    return res.status(400).json({ error: 'operator_email_required',
-      detail: 'A valid operator contact e-mail is required to register a machine.' });
-  // The operator e-mail must be CONFIRMED via the code flow — we need to know
-  // it exists and is read. Confirmation is reachability, NOT trust: machine
-  // trustScore stays 0 (the score is a humanity scale). Zero-PII: the session
-  // stores only the e-mail DOMAIN, so we compare domains.
-  const opSess   = sessionId ? await db.sessions.get(sessionId) : null;
-  const opDomain = String(contactEmail).split('@')[1].toLowerCase();
-  if (!opSess || !opSess.emailVerified
-      || String(opSess.emailDomain || '').toLowerCase() !== opDomain)
-    return res.status(400).json({ error: 'operator_email_unconfirmed',
-      detail: 'Confirm the operator e-mail first: /hhttps/email/send, then /hhttps/email/confirm-code, then register with the same sessionId.' });
+  // #7: a DB error here used to be an unhandled rejection that killed the
+  // process (missing column key_jkt). Answer 500 and keep serving.
+  try {
+    const { operatorName, operatorUrl, purpose, contactEmail, role, sessionId, publicKeyJwk } = req.body;
+    if (!operatorName || !purpose)
+      return res.status(400).json({ error: 'operatorName and purpose are required.' });
+    // The ONE rule for machines: an operator contact e-mail is required.
+    // This is reachability, not a trust event — machine trustScore stays 0.
+    if (!contactEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(contactEmail)))
+      return res.status(400).json({ error: 'operator_email_required',
+        detail: 'A valid operator contact e-mail is required to register a machine.' });
+    // The operator e-mail must be CONFIRMED via the code flow — we need to know
+    // it exists and is read. Confirmation is reachability, NOT trust: machine
+    // trustScore stays 0 (the score is a humanity scale). Zero-PII: the session
+    // stores only the e-mail DOMAIN, so we compare domains.
+    const opSess   = sessionId ? await db.sessions.get(sessionId) : null;
+    const opDomain = String(contactEmail).split('@')[1].toLowerCase();
+    if (!opSess || !opSess.emailVerified
+        || String(opSess.emailDomain || '').toLowerCase() !== opDomain)
+      return res.status(400).json({ error: 'operator_email_unconfirmed',
+        detail: 'Confirm the operator e-mail first: /hhttps/email/send, then /hhttps/email/confirm-code, then register with the same sessionId.' });
 
-  // Optional self-declared role for the bot. v0.5: roles are ESCO-dynamic, so a
-  // bot may declare a free-form role — EXCEPT a reserved profession (doctor/
-  // lawyer/notary/police/…), which a machine can never self-declare.
-  let normalizedRole = null;
-  let roleLabel = null;
-  let roleIcon = null;
-  if (role) {
-    const g = guardReservedRole(role);
-    if (g.reserved) {
-      return res.status(400).json({
-        error: 'invalid_role',
-        detail: `"${role}" is a protected profession and cannot be self-declared by a machine.`,
-        reservedKey: g.key || null
-      });
+    // Optional self-declared role for the bot. v0.5: roles are ESCO-dynamic, so a
+    // bot may declare a free-form role — EXCEPT a reserved profession (doctor/
+    // lawyer/notary/police/…), which a machine can never self-declare.
+    let normalizedRole = null;
+    let roleLabel = null;
+    let roleIcon = null;
+    if (role) {
+      const g = guardReservedRole(role);
+      if (g.reserved) {
+        return res.status(400).json({
+          error: 'invalid_role',
+          detail: `"${role}" is a protected profession and cannot be self-declared by a machine.`,
+          reservedKey: g.key || null
+        });
+      }
+      const desc = resolveRole({ label: role });
+      normalizedRole = desc.id;
+      roleLabel      = desc.label;
+      roleIcon       = '🤖';
     }
-    const desc = resolveRole({ label: role });
-    normalizedRole = desc.id;
-    roleLabel      = desc.label;
-    roleIcon       = '🤖';
+
+    const operatorId = 'op-' + crypto.randomBytes(8).toString('hex');
+    const apiKey     = 'mk-' + crypto.randomBytes(24).toString('hex');
+    const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+
+    const keyJkt = jwkThumbprint(publicKeyJwk);
+    await db.machineOperators.create({
+      operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash,
+      role: normalizedRole, roleLabel, roleIcon, keyJkt,
+    });
+
+    res.status(201).json({
+      hhttps: { version: '0.5.0' },
+      operatorId, apiKey,
+      role: normalizedRole,
+      roleLabel,
+      warning: 'Store the API key securely — it is shown only once.',
+      tokenEndpoint: `${BASE_URL}/hhttps/machine/token`,
+      message: `Operator "${operatorName}"${normalizedRole ? ` (role: ${roleLabel})` : ''} registered. Issue machine tokens with apiKey.`
+    });
+  } catch (e) {
+    console.error('[machine/register] failed:', e);
+    res.status(500).json({ error: 'machine_register_failed' });
   }
-
-  const operatorId = 'op-' + crypto.randomBytes(8).toString('hex');
-  const apiKey     = 'mk-' + crypto.randomBytes(24).toString('hex');
-  const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-
-  const keyJkt = jwkThumbprint(publicKeyJwk);
-  await db.machineOperators.create({
-    operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash,
-    role: normalizedRole, roleLabel, roleIcon, keyJkt,
-  });
-
-  res.status(201).json({
-    hhttps: { version: '0.5.0' },
-    operatorId, apiKey,
-    role: normalizedRole,
-    roleLabel,
-    warning: 'Store the API key securely — it is shown only once.',
-    tokenEndpoint: `${BASE_URL}/hhttps/machine/token`,
-    message: `Operator "${operatorName}"${normalizedRole ? ` (role: ${roleLabel})` : ''} registered. Issue machine tokens with apiKey.`
-  });
 });
 
 app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
-  const { operatorId, apiKey } = req.body;
-  if (!operatorId || !apiKey)
-    return res.status(400).json({ error: 'operatorId and apiKey are required.' });
+  try {
+    const { operatorId, apiKey } = req.body;
+    if (!operatorId || !apiKey)
+      return res.status(400).json({ error: 'operatorId and apiKey are required.' });
 
-  const op = await db.machineOperators.get(operatorId);
-  if (!op) return res.status(404).json({ error: 'Operator not found.' });
+    const op = await db.machineOperators.get(operatorId);
+    if (!op) return res.status(404).json({ error: 'Operator not found.' });
 
-  const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-  if (keyHash !== op.api_key_hash)
-    return res.status(401).json({ error: 'Invalid API key.' });
+    const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
+    if (keyHash !== op.api_key_hash)
+      return res.status(401).json({ error: 'Invalid API key.' });
 
-  const jti   = uuid();
-  const tokenPayload = {
-    jti, sub: 'machine', iss: `https://${RP_ID}`, hhttps_iss: `hhttps://${RP_ID}`,
-    human: false, actorType: 'bot',
-    operatorId, operatorName: op.operator_name, purpose: op.purpose
-    // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
-  };
-  // If the operator self-declared a role at /machine/register, propagate it
-  // into the token claims. Origins (like ask.iamhmn.org) can use this for
-  // role-based logic just as they do for human OAuth tokens.
-  if (op.role) {
-    tokenPayload.role       = op.role;
-    tokenPayload.role_label = op.role_label;
-    tokenPayload.role_icon  = op.role_icon;
+    const jti   = uuid();
+    const tokenPayload = {
+      jti, sub: 'machine', iss: `https://${RP_ID}`, hhttps_iss: `hhttps://${RP_ID}`,
+      human: false, actorType: 'bot',
+      operatorId, operatorName: op.operator_name, purpose: op.purpose
+      // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
+    };
+    // If the operator self-declared a role at /machine/register, propagate it
+    // into the token claims. Origins (like ask.iamhmn.org) can use this for
+    // role-based logic just as they do for human OAuth tokens.
+    if (op.role) {
+      tokenPayload.role       = op.role;
+      tokenPayload.role_label = op.role_label;
+      tokenPayload.role_icon  = op.role_icon;
+    }
+    if (op.key_jkt) { tokenPayload.cnf = { jkt: op.key_jkt }; }
+    const token = signToken(tokenPayload, { expiresIn: MACHINE_TTL });
+
+    await db.tokens.create({
+      jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000
+    });
+    await db.machineOperators.incrementTokensIssued(operatorId);
+
+    setHHTPPS(res, { status: 'verified', human: false, actorType: 'bot',
+                     method: 'machine-token', machineOperator: operatorId,
+                     machinePurpose: op.purpose });
+    res.json({
+      hhttps: { version: '0.5.0', human: false, actorType: 'bot' },
+      token, expiresAt: new Date(Date.now() + MACHINE_TTL * 1000).toISOString(),
+      operator: { id: operatorId, name: op.operator_name, purpose: op.purpose }
+    });
+  } catch (e) {
+    console.error('[machine/token] failed:', e);
+    res.status(500).json({ error: 'machine_token_failed' });
   }
-  if (op.key_jkt) { tokenPayload.cnf = { jkt: op.key_jkt }; }
-  const token = signToken(tokenPayload, { expiresIn: MACHINE_TTL });
-
-  await db.tokens.create({
-    jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000
-  });
-  await db.machineOperators.incrementTokensIssued(operatorId);
-
-  setHHTPPS(res, { status: 'verified', human: false, actorType: 'bot',
-                   method: 'machine-token', machineOperator: operatorId,
-                   machinePurpose: op.purpose });
-  res.json({
-    hhttps: { version: '0.5.0', human: false, actorType: 'bot' },
-    token, expiresAt: new Date(Date.now() + MACHINE_TTL * 1000).toISOString(),
-    operator: { id: operatorId, name: op.operator_name, purpose: op.purpose }
-  });
 });
 
 // ─── Webhooks ────────────────────────────────────────────────────────────────
@@ -4710,11 +4722,12 @@ async function main() {
     process.exit(1);
   }
 
-  // 2b. F-7 (K-6): the phase-8 schema must be in place BEFORE we listen.
+  // 2b. F-7 (K-6): the boot-DDL migrations (phase 8, phase 4b key_jkt, …)
+  // must be in place BEFORE we listen.
   try {
-    await db.ensurePhase8Schema();
+    await db.ensureBootSchema();
   } catch (e) {
-    console.error('\n❌ Phase-8 schema migration failed:', e.message, '\n');
+    console.error('\n❌ Boot schema migration failed:', e.message, '\n');
     process.exit(1);
   }
 
@@ -4732,6 +4745,11 @@ mountPopVerify(app, { db, verifyToken, RP_ID, BASE_URL }); // POP-VERIFY
     console.log(`   ✓ Token Revocation         ✓ Webhooks (DB-backed)\n`);
   });
 }
+
+// #7: Node ≥ 15 terminates the process on an unhandled promise rejection. A
+// single failing DB query in an async route handler without try/catch must
+// not take the whole issuer down — log it and keep serving.
+process.on('unhandledRejection', (e) => console.error('[UNHANDLED]', e));
 
 main().catch(err => {
   console.error('Fatal error:', err);

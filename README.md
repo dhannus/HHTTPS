@@ -267,11 +267,15 @@ PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
 
 Remove the `UPDATE oauth_clients` block first if you do not want every existing client to be able to request scope `email`. The file is idempotent; running it twice is safe.
 
+### Migration: phase 4b (`machine_operators.key_jkt`, #7)
+
+`server/sql/migration-phase-4b-machine-key-jkt.sql` adds the `key_jkt` column (JWK thumbprint of an operator's optional `publicKeyJwk`) that `/hhttps/machine/register` has been writing without a migration. It is DDL only and the server applies it itself at boot (`db.js`: `BOOT_DDL_FILES`, after an applied-check) — nothing to do; running the file manually via `psql` is safe and idempotent.
+
 ### Tests lokal ausführen
 
 The test suite (`node --test`, no extra framework) has unit tests (pure helpers in `identity.js`, mail template, sign-in page) and integration tests that boot `server.js` as a child process against a **local PostgreSQL**. Integration tests are skipped when `TEST_PG_HOST` is not set.
 
-Prerequisites: PostgreSQL ≥ 14 reachable via TCP host or Unix socket directory, database `hhttps`, role `hhttps`. The harness connects with the fixed password `x`, so the role must either accept that password (`ALTER USER hhttps PASSWORD 'x'`) or be trusted in `pg_hba.conf` for the socket/localhost (the reference setup is a throwaway cluster with `trust` under `/var/lib/pgtest`). `bash scripts/install-pg.sh` creates the role with a random password and loads `server/sql/schema.sql`; the earlier migrations (`server/sql/migration-phase-*.sql`) must be applied too. The phase-8 DDL is applied by the server itself at boot. Use a throwaway database — integration tests write real rows.
+Prerequisites: PostgreSQL ≥ 14 reachable via TCP host or Unix socket directory, database `hhttps`, role `hhttps`. The harness connects with the fixed password `x`, so the role must either accept that password (`ALTER USER hhttps PASSWORD 'x'`) or be trusted in `pg_hba.conf` for the socket/localhost (the reference setup is a throwaway cluster with `trust` under `/var/lib/pgtest`). `bash scripts/install-pg.sh` creates the role with a random password and loads `server/sql/schema.sql`; the earlier migrations (`server/sql/migration-phase-*.sql`) must be applied too. The phase-8 and phase-4b DDL is applied by the server itself at boot. Use a throwaway database — integration tests write real rows.
 
 ```bash
 cd server

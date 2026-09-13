@@ -182,3 +182,16 @@ test('F-7: the operator data-update block appends "email" to allowed_scopes (che
   [row] = await sql('SELECT allowed_scopes FROM oauth_clients WHERE client_id = $1', [clientId]);
   assert.deepEqual(JSON.parse(row.allowed_scopes), ['openid', 'role', 'email']);
 });
+
+test('#7: boot DDL list applies migration-phase-4b (machine_operators.key_jkt), idempotent', { skip }, async () => {
+  const entry = db.BOOT_DDL_FILES.find(e => e.file === 'migration-phase-4b-machine-key-jkt.sql');
+  assert.ok(entry, 'phase-4b file is part of BOOT_DDL_FILES');
+  assert.deepEqual(entry.columns, [['machine_operators', 'key_jkt']]);
+  await db.ensureBootSchema();
+  const ddl = fs.readFileSync(path.join(SERVER_DIR, 'sql', entry.file), 'utf8');
+  await sql(ddl); // safe to re-run on an already-migrated database
+  const cols = await sql(
+    `SELECT column_name FROM information_schema.columns
+     WHERE table_name = 'machine_operators' AND column_name = 'key_jkt'`);
+  assert.equal(cols.length, 1, JSON.stringify(cols));
+});

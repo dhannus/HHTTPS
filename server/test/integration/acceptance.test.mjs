@@ -564,29 +564,39 @@ test('AK-28: /hhttps/age/direct never issues an hhttps.token (age-only identity 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// B-1 — /hhttps/machine/register kills the server process. Runs LAST on its
-// own server so the crash cannot poison other groups. `todo`: outside the AK
-// list (machine path is a negative case in the tester brief), documented as a
-// finding in testprotokoll.md.
+// #7 (formerly B-1) — /hhttps/machine/register used to kill the server process
+// (unhandled rejection: column machine_operators.key_jkt missing, route without
+// try/catch). Runs LAST on its own server instance so a regression cannot
+// poison the other groups.
 // ═══════════════════════════════════════════════════════════════════════════
 
-test('B-1 (todo): POST /hhttps/machine/register on an email-verified session → expected 201; observed: server process exits (42703 key_jkt)',
-  { skip, todo: 'B-1: unhandled rejection — column machine_operators.key_jkt missing, route has no try/catch' }, async () => {
+test('#7: POST /hhttps/machine/register on an email-verified session → 201 with operatorId/apiKey, server keeps running',
+  { skip }, async () => {
   await restart();
   const email = freshEmail('b1');
   const { sessionId } = await verifyEmail(srv, email, 'Operator', track);
-  let status = null; let text = '';
+  let status = null; let text = ''; let json = null;
   try {
     const reg = await srv.api('/hhttps/machine/register', {
       method: 'POST', body: { operatorName: 'ACC Bot', purpose: 'acceptance test', contactEmail: email, sessionId }
     });
-    status = reg.status; text = reg.text;
+    status = reg.status; text = reg.text; json = reg.json;
     if (reg.json?.operatorId) operatorIds.add(reg.json.operatorId);
   } catch (e) {
-    text = `fetch failed (${e.message}); server log: ${srv.logs().split('\n').filter(l => /Query failed|does not exist/.test(l)).join(' | ')}`;
+    text = `fetch failed (${e.message}); server log: ${srv.logs().split('\n').filter(l => /Query failed|does not exist|UNHANDLED/.test(l)).join(' | ')}`;
+  }
+  // The server must still be alive after the call — the crash was the bug.
+  let info;
+  try {
+    info = await srv.api('/hhttps/info');
+  } catch (e) {
+    info = { status: null, text: `fetch failed (${e.message}) — server process died` };
   } finally {
     // whatever happened, leave a live server behind for test.after()
     await restart();
   }
   assert.equal(status, 201, text);
+  assert.match(String(json?.operatorId), /^op-[0-9a-f]{16}$/, text);
+  assert.match(String(json?.apiKey), /^mk-[0-9a-f]{48}$/, text);
+  assert.equal(info.status, 200, `server must keep running after /machine/register; observed ${info.status}: ${info.text}`);
 });
