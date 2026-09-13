@@ -2,6 +2,12 @@
 // The page is plain HTML with one inline script; there is no DOM here, so we
 // check attributes and strings with regexes and syntax-check the script by
 // compiling it with `new Function` (never executed).
+//
+// #25: the BEHAVIOUR (AK-14 disabled buttons + unlock after confirm, AK-15
+// pseudonym in /email/send and next to the check mark, K-9 magic-link return,
+// K-7 "482 913" code input, passkey/K-4) is covered in the browser by
+// test/e2e/signin.e2e.test.mjs (Playwright, `npm run test:e2e`); only the
+// checks without a DOM equivalent stay here (syntax, i18n, pick() guard, …).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -10,13 +16,6 @@ import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(join(here, '../../public/index.html'), 'utf8');
-
-/** Opening `<button …>` tag whose attributes contain id="<id>". */
-function openingTag(id) {
-  const m = html.match(new RegExp(`<button\\b[^>]*\\bid="${id}"[^>]*>`));
-  assert.ok(m, `opening <button> tag with id="${id}" exists`);
-  return m[0];
-}
 
 /** Inner text of the inline (non-src) <script> block. */
 function inlineScript() {
@@ -42,30 +41,6 @@ function i18nBlock(lang) {
 }
 
 // ── AK-14: email first — the other human methods are disabled until confirmed ──
-test('AK-14: passkey, eudi, github, age buttons are rendered disabled and gated on email', () => {
-  for (const x of ['passkey', 'eudi', 'github', 'age']) {
-    const tag = openingTag(`m-${x}`);
-    assert.match(tag, /(^|\s)disabled(\s|>)/, `#m-${x} has the disabled attribute`);
-    assert.match(tag, /\sdata-requires-email="true"/, `#m-${x} has data-requires-email="true"`);
-  }
-});
-
-test('AK-14: email and machine buttons are NOT gated', () => {
-  for (const x of ['email', 'machine']) {
-    const tag = openingTag(`m-${x}`);
-    assert.doesNotMatch(tag, /(^|\s)disabled(\s|>)/, `#m-${x} must not be disabled`);
-    assert.doesNotMatch(tag, /data-requires-email/, `#m-${x} must not carry data-requires-email`);
-  }
-});
-
-test('AK-14: persistent "email first" hint exists and the script unlocks gated buttons', () => {
-  assert.ok(html.includes('id="emailFirstHint"'), 'hint element #emailFirstHint exists');
-  const js = inlineScript();
-  assert.match(js, /querySelectorAll\(\s*['"`][^'"`]*data-requires-email[^'"`]*['"`]\s*\)/,
-    'script selects [data-requires-email] buttons via querySelectorAll');
-  assert.match(js, /removeAttribute\(\s*['"]disabled['"]\s*\)/, 'script removes the disabled attribute');
-});
-
 test('AK-14: pick() bails out on a disabled method button and shows the email-first hint', () => {
   const js = inlineScript();
   const pick = js.match(/function pick\(m\)\{([\s\S]*?)\n\}/);
@@ -87,31 +62,11 @@ test('AK-15: pseudonym input lives in the email panel', () => {
   assert.ok(panel.indexOf('id="emailInput"') < panel.indexOf('id="pseudoInput"'), 'pseudonym field comes after the email field');
 });
 
-test('AK-15: emailStart() sends pseudonym with /hhttps/email/send', () => {
-  const js = inlineScript();
-  const fn = js.match(/async function emailStart\(\)\{([\s\S]*?)\n\}/);
-  assert.ok(fn, 'emailStart() is defined');
-  const call = fn[1].match(/\/hhttps\/email\/send'[^\n]*body:JSON\.stringify\(([^\n]*?)\)\}\)/);
-  assert.ok(call, 'emailStart posts to /hhttps/email/send with a JSON body');
-  assert.match(call[1], /pseudonym/, 'the /email/send body includes pseudonym');
-  assert.match(fn[1], /pseudoInput/, 'emailStart reads #pseudoInput');
-});
-
 test('AK-15: applyLang() sets the pseudonym placeholder', () => {
   const js = inlineScript();
   const fn = js.match(/function applyLang\(\)\{([\s\S]*?)\n\}/);
   assert.ok(fn, 'applyLang() is defined');
   assert.match(fn[1], /email\.pseudo\.ph/, 'applyLang sets the pseudoInput placeholder');
-});
-
-// ── Pseudonym display after confirm-code ──
-test('after confirm-code the pseudonym is shown next to the check mark', () => {
-  const js = inlineScript();
-  const fn = js.match(/async function emailConfirm\(\)\{([\s\S]*?)\n\}/);
-  assert.ok(fn, 'emailConfirm() is defined');
-  assert.match(fn[1], /pseudonym/, 'emailConfirm reads the pseudonym from the response');
-  assert.match(fn[1], /email\.done/, "emailConfirm uses the 'email.done' hint");
-  assert.match(js, /class(?:Name)?=['"]pseudo['"]/, 'a .pseudo span is rendered into the state slot');
 });
 
 // ── Passkey: register/start binds to the session (D4), not to a client-chosen userId ──
@@ -172,19 +127,6 @@ test('K-4: passkeyRun() skips register/finish when excludeCredentials is non-emp
 test('K-4: i18n passkey.existing exists in de and en', () => {
   assert.match(i18nBlock('de'), /'passkey\.existing':'Passkey erkannt — bitte bestätigen'/);
   assert.match(i18nBlock('en'), /'passkey\.existing':'Passkey found — please confirm'/);
-});
-
-// ── F-9 / K-9: magic-link return (?email_verify=success&session=…&pseudonym=…) ──
-test('K-9: page evaluates email_verify query params on load and cleans the URL', () => {
-  const js = inlineScript();
-  assert.match(js, /URLSearchParams/, 'script uses URLSearchParams');
-  assert.match(js, /email_verify/, 'script reads the email_verify param');
-  assert.match(js, /['"]success['"]/, 'script handles email_verify=success');
-  assert.match(js, /['"]error['"]/, 'script handles email_verify=error');
-  assert.match(js, /['"]pseudonym['"]/, 'script reads the pseudonym param');
-  assert.match(js, /['"]reason['"]/, 'script reads the reason param');
-  assert.match(js, /markConfirmed\(\s*'email'\s*\)/, 'script marks email confirmed');
-  assert.match(js, /history\.replaceState/, 'script strips the query params via history.replaceState');
 });
 
 // ── F-9 / K-7: code fields accept pasted "123 456" / "123-456" ──

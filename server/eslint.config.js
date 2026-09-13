@@ -13,6 +13,8 @@ export default [
   },
   js.configs.recommended,
   {
+    // Applies to server code and every test tree, including test/e2e (#25:
+    // Playwright specs run under Node — the Node globals are sufficient).
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',

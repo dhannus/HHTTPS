@@ -281,10 +281,13 @@ Prerequisites: PostgreSQL ≥ 14 reachable via TCP host or Unix socket directory
 cd server
 npm install
 TEST_PG_HOST=/var/lib/pgtest npm test      # socket dir — or TEST_PG_HOST=localhost
+TEST_PG_HOST=/var/lib/pgtest npm run test:e2e  # browser tests of the sign-in page (Playwright + Chromium)
 npm run lint                               # ESLint 9 flat config, 0 errors required
 ```
 
 The harness sets `HHTTPS_VERIFICATION_PEPPER=test-pepper`, `EUDI_VERIFIER_SECRET=test-secret` and `EMAIL_DEV_MODE=1` for the child server, so no `.env` is needed for tests. Both gates (`npm test`, `npm run lint`) must pass before a PR.
+
+**Browser E2E (`npm run test:e2e`, #25):** `server/test/e2e/*.e2e.test.mjs` drive the sign-in page (`server/public/index.html`) in headless Chromium via [Playwright](https://playwright.dev) (devDependency) — email-first gating (AK-14), pseudonym + code entry (AK-15, K-7), magic-link return (K-9) and the passkey flow with Chromium's virtual authenticator (K-4). The suite is separate from `npm test` (its glob covers `test/unit` and `test/integration` only), needs the same `TEST_PG_HOST` and is skipped without it. Playwright needs a Chromium build: `npx playwright install chromium` once, or point `PLAYWRIGHT_BROWSERS_PATH` at an existing install (the tests fall back to `/opt/pw-browsers/chromium`). No network is needed — the unpkg scripts the page loads are answered locally (`@simplewebauthn/browser` from the pinned devDependency).
 
 ### Integrate HHTTPS into your platform
 

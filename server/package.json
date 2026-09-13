@@ -8,7 +8,8 @@
     "dev": "node --watch server.js",
     "migrate": "node scripts/migrate.js",
     "db:check": "node scripts/db-check.js",
-    "test": "node --test \"test/**/*.test.mjs\"",
+    "test": "node --test \"test/unit/**/*.test.mjs\" \"test/integration/**/*.test.mjs\"",
+    "test:e2e": "node --test \"test/e2e/**/*.e2e.test.mjs\"",
     "lint": "eslint ."
   },
   "dependencies": {
@@ -26,7 +27,9 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@simplewebauthn/browser": "^9.0.1",
     "eslint": "^9.0.0",
-    "globals": "^15.0.0"
+    "globals": "^15.0.0",
+    "playwright": "^1.56.1"
   }
 }
