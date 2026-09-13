@@ -604,7 +604,7 @@ async function passkeyRun(){
     if(!hasPasskey){
       try{
         const regResp=await L.startRegistration(ro.options);
-        const rf=await fetch(API+'/hhttps/webauthn/register/finish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId,response:regResp})});
+        const rf=await fetch(API+'/hhttps/webauthn/register/finish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId,response:regResp,sessionId})});
         if(!rf.ok)throw 0;
       }catch(e){
         /* The authenticator already holds a credential for this user handle

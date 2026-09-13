@@ -210,3 +210,16 @@ test('inline script parses as JavaScript', () => {
   const js = inlineScript();
   assert.doesNotThrow(() => new Function(js), 'inline script compiles');
 });
+
+// ── #23: register/finish is bound to the email-verified session ──
+test('#23: passkeyRun() sends sessionId with /hhttps/webauthn/register/finish', () => {
+  const js = inlineScript();
+  const fn = js.match(/async function passkeyRun\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'passkeyRun() is defined');
+  const body = fn[1];
+  const call = body.match(/\/hhttps\/webauthn\/register\/finish'[^\n]*body:JSON\.stringify\(([^\n]*?)\)\}\)/);
+  assert.ok(call, 'register/finish is called with a JSON body');
+  assert.match(call[1], /\buserId\s*:\s*pkUserId\b/, 'register/finish body carries userId: pkUserId');
+  assert.match(call[1], /\bresponse\s*:\s*regResp\b/, 'register/finish body carries response: regResp');
+  assert.match(call[1], /(^|[{,\s])sessionId(\s*:\s*sessionId)?(\s*[,}]|$)/, 'register/finish body carries sessionId');
+});

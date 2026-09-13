@@ -161,3 +161,48 @@ test('AK-9: token/refresh issues a new access token with pseudonym and method fl
   assert.equal(p.email_verified, true);
   assert.ok(p.verified_methods.includes('email'));
 });
+
+// ─── #23: webauthn/register/finish is bound to the email-verified session ───
+// All three checks run BEFORE the challenge lookup, so they are testable
+// without an authenticator (no challenge row is needed).
+
+test('#23: register/finish without sessionId → 400 sessionId required', { skip }, async () => {
+  const r = await srv.api('/hhttps/webauthn/register/finish', {
+    method: 'POST', body: { userId: crypto.randomUUID(), response: {} }
+  });
+  assert.equal(r.status, 400, r.text);
+  assert.equal(r.json?.error, 'sessionId required', r.text);
+});
+
+test('#23: register/finish with an unknown sessionId → 404', { skip }, async () => {
+  const r = await srv.api('/hhttps/webauthn/register/finish', {
+    method: 'POST', body: { sessionId: crypto.randomUUID(), userId: crypto.randomUUID(), response: {} }
+  });
+  assert.equal(r.status, 404, r.text);
+});
+
+test('#23: register/finish with a session without confirmed email → 403 email_verification_required', { skip }, async () => {
+  const sessionId = await newSession();
+  const r = await srv.api('/hhttps/webauthn/register/finish', {
+    method: 'POST', body: { sessionId, userId: crypto.randomUUID(), response: {} }
+  });
+  assertGate(r);
+});
+
+test('#23: register/finish with an email-verified session but a foreign userId → 401 session_user_mismatch', { skip }, async () => {
+  const { sessionId } = await verifiedSession();
+  const r = await srv.api('/hhttps/webauthn/register/finish', {
+    method: 'POST', body: { sessionId, userId: crypto.randomUUID(), response: {} }
+  });
+  assert.equal(r.status, 401, r.text);
+  assert.equal(r.json?.error, 'session_user_mismatch', r.text);
+});
+
+test('#23: register/finish with the matching session userId passes the binding and reaches the challenge check (400 Challenge expired.)', { skip }, async () => {
+  const { sessionId, userId } = await verifiedSession();
+  const r = await srv.api('/hhttps/webauthn/register/finish', {
+    method: 'POST', body: { sessionId, userId, response: {} }
+  });
+  assert.equal(r.status, 400, r.text);
+  assert.equal(r.json?.error, 'Challenge expired.', r.text);
+});

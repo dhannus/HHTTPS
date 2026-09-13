@@ -2397,7 +2397,19 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
 });
 
 app.post('/hhttps/webauthn/register/finish', async (req, res) => {
-  const { userId, response } = req.body;
+  // #23 (defence in depth): finish is bound to the same email-verified session
+  // that ran register/start. The challenge row alone proves knowledge of a
+  // userId that has a pending registration; the session binding makes sure
+  // the caller IS that user (session.userId == body userId) and that the
+  // email gate still holds at finish time. All three checks run BEFORE the
+  // challenge lookup so a rejected call never touches the challenge.
+  const { userId, response, sessionId } = req.body || {};
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  const session = await db.sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+  if (!requireEmailVerified(session, res)) return;
+  if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
+
   const stored = await db.challenges.get(userId);
   if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
 
