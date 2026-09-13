@@ -130,3 +130,7 @@ Meine Empfehlung: Option A — sie entspricht dem freigegebenen Scope-Text und d
 | AK-27 | `server/server.js` `/hhttps/age/upgrade`: `requireEmailVerified` nach Session-Lookup, vor Token-Ausstellung | `acceptance.test.mjs::AK-27` | PASS |
 | AK-28 | `server/server.js` `/hhttps/age/direct`: nach Assertion-Prüfung immer 403, kein Session-/Token-Bootstrap | `acceptance.test.mjs::AK-28` (2 Tests) | PASS |
 Lücke B-2 geschlossen. Urteil bleibt: **ABGENOMMEN** (28/28). Erstellt vom Feature-Lead auf Basis des Testprotokoll-Nachtrags.
+
+## Nachtrag Folgetasks (2026-09-13)
+- B-5 (#23) geschlossen: `register/finish` ist an die E-Mail-verifizierte Session gebunden. B-3 (#22) geschlossen. S-8 (#25) geschlossen: Playwright-E2E inkl. echter Passkey-Zeremonie (virtueller Authenticator) — AK-4/AK-5/AK-14/AK-15 sind damit auch im Browser nachgewiesen. #26 geschlossen (EUDI-Verifier 403). Zusätzlicher Bugfix: WebAuthn-User-Handle war `"[object Object]"` (Buffer statt String) — behoben, E2E-Nachweis `D4`.
+- Offen als eigene Issues: #20, #21, #24, #27.
