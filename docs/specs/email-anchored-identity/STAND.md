@@ -6,6 +6,6 @@
 - [x] Testprotokoll (testprotokoll.md): AK-1..AK-26 = 26 PASS / 0 FAIL / 0 OFFEN; 149 Tests (145 pass, 4 todo für Befunde außerhalb der AK-Liste); ESLint 0 Errors
 - [x] Abnahme (abnahme.md): **ABGENOMMEN**
 - [x] Gate 2: Freigabe Daniel (2026-09-12) → Nach-Task T8 (AK-27/28) umgesetzt, Issues #6–#18 angelegt, PR erstellt (Merge nur durch Daniel)
-Offen: Bug #7 (machine/register-Crash, separater Fix). Annahme „Issuer = registrierte Plattformen“ von Daniel bestätigt.
+Bug #7 behoben (Commit 343b1fc, im PR). Folge-Issues #20–#26 angelegt. CI-Workflow-Fix a759959 (Examples-Job war auf main rot). Endstand: 150 Tests grün, ESLint 0 Errors, CI grün. Annahme „Issuer = registrierte Plattformen“ von Daniel bestätigt.
 Umgebung: lokale Postgres 16 unter /var/lib/pgtest; Testlauf `cd server && TEST_PG_HOST=/var/lib/pgtest npm test && npm run lint`.
 Branch: `claude/kind-pasteur-kweqf1` (Umgebungsvorgabe, ersetzt feat/<slug>).
