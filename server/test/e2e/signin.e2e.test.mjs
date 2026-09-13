@@ -202,11 +202,9 @@ test('passkey: register + login with the virtual authenticator, then K-4 login a
   }
 
   // D4/AK-4: the WebAuthn user handle must be the session's stable userId.
-  // register/start passes a Buffer as `userID` to @simplewebauthn/server 9
-  // (which expects a string), so `options.user.id` reaches the browser as a
-  // JSON-serialised Buffer and @simplewebauthn/browser 9 encodes it as the
-  // literal "[object Object]". Kept as `todo` until server.js is fixed.
-  await t.test('D4: the registered credential carries the userId as user handle', { todo: 'server.js register/start: userID must be a string for @simplewebauthn/server 9' }, () => {
+  // AK-4/D4: register/start hands `userID` to @simplewebauthn/server 9 as a
+  // string, so the credential the browser registers carries the stable userId.
+  await t.test('D4: the registered credential carries the userId as user handle', () => {
     assert.equal(userHandle, userId, `user handle ${JSON.stringify(userHandle)} should equal the stable userId`);
   });
 });

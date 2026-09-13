@@ -2370,7 +2370,9 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
     if (!requireEmailVerified(session, res)) return;
 
     const userId    = session.userId;
-    const userIdBuf = Buffer.from(userId);   // user handle == stable userId (AK-4)
+    // user handle == stable userId (AK-4). @simplewebauthn/server 9 expects a string here;
+    // a Buffer would be JSON-serialised and register the handle as "[object Object]".
+    const userIdString = userId;
     const existingCreds = await db.credentials.findByUserId(userId);
 
     // CRITICAL: convert credentialId from base64url string to Buffer for the library
@@ -2381,7 +2383,7 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
     }));
 
     const options = await generateRegistrationOptions({
-      rpName: RP_NAME, rpID: RP_ID, userID: userIdBuf,
+      rpName: RP_NAME, rpID: RP_ID, userID: userIdString,
       userName: session.pseudonym || `human-${userId.slice(0, 8)}`,
       userDisplayName: session.pseudonym || `human-${userId.slice(0, 8)}`,
       attestationType: 'none',

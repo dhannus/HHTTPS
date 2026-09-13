@@ -77,8 +77,9 @@ test('AK-4: after email confirmation register/start returns options.user.id == s
   });
   assert.equal(r.status, 200, r.text);
   assert.equal(r.json.userId, userId, 'response userId is the stable session userId (legacy body userId ignored)');
-  const handle = Buffer.from(r.json.options.user.id, 'base64url').toString('utf8');
-  assert.equal(handle, userId, 'WebAuthn user handle == stable userId');
+  // @simplewebauthn/server 9 returns user.id as the plain string it was given;
+  // the browser bundle encodes it, so the registered user handle == userId.
+  assert.equal(r.json.options.user.id, userId, 'WebAuthn user handle == stable userId');
   assert.equal(r.json.options.user.name, pseudonym);
 });
 
