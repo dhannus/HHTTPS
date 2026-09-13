@@ -71,19 +71,19 @@ jobs:
       - name: Node examples
         run: |
           for f in examples/*/server.js examples/*/app.js; do
-            [ -f "$f" ] && node --check "$f"
+            if [ -f "$f" ]; then node --check "$f"; fi
           done
 
       - name: Python examples
         run: |
           for f in examples/*/app.py examples/*/views.py; do
-            [ -f "$f" ] && python3 -m py_compile "$f"
+            if [ -f "$f" ]; then python3 -m py_compile "$f"; fi
           done
 
       - name: PHP examples
         run: |
           for f in examples/*/*.php; do
-            [ -f "$f" ] && php -l "$f"
+            if [ -f "$f" ]; then php -l "$f"; fi
           done
 
   docs-lint:
