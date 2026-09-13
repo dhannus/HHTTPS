@@ -29,6 +29,7 @@ import {
   extractAgeClaims,
   config as backendConfig
 } from './backend-client.js';
+import { BackendError, mapBackendError } from './errors.js';
 
 // NOTE: No QR library dependency on the backend. The module returns the
 // openid4vp:// `deepLink`; the frontend renders it as a QR code (cross-device)
@@ -95,12 +96,14 @@ async function callAgeUpgrade(ageOver, hhttpsSessionId, currentToken) {
     body: JSON.stringify({ sessionId: hhttpsSessionId, ageOver, assertion, nonce, iat, currentToken: currentToken || null })
   });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`age/upgrade failed (${r.status}): ${body.error || ''}`);
+  if (!r.ok) throw new BackendError('age/upgrade', r.status, body);
   return body; // { hhttps:{token}, ageGroup:{...} }
 }
 
-// Call the internal /hhttps/age/direct endpoint — DIRECT acceptance of an EU AV
-// Profile Proof of Age attestation, with NO prior HHTTPS session. The canonical
+// Call the internal /hhttps/age/direct endpoint — an AV Profile Proof of Age
+// attestation WITHOUT an HHTTPS session. Since AK-28 the backend answers this
+// with 403 email_verification_required unconditionally (no session-less
+// bootstrap); the answer is passed through to the browser (#26). The canonical
 // deliberately differs from the upgrade canonical (direct:true instead of a
 // sessionId), so an assertion can never be replayed across the two endpoints.
 async function callAgeDirect(ageOver) {
@@ -129,7 +132,7 @@ async function callAgeDirect(ageOver) {
     body: JSON.stringify({ ageOver, assertion, nonce, iat })
   });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`age/direct failed (${r.status}): ${body.error || ''}`);
+  if (!r.ok) throw new BackendError('age/direct', r.status, body);
   return body; // { hhttps:{token, refreshToken, sessionId, userId}, ageGroup:{...} }
 }
 
@@ -156,7 +159,7 @@ async function callEidUpgrade(hhttpsSessionId, currentToken) {
     })
   });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`eid/upgrade failed (${r.status}): ${body.error || ''}`);
+  if (!r.ok) throw new BackendError('eid/upgrade', r.status, body);
   return body; // { hhttps:{token}, eudi:{...} }
 }
 
@@ -264,18 +267,21 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       res.json({ status: 'verified', ageGroup: upgrade.ageGroup, hhttps: upgrade.hhttps });
     } catch (e) {
       console.error('[EUDI-VERIFIER] /age/status error:', e.message);
-      res.status(502).json({ status: 'error', detail: e.message });
+      const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
+      res.status(httpStatus).json(body);
     }
   });
 
-  // ─── DIRECT AV Profile acceptance (no prior session required) ────────────────
+  // ─── AV Profile acceptance (e-mail-verified session required) ────────────────
   //
-  // Accepts the EU AV Profile Proof of Age attestation (eu.europa.ec.av.1)
-  // DIRECTLY: the attestation itself bootstraps the HHTTPS identity. If the
-  // caller DOES have a session (hhttpsSession supplied), we route through the
-  // existing /hhttps/age/upgrade path instead, so the verified age lands on
-  // that identity and its established methods are preserved — one surface,
-  // both entry orders.
+  // Accepts the EU AV Profile Proof of Age attestation (eu.europa.ec.av.1).
+  // With a session (hhttpsSession supplied) the verified age lands on that
+  // identity via /hhttps/age/upgrade, which requires a confirmed e-mail
+  // (403 email_verification_required otherwise). WITHOUT a session there is no
+  // bootstrap any more (AK-28): /hhttps/age/direct always answers 403
+  // email_verification_required, and the status handler passes that through
+  // to the browser as 403 { status:'error', error:'email_verification_required' }
+  // (#26) so the page can point the user to the e-mail step.
 
   // 1. Start a direct AV verification. Body: { minAge?, hhttpsSession?, currentToken? }
   router.post('/av/request', async (req, res) => {
@@ -297,7 +303,7 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       putTx(requestId, {
         transactionId: tx.transaction_id,
         nonce: tx.nonce,
-        hhttpsSession: hhttpsSession || null,   // OPTIONAL — null ⇒ direct bootstrap
+        hhttpsSession: hhttpsSession || null,   // null ⇒ age/direct ⇒ 403 email gate (AK-28)
         currentToken: currentToken || null,
         minAge: age,
         kind: 'av',
@@ -345,7 +351,7 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       }
 
       // Session supplied → verified age lands on the EXISTING identity (upgrade
-      // path, unchanged). No session → the attestation bootstraps a NEW one.
+      // path). No session → age/direct, which always answers 403 (AK-28).
       const result = tx.hhttpsSession
         ? await callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken)
         : await callAgeDirect(ageOver);
@@ -358,7 +364,8 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       res.json({ status: 'verified', ageGroup: result.ageGroup, hhttps: result.hhttps });
     } catch (e) {
       console.error('[EUDI-VERIFIER] /av/status error:', e.message);
-      res.status(502).json({ status: 'error', detail: e.message });
+      const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
+      res.status(httpStatus).json(body);
     }
   });
 
@@ -424,7 +431,8 @@ export function createEudiVerifierRouter({ setIdentityCookie } = {}) {
       res.json({ status: 'verified', eudi: upgrade.eudi, hhttps: upgrade.hhttps });
     } catch (e) {
       console.error('[EUDI-VERIFIER] /eid/status error:', e.message);
-      res.status(502).json({ status: 'error', detail: e.message });
+      const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
+      res.status(httpStatus).json(body);
     }
   });
 

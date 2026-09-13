@@ -641,7 +641,8 @@ async function eudiRun(){
 async function pollEudi(requestId){
   for(let i=0;i<80;i++){await new Promise(r=>setTimeout(r,2500));
     try{const r=await fetch(API+'/eudi/eid/status/'+encodeURIComponent(requestId));
-      const d=await r.json(); if(d.status==='verified'){markConfirmed('eudi');return}}catch(e){}}
+      const d=await r.json(); if(d.status==='verified'){markConfirmed('eudi');return}
+      if(d.status==='error'&&d.error==='email_verification_required'){document.getElementById('eudiHint').textContent=tr('email.first');return}}catch(e){}}
 }
 
 /* AGE — equal 6th entry. Some users only want to prove their age. EUDI Wallet
@@ -665,7 +666,8 @@ async function ageRun(minAge){
 async function pollAge(requestId,minAge){
   for(let i=0;i<80;i++){await new Promise(r=>setTimeout(r,2500));
     try{const r=await fetch(API+'/eudi/age/status/'+encodeURIComponent(requestId));
-      const d=await r.json(); if(d.status==='verified'){ageConfirmed(minAge);return}}catch(e){}}
+      const d=await r.json(); if(d.status==='verified'){ageConfirmed(minAge);return}
+      if(d.status==='error'&&d.error==='email_verification_required'){document.getElementById('ageHint').textContent=tr('email.first');return}}catch(e){}}
 }
 function ageConfirmed(minAge){
   confirmed.age=true;
