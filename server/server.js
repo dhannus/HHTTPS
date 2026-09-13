@@ -2872,11 +2872,14 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   const { sessionId, code } = req.body || {};
   if (!sessionId || !code) return res.status(400).json({ error: 'sessionId and code required.' });
 
-  const result = await verifyEmailCode(code, sessionId);
-  if (!result.valid) return res.status(400).json({ error: result.error });
-
+  // #22: load the session BEFORE consuming the code. verifyEmailCode() marks
+  // the verification row `used`; with an unknown/expired session that would
+  // burn a code the user can still legitimately confirm on the real session.
   const session = await db.sessions.get(sessionId);
   if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+
+  const result = await verifyEmailCode(code, sessionId);
+  if (!result.valid) return res.status(400).json({ error: result.error });
 
   // T4: the plaintext email was parked by /email/send in the same session.
   const ctx = await readEmailContext(sessionId);

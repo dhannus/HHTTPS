@@ -244,10 +244,10 @@ test('N-6b: a wrong-but-well-formed code (6 digits) → 400, code row stays open
   track.add({ email, userId: ok.json.userId });
 });
 
-test('N-7: confirm-code with an unknown session → 400 (code cannot belong to it); no anchor', { skip }, async () => {
+test('N-7: confirm-code with an unknown session → 404 (session is checked before the code, #22); no anchor', { skip }, async () => {
   const r = await confirm(crypto.randomUUID(), '123456');
-  assert.equal(r.status, 400, r.text);
-  assert.match(r.json.error, /wrong, expired or already used/);
+  assert.equal(r.status, 404, r.text);
+  assert.match(r.json.error, /Session not found or expired/);
 });
 
 test('N-8: expired verification row (TTL elapsed) → 400, no bind', { skip }, async () => {
@@ -273,7 +273,7 @@ test('N-9: expired email context (challenge row) but valid code → 409 email_co
   assert.equal((await sessionRow(sessionId)).email_verified, false);
 });
 
-test('N-10: expired session with a valid code → 404; the code is consumed before the session check (documented)', { skip }, async () => {
+test('N-10: expired session with a valid code → 404; the code is NOT consumed (session is checked first, #22)', { skip }, async () => {
   const sessionId = await newSession();
   const email = freshEmail('n10');
   const { devCode } = await send(sessionId, email);
@@ -282,7 +282,7 @@ test('N-10: expired session with a valid code → 404; the code is consumed befo
   assert.equal(r.status, 404, r.text);
   assert.equal(await anchorCount(email), 0);
   const [v] = await sql('SELECT used FROM email_verifications WHERE session_id = $1', [sessionId]);
-  assert.equal(v.used, true, 'observed: the code row is consumed although the session was already gone');
+  assert.equal(v.used, false, 'the code row stays unused when the session is already gone');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
