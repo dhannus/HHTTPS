@@ -267,7 +267,11 @@ PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
 
 Remove the `UPDATE oauth_clients` block first if you do not want every existing client to be able to request scope `email`. The file is idempotent; running it twice is safe.
 
-### Migration: phase 4b (`machine_operators.key_jkt`, #7)
+### Deploy (srv1421412)
+
+Runbook: `docs/deploy/RUNBOOK-srv1421412-phase8.md`. Skript: `bash server/scripts/deploy-phase8.sh` (`--dry-run` prüft nur; `--link` stellt `/var/www/hhttps` einmalig auf einen Symlink zum Repo um). Das Skript sichert `.env`/`keys/`/DB, zieht `main`, installiert, startet pm2 neu, spielt den OPERATOR-Abschnitt der Phase-8-Migration ein und verifiziert Discovery, Schema und Gates.
+
+## Migration: phase 4b (`machine_operators.key_jkt`, #7)
 
 `server/sql/migration-phase-4b-machine-key-jkt.sql` adds the `key_jkt` column (JWK thumbprint of an operator's optional `publicKeyJwk`) that `/hhttps/machine/register` has been writing without a migration. It is DDL only and the server applies it itself at boot (`db.js`: `BOOT_DDL_FILES`, after an applied-check) — nothing to do; running the file manually via `psql` is safe and idempotent.
 
