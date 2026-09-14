@@ -46,7 +46,7 @@ The protocol is the successor to HTTPS for the AI age: HTTPS proves "the server 
 ![How HHTTPS works](docs/images/how-it-works.svg)
 
 **Step 1 — Identity setup (once)**
-A user visits a HHTTPS issuer (e.g. hhttps.org), registers a passkey, optionally proves a role (developer via GitHub, journalist via press pass, etc.). The issuer stores the role and a trust score. The user's browser stores the identity locally.
+A user visits a HHTTPS issuer (e.g. hhttps.org), verifies their e-mail address (this is the stable identity anchor: same e-mail ⇒ same identity on every device), picks a pseudonym, then adds a passkey and optionally proves a role (developer via GitHub, journalist via press pass, etc.). The issuer stores the role and a trust score. The user's browser stores the identity locally.
 
 **Step 2 — Logging in (one click, anywhere)**
 On any platform that supports HHTTPS, the user clicks "Login with HHTTPS". They're briefly redirected to the issuer, click "Allow", and are back on the platform — now logged in with their role and trust score visible to the platform, but nothing personal.
@@ -86,10 +86,10 @@ What this means concretely:
 
 | Observer | What they can see |
 |---|---|
-| **A platform** (e.g. ask.iamhmn.org) | A pairwise pseudonymous ID (e.g. `7K2XQ9NMR3F...`), a role, a trust score. **No** name, **no** email, **no** IP address. |
+| **A platform** (e.g. ask.iamhmn.org) | A pairwise pseudonymous ID (e.g. `7K2XQ9NMR3F...`), a role, a trust score, the user's pseudonym and which verification methods were used. The verified e-mail address **only** if the platform requested scope `email`, is allowed to, and the user consented. **No** name, **no** IP address. |
 | **A different platform** | A *different* pseudonymous ID for the same user. Cross-platform tracking is cryptographically impossible. |
 | **Two colluding platforms** | They cannot link their IDs together. The pairwise function is one-way per (user, client) pair. |
-| **The HHTTPS issuer** (e.g. hhttps.org) | Knows which user has which pseudonyms on which platforms. Knows *that* you logged in, not *what* you did there. |
+| **The HHTTPS issuer** (e.g. hhttps.org) | Knows which user has which pseudonyms on which platforms. Knows *that* you logged in, not *what* you did there. Stores a peppered hash of your e-mail as the stable identity anchor, and the plaintext address for up to 7 days after each verification so it can be passed to platforms you authorise (see [`docs/security.md`](docs/security.md#storage)). |
 | **A network observer / bot / hacker** | Sees nothing — there's no public data leakage. |
 
 **The issuer is a trust anchor.** A user who registers on hhttps.org trusts hhttps.org not to misuse the link between their real identity and their pseudonyms. This is the same trust model as eIDAS 2.0 wallets, certificate authorities, or any other federated identity system today.
@@ -230,10 +230,11 @@ hhttps/
 ### Try it as a user
 
 1. Open [hhttps.org](https://hhttps.org)
-2. Click "Register", set up a passkey (uses your device biometrics)
-3. Optionally verify a role (developer → GitHub OAuth, journalist → press card, etc.)
-4. Try logging in to [ask.iamhmn.org](https://ask.iamhmn.org) — see your role appear next to your posts
-5. Install the [browser extension](extension/) → sign text on any forum or comment site
+2. Enter your e-mail address (and optionally a pseudonym), confirm the 6-digit code — this is your stable identity
+3. Set up a passkey (uses your device biometrics)
+4. Optionally verify a role (developer → GitHub OAuth, journalist → press card, etc.)
+5. Try logging in to [ask.iamhmn.org](https://ask.iamhmn.org) — see your role appear next to your posts
+6. Install the [browser extension](extension/) → sign text on any forum or comment site
 
 ### Try it as a developer (run your own issuer locally)
 
@@ -242,11 +243,51 @@ git clone https://github.com/dhannus/HHTTPS.git hhttps
 cd hhttps/server
 bash scripts/install-pg.sh     # sets up local PostgreSQL
 npm install
-cp .env.example .env           # adjust DB_PASSWORD
+cp .env.example .env           # adjust DB_PASSWORD, set HHTTPS_VERIFICATION_PEPPER
 npm run dev                    # starts on port 3000
 ```
 
 Open `http://localhost:3000` — you have your own HHTTPS issuer. Point the browser extension at it by editing `extension/background.js` to use `http://localhost:3000` instead of `https://hhttps.org`.
+
+Without SMTP you can set `EMAIL_DEV_MODE=1` in `.env` (never in production): the 6-digit verification code is then returned in the `/hhttps/email/send` response instead of being mailed.
+
+**Package manager:** the project uses **npm**. The scripts are plain `package.json` scripts, so `pnpm install` / `pnpm test` / `pnpm lint` work identically if you prefer pnpm. (`server/package-lock.json` is currently git-ignored; don't commit a `pnpm-lock.yaml` either.)
+
+### Migration: phase 8 (email-anchored identity)
+
+Phase 8 adds `identity_anchors`, `identity_claims_cache`, `sessions.pseudonym` and three columns on `authorization_codes`. The migration file `server/sql/migration-phase-8-email-anchored-identity.sql` has two sections:
+
+- **BOOT-DDL** — tables, columns, indexes. The server applies this section itself at boot (once, after an applied-check) and refuses to listen if it fails. Nothing to do.
+- **OPERATOR** — the data update (`allowed_scopes += "email"` for every existing OAuth client) and the grants. This part is **never** run automatically. Run it once, deliberately, as the app user:
+
+```bash
+PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
+  -f server/sql/migration-phase-8-email-anchored-identity.sql
+```
+
+Remove the `UPDATE oauth_clients` block first if you do not want every existing client to be able to request scope `email`. The file is idempotent; running it twice is safe.
+
+### Migration: phase 4b (`machine_operators.key_jkt`, #7)
+
+`server/sql/migration-phase-4b-machine-key-jkt.sql` adds the `key_jkt` column (JWK thumbprint of an operator's optional `publicKeyJwk`) that `/hhttps/machine/register` has been writing without a migration. It is DDL only and the server applies it itself at boot (`db.js`: `BOOT_DDL_FILES`, after an applied-check) — nothing to do; running the file manually via `psql` is safe and idempotent.
+
+### Tests lokal ausführen
+
+The test suite (`node --test`, no extra framework) has unit tests (pure helpers in `identity.js`, mail template, sign-in page) and integration tests that boot `server.js` as a child process against a **local PostgreSQL**. Integration tests are skipped when `TEST_PG_HOST` is not set.
+
+Prerequisites: PostgreSQL ≥ 14 reachable via TCP host or Unix socket directory, database `hhttps`, role `hhttps`. The harness connects with the fixed password `x`, so the role must either accept that password (`ALTER USER hhttps PASSWORD 'x'`) or be trusted in `pg_hba.conf` for the socket/localhost (the reference setup is a throwaway cluster with `trust` under `/var/lib/pgtest`). `bash scripts/install-pg.sh` creates the role with a random password and loads `server/sql/schema.sql`; the earlier migrations (`server/sql/migration-phase-*.sql`) must be applied too. The phase-8 and phase-4b DDL is applied by the server itself at boot. Use a throwaway database — integration tests write real rows.
+
+```bash
+cd server
+npm install
+TEST_PG_HOST=/var/lib/pgtest npm test      # socket dir — or TEST_PG_HOST=localhost
+TEST_PG_HOST=/var/lib/pgtest npm run test:e2e  # browser tests of the sign-in page (Playwright + Chromium)
+npm run lint                               # ESLint 9 flat config, 0 errors required
+```
+
+The harness sets `HHTTPS_VERIFICATION_PEPPER=test-pepper`, `EUDI_VERIFIER_SECRET=test-secret` and `EMAIL_DEV_MODE=1` for the child server, so no `.env` is needed for tests. Both gates (`npm test`, `npm run lint`) must pass before a PR.
+
+**Browser E2E (`npm run test:e2e`, #25):** `server/test/e2e/*.e2e.test.mjs` drive the sign-in page (`server/public/index.html`) in headless Chromium via [Playwright](https://playwright.dev) (devDependency) — email-first gating (AK-14), pseudonym + code entry (AK-15, K-7), magic-link return (K-9) and the passkey flow with Chromium's virtual authenticator (K-4). The suite is separate from `npm test` (its glob covers `test/unit` and `test/integration` only), needs the same `TEST_PG_HOST` and is skipped without it. Playwright needs a Chromium build: `npx playwright install chromium` once, or point `PLAYWRIGHT_BROWSERS_PATH` at an existing install (the tests fall back to `/opt/pw-browsers/chromium`). No network is needed — the unpkg scripts the page loads are answered locally (`@simplewebauthn/browser` from the pinned devDependency).
 
 ### Integrate HHTTPS into your platform
 
@@ -289,13 +330,39 @@ Full spec: [`protocol/signature-format.md`](protocol/signature-format.md).
 
 ### OAuth/OIDC Extension
 
-HHTTPS extends standard OIDC with three custom scopes:
+HHTTPS extends standard OIDC with custom scopes:
 
 | Scope | Claims |
 |---|---|
-| `openid` (required) | pseudonymous `sub`, `iss`, `aud`, standard timestamps |
+| `openid` (required) | pseudonymous `sub` (stable per platform, derived from the e-mail-anchored `userId`), `iss`, `aud`, standard timestamps — plus, always: `verified_methods`, `email_verified`, `passkey_verified`, `github_verified`, `eudi_verified`, `preferred_username` |
 | `role` | `role`, `role_label`, `role_icon`, `trust_score` |
 | `verification_method` | `verification_method`, `verification_method_label` |
+| `age_group` | `age_group`, `age_verified`, `age_verification_method` |
+| `email` | `email` (the verified address, plaintext) + `email_verified: true`. Requires the user's consent on the consent page and is only available to clients whose `allowed_scopes` include `email` (otherwise `invalid_scope`). |
+
+Since phase 8 (*email-anchored identity*) the same verified e-mail always resolves to the same `userId`, so `sub` is stable across devices and logins. The user's pseudonym (`iamhmn_<random>` if none was chosen) is delivered as `preferred_username`.
+
+Example ID-token / `userinfo` payload for `scope=openid role email` (user verified e-mail + passkey):
+
+```json
+{
+  "iss": "https://hhttps.org",
+  "sub": "7K2XQ9NMR3F...",
+  "aud": "your-platform",
+  "preferred_username": "iamhmn_k3j9x0q2wz",
+  "verified_methods": ["email", "passkey"],
+  "email_verified": true,
+  "passkey_verified": true,
+  "github_verified": false,
+  "eudi_verified": false,
+  "email": "anna@example.org",
+  "role": "citizen",
+  "role_label": "Citizen",
+  "trust_score": 60
+}
+```
+
+Without scope `email` the `email` claim is absent (the `*_verified` flags and `preferred_username` are always present). `email_verified` is derived from `verified_methods` and therefore `true` for every phase-8 login — e-mail verification is the mandatory first step.
 
 Discovery: `https://hhttps.org/.well-known/openid-configuration`
 
@@ -326,7 +393,7 @@ Full roadmap with rationale: [`docs/roadmap.md`](docs/roadmap.md).
 ## Frequently asked questions
 
 **Is this surveillance?**
-No. Platforms get pseudonymous IDs, roles, and trust scores — no PII. Each platform sees a different pseudonym for the same user. The issuer knows which user has which pseudonyms but doesn't see what users do on platforms.
+No. Platforms get pseudonymous IDs, roles, trust scores and a self-chosen pseudonym — the e-mail address only with explicit scope `email` and user consent. Each platform sees a different pairwise `sub` for the same user. The issuer knows which user has which pseudonyms but doesn't see what users do on platforms.
 
 **What's the trust anchor?**
 The HHTTPS issuer. By design. We document this honestly rather than hiding behind cryptographic mystique. ZKP migration in the future will remove this trust requirement.

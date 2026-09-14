@@ -31,11 +31,13 @@ git clone https://github.com/dhannus/HHTTPS.git
 cd HHTTPS/server
 bash scripts/install-pg.sh     # sets up PostgreSQL user + db locally
 npm install
-cp .env.example .env           # edit DB_PASSWORD with what install-pg.sh printed
-npm run dev                    # nodemon on port 3000
+cp .env.example .env           # edit DB_PASSWORD with what install-pg.sh printed; set HHTTPS_VERIFICATION_PEPPER
+npm run dev                    # node --watch on port 3000
 ```
 
-Open <http://localhost:3000>.
+Open <http://localhost:3000>. Without SMTP, add `EMAIL_DEV_MODE=1` to `.env` so the verification code is returned by `/hhttps/email/send` (development only — ignored in production).
+
+The package manager is **npm**. `pnpm` runs the same scripts if you prefer it, but please don't commit a `pnpm-lock.yaml` (`server/package-lock.json` is currently git-ignored as well).
 
 ### Browser extension
 
@@ -90,11 +92,20 @@ chore(deps): bump express to 4.19.2
 
 But don't agonize over format — clarity over convention.
 
-## Tests
+## Tests and lint (gates)
 
-Currently the project has no formal test suite (it's still small and the spec is the test). If you're adding non-trivial logic, please include manual test commands in your PR description.
+The server has a test suite based on Node's built-in runner (`node --test`, no extra framework) and an ESLint 9 flat config. Both are gates: a PR must pass
 
-Adding a proper Jest/Vitest test suite would be a welcome contribution.
+```bash
+cd server
+npm run lint                            # 0 errors (warnings are tolerated in legacy code)
+TEST_PG_HOST=<host-or-socket-dir> npm test
+```
+
+- `test/unit/` — pure functions (`identity.js`, mail template, sign-in page). Run without a database.
+- `test/integration/` — boot `server.js` as a child process against a local PostgreSQL (`TEST_PG_HOST`, database/role `hhttps`, password `x` or `trust`) and talk HTTP. They are **skipped** when `TEST_PG_HOST` is unset, so `npm test` without Postgres only runs the unit tests. Use a throwaway database; the tests write real rows. See the README section *Tests lokal ausführen* for the full setup.
+
+If you add non-trivial logic, add a test next to the existing ones (`*.test.mjs`). Integration tests should create their own sessions/addresses and clean up after themselves.
 
 ## Pull requests
 
@@ -102,7 +113,8 @@ Adding a proper Jest/Vitest test suite would be a welcome contribution.
 2. Describe **what** changes and **why** in the PR body.
 3. Link to any related issues.
 4. Ensure your changes don't break the existing `examples/`.
-5. Update `CHANGELOG.md` under `## [Unreleased]` (create section if absent).
+5. `npm run lint` and `npm test` pass (see *Tests and lint*).
+6. Update `CHANGELOG.md` under `## [Unreleased]` (create section if absent).
 
 ## Code of conduct
 

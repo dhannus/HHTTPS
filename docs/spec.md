@@ -4,7 +4,7 @@
 
 ## Abstract
 
-HHTTPS (Human-verified HTTPS) is an open protocol that adds a cryptographic proof-of-personhood layer on top of HTTPS. It allows web servers to verify that an HTTP request was initiated by a real human — without storing personally identifiable information.
+HHTTPS (Human-verified HTTPS) is an open protocol that adds a cryptographic proof-of-personhood layer on top of HTTPS. It allows web servers to verify that an HTTP request was initiated by a real human — while the issuer keeps personal data to the minimum needed (a hashed e-mail anchor and a short-lived plaintext copy, see § Security).
 
 The protocol combines three established standards:
 - **WebAuthn** (W3C) for human-presence verification via hardware-backed passkeys
@@ -33,7 +33,7 @@ Adoption requires no central authority — any operator can run an HHTTPS issuer
 
 ## Design Principles
 
-1. **Zero PII storage.** The issuer stores no name, address, or contact data. Only public keys, hashed identifiers, and ephemeral session state.
+1. **Minimal PII storage.** The issuer stores no name or postal address. The identity is anchored to a verified e-mail address stored as a peppered HMAC (`identity_anchors`); the plaintext address is kept only transiently — 15 min in the pending e-mail context, at most 60 s on an authorization code with scope `email`, and up to 7 days after the last verification in `identity_claims_cache` so it can be transferred to platforms the user authorises. Everything else is public keys, hashed identifiers, and ephemeral session state. Details: [`security.md` § Storage](security.md#storage).
 2. **No central authority.** Anyone can run an HHTTPS issuer. Tokens are verified against the issuer's public JWKS — no API key exchange, no rate-limited validation calls.
 3. **Standards over invention.** WebAuthn, JWT, JWKS — all W3C/IETF standards. No proprietary cryptography. No new threat model.
 4. **European by default.** GDPR-compliant by design. eIDAS-aware. Servers in the EU.
@@ -49,13 +49,18 @@ Adoption requires no central authority — any operator can run an HHTTPS issuer
 - **Trust score** — Integer 0–100 reflecting how robustly the subject's role has been verified.
 - **JWKS** — JSON Web Key Set, the issuer's public keys at `/.well-known/jwks.json`.
 - **Role** — A societal/professional category like `citizen`, `medical_professional`, or `politician`.
+- **Identity anchor** — `HMAC-SHA256(pepper, trim+lowercase(email)) → userId`. The same verified e-mail always resolves to the same `userId`, and therefore to the same pairwise `sub` per platform (phase 8).
+- **Pseudonym** — Self-chosen display name (max. 32 chars) or generated `iamhmn_<10 chars>`; stable per account, not unique; delivered to platforms as `preferred_username`.
 
 ## Protocol Flow
 
 ```
 Subject (browser)        Issuer (hhttps.org)            Verifier (3rd party)
        │                         │                              │
-       │   1. WebAuthn register  │                              │
+       │   0. Verify e-mail      │  (code / magic link → stable │
+       │ ───────────────────────►│   userId via identity anchor)│
+       │                         │                              │
+       │   1. WebAuthn register  │  (user handle = userId)      │
        │ ───────────────────────►│                              │
        │                         │                              │
        │   2. Declare role       │                              │
@@ -112,13 +117,29 @@ POST /hhttps/revoke
 GET  /hhttps/revoke/status?jti=...
 ```
 
-### Email Verification
+### Email Verification (mandatory first step since phase 8)
 
 ```
-POST /hhttps/email/send
-GET  /hhttps/email/verify?token=...&session=...
+POST /hhttps/email/send          { sessionId, email, pseudonym? }
+POST /hhttps/email/confirm-code  { sessionId, code }   ← 6-digit code, whitespace/hyphens tolerated
+GET  /hhttps/email/verify?token=...&session=...        ← magic link (binds only the originating session)
 POST /hhttps/email/status
 ```
+
+Confirming the address binds the session to the identity anchor (`userId`, `pseudonym`). Every other method requires a confirmed e-mail: `webauthn/register/start` (body `sessionId` required), `verify/github/start`, `eid/upgrade` and `role/declare` answer `403 {"error":"email_verification_required"}` otherwise. A second, different address in an already anchored session, or an anchor that would move a session carrying a passkey/GitHub/EUDI proof to another `userId`, is refused with `409 email_already_bound` / `409 identity_conflict`.
+
+### OAuth 2.0 / OpenID Connect
+
+```
+GET  /.well-known/openid-configuration
+GET  /hhttps/oauth/authorize
+POST /hhttps/oauth/approve
+POST /hhttps/oauth/token
+GET  /hhttps/oauth/userinfo
+POST /hhttps/oauth/revoke
+```
+
+Scopes: `openid`, `role`, `verification_method`, `age_group`, `email`. Every `openid` login carries `preferred_username`, `verified_methods[]`, `email_verified`, `passkey_verified`, `github_verified`, `eudi_verified`; scope `email` adds the verified address (client must be allowed to request it, user must consent). See [`oauth-integration.md`](oauth-integration.md).
 
 ### Machine Tokens
 
@@ -189,7 +210,10 @@ An HHTTPS access token is a JWT signed with ES256.
 | Claim | Type | Description |
 |---|---|---|
 | `deviceType` | string | `"singleDevice"` or `"multiDevice"` (from WebAuthn) |
-| `userId` | string | Stable opaque UUID for the subject (for app-level linking) |
+| `userId` | string | Stable opaque UUID for the subject (for app-level linking). Since phase 8 derived from the e-mail identity anchor, i.e. identical across devices. |
+| `pseudonym` | string | Account pseudonym (phase 8, always present on human access/refresh tokens). Display only — grants nothing. |
+| `verified_methods` | string[] | Methods the subject completed: `email` (always), `passkey`, `github`, `eudi`, `age`. |
+| `email_verified`, `passkey_verified`, `github_verified`, `eudi_verified` | boolean | Convenience flags derived from `verified_methods`. |
 | `kid` | string | Key ID, redundant with header — included for convenience |
 | `hhttps_iss` | string | Branding-only issuer label in `hhttps://<host>` form. Informational; verifiers MUST validate against `iss`, not this field. |
 | `age_group` | string | Orthogonal age band (see below). One of `minor_under_14`, `minor_14_to_15`, `minor_16_to_17`, `adult_18_plus`. |
@@ -448,6 +472,10 @@ See [`security.md`](security.md) for the full threat model and security consider
 
 Highlights:
 - Private keys never leave the user's device (WebAuthn enforces this in hardware).
+- Identity linking only after proof of possession of the e-mail (code / magic link); the confirmed verification row must match the address the session asked for, and the magic link binds only the session it was issued for.
+- The e-mail anchor is a peppered HMAC; `HHTTPS_VERIFICATION_PEPPER` is mandatory in production and must not be rotated without re-hashing (it carries identity stability).
+- Plaintext e-mail is held only transiently (15 min context, 60 s on the authorization code — nulled when redeemed —, ≤ 7 days in `identity_claims_cache`).
+- Returning the verification code in the API response (dev mode) requires `EMAIL_DEV_MODE=1` and is disabled in `NODE_ENV=production`; without a mail transport the server fails closed (`503`).
 - Replay protection via fresh server-generated challenges (2-min TTL).
 - Rate-limiting at all sensitive endpoints.
 - Token revocation persists permanently.
@@ -472,4 +500,4 @@ Anyone may fork the protocol; running a different issuer is explicitly encourage
 **Maintainer**: Daniel Hannuschka (daniel.hannuschka@tweakz.de)
 **Repository**: https://github.com/dhannus/HHTTPS
 **License**: EUPL-1.2
-**Last updated**: 2026-05-10
+**Last updated**: 2026-09-12 (phase 8: email-anchored identity)

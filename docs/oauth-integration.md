@@ -8,14 +8,17 @@ This guide walks you through adding "Login with HHTTPS" to your existing applica
 
 After integration, your platform will be able to:
 
-- Log users in with one click — no usernames, no passwords, no email verification
+- Log users in with one click — no usernames, no passwords, no email verification on your side
 - Know each user's verified role (e.g. `developer`, `medical_professional`, `journalist`) and trust score
-- Receive a stable pseudonymous identifier per user that's different from every other platform's identifier for the same person
+- Receive a stable pseudonymous identifier per user that's different from every other platform's identifier for the same person — stable across the user's devices, because the identity is anchored to their verified e-mail (phase 8)
+- Receive the user's pseudonym (`preferred_username`) and which verification methods they completed (`verified_methods`, `email_verified`, `passkey_verified`, `github_verified`, `eudi_verified`)
 - Optionally request the verification method used (e.g. `passkey`, `orcid`, `github-org`, `official-id`)
+- Optionally — with scope `email`, if your client is allowed to request it and the user consents — the user's verified e-mail address
 
 What your platform will **not** get:
 
-- Real name, email, phone number, or any PII
+- Real name, phone number, or any PII beyond the opt-in e-mail address
+- The e-mail address unless you requested scope `email` **and** the user approved it on the consent page
 - IP address or geolocation
 - Cross-platform identity correlation
 - Anything that could be used to deanonymize users
@@ -105,11 +108,60 @@ The discovery document tells you the exact URLs of authorize, token, userinfo, J
 
 | Scope | Required | What you get |
 |---|---|---|
-| `openid` | yes | pseudonymous `sub` (stable per platform), `iss`, `aud`, standard JWT timestamps |
+| `openid` | yes | pseudonymous `sub` (stable per platform), `iss`, `aud`, standard JWT timestamps, plus the identity claims listed below (`verified_methods`, `*_verified`, `preferred_username`) |
 | `role` | no | `role`, `role_label`, `role_icon`, `trust_score` |
 | `verification_method` | no | `verification_method`, `verification_method_label` |
+| `age_group` | no | `age_group`, `age_verified`, `age_verification_method` |
+| `email` | no | `email` (verified address, plaintext) and `email_verified: true` |
 
 Request only what you actually need. Users see the requested scopes on the consent screen — asking for too much reduces approval rate.
+
+### Scope `email`
+
+- The address is the one the user verified with a 6-digit code on hhttps.org — it is the user's stable identity anchor, so it is always `email_verified: true`.
+- It is delivered **only** if (a) your client's `allowed_scopes` include `email` — otherwise `/oauth/authorize` and `/oauth/approve` answer `invalid_scope` — and (b) the user approves the scope on the consent page. Newly registered clients get `email` by default; clients registered before phase 8 receive it through the operator part of the phase-8 migration (ask the issuer operator if `invalid_scope` comes back).
+- The address travels in the ID token, the access token and `/hhttps/oauth/userinfo`. The issuer deletes its copy on the authorization code as soon as the code is redeemed; a cache row on the issuer expires at most 7 days after the user's last verification.
+- Store the address only if you need it (notifications, account recovery). For user identity keep using `sub`.
+
+### Identity claims (always present with `openid`)
+
+| Claim | Type | Meaning |
+|---|---|---|
+| `preferred_username` | string | The user's pseudonym. Chosen by the user at first e-mail verification or generated as `iamhmn_<10 chars>`. Stable per account, **not unique** across users — never use it as a key. |
+| `verified_methods` | string[] | Verification methods the user completed, e.g. `["email","passkey"]`; possible values `email`, `passkey`, `github`, `eudi`, `age`. |
+| `email_verified` | boolean | `email` ∈ `verified_methods`. Always `true` for phase-8 logins (e-mail is the mandatory first step). Present even without scope `email`. |
+| `passkey_verified` | boolean | `passkey` ∈ `verified_methods` — the user authenticated with a WebAuthn passkey bound to their stable identity. |
+| `github_verified` | boolean | `github` ∈ `verified_methods`. |
+| `eudi_verified` | boolean | `eudi` ∈ `verified_methods` (EUDI Wallet presentation). |
+| `email` | string | Only with scope `email` (see above). |
+
+The claims are derived from the signed HHTTPS token the user presented at consent time, not from anything the user typed on the consent page. They are also present in the access token, so `/hhttps/oauth/userinfo` returns them without a database lookup.
+
+Example ID-token payload for `scope=openid role email`:
+
+```json
+{
+  "iss": "https://hhttps.org",
+  "sub": "7K2XQ9NMR3F...",
+  "aud": "your-platform",
+  "nonce": "…",
+  "iat": 1757600000,
+  "exp": 1757603600,
+  "preferred_username": "iamhmn_k3j9x0q2wz",
+  "verified_methods": ["email", "passkey"],
+  "email_verified": true,
+  "passkey_verified": true,
+  "github_verified": false,
+  "eudi_verified": false,
+  "email": "anna@example.org",
+  "role": "citizen",
+  "role_label": "Citizen",
+  "role_icon": "🧑",
+  "trust_score": 60
+}
+```
+
+`GET /hhttps/oauth/userinfo` with the access token as Bearer returns the same identity claims (`sub`, `iss`, `preferred_username`, `verified_methods`, `*_verified`, and `email` with scope `email`).
 
 ---
 
@@ -195,6 +247,11 @@ app.get('/auth/callback', async (req, res) => {
   req.session.userId = idTokenPayload.sub;
   req.session.userRole = idTokenPayload.role;
   req.session.userTrust = idTokenPayload.trust_score;
+  // Phase 8: pseudonym + verification methods are always present;
+  // `email` only when you requested scope `email` and the user consented.
+  req.session.displayName = idTokenPayload.preferred_username;
+  req.session.hasPasskey = idTokenPayload.passkey_verified === true;
+  req.session.email = idTokenPayload.email || null;
 
   res.redirect('/');
 });
@@ -442,7 +499,7 @@ const { payload } = await jwtVerify(idToken, JWKS, {
 
 ### Store the pairwise subject ID as your user identifier
 
-Don't try to use email or real name as the primary key — you won't get any. Use the `sub` claim from the id_token. It's stable for your platform but different on every other platform.
+Don't use the e-mail address or `preferred_username` as the primary key. Use the `sub` claim from the id_token. It's stable for your platform (and, since phase 8, across all of the user's devices — same verified e-mail ⇒ same `sub`) but different on every other platform. `preferred_username` is not unique, and the e-mail is only delivered with scope `email`.
 
 ### Cache `userinfo` responses
 
@@ -454,7 +511,7 @@ A user's role and trust score can change between logins (e.g. their ORCID verifi
 
 ### Don't request scopes you don't need
 
-If your platform only needs to know "this is a real human", request just `openid`. If you need the role, add `role`. Asking for `verification_method` when you don't use it lowers trust and approval rates.
+If your platform only needs to know "this is a real human", request just `openid` — you still get the pseudonym and the `*_verified` flags. If you need the role, add `role`. Add `email` only when you genuinely need the address (it requires an explicit consent by the user and must be enabled for your client). Asking for `verification_method` when you don't use it lowers trust and approval rates.
 
 ---
 
@@ -471,6 +528,12 @@ The user's session was lost between starting the login and the callback. Common 
 
 **Empty user info**
 You requested only `openid`. To get role info, add `role` to your scope parameter.
+
+**"invalid_scope" when requesting `email`**
+Your client's `allowed_scopes` do not include `email`. Clients registered before phase 8 only get it once the issuer operator has run the operator section of the phase-8 migration; contact [info@iamhmn.org](mailto:info@iamhmn.org).
+
+**`email` claim missing although the scope was granted**
+The user declined the scope on the consent page, or the issuer's plaintext cache for that user had expired (it lives at most 7 days after the user's last e-mail verification). Ask the user to log in on hhttps.org again — every e-mail confirmation refreshes the cache.
 
 **User keeps seeing "Unverified platform" warning**
 Your client is not yet verified. Email [info@iamhmn.org](mailto:info@iamhmn.org) with your domain proof and Impressum to request verification.
