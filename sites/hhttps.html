@@ -597,19 +597,39 @@ footer a{color:var(--cyan);text-decoration:none;}
   <div class="flow-body">
 
     <div class="stepper">
-      <div class="st active" id="st1"><div class="n">1</div><span class="l">Passkey</span></div>
-      <div class="st"        id="st2"><div class="n">2</div><span class="l" data-i18n="step.verify">Verifizieren</span></div>
-      <div class="st"        id="st3"><div class="n">3</div><span class="l" data-i18n="step.role">Rolle wählen</span></div>
-      <div class="st"        id="st3e"><div class="n">✉</div><span class="l" data-i18n="step.email">E-Mail</span></div>
-      <div class="st"        id="st4"><div class="n">4</div><span class="l">Token</span></div>
+      <div class="st active" id="st0"><div class="n">1</div><span class="l" data-i18n="step.email">E-Mail</span></div>
+      <div class="st"        id="st1"><div class="n">2</div><span class="l">Passkey</span></div>
+      <div class="st"        id="st2"><div class="n">3</div><span class="l" data-i18n="step.verify">Verifizieren</span></div>
+      <div class="st"        id="st3"><div class="n">4</div><span class="l" data-i18n="step.role">Rolle wählen</span></div>
+      <div class="st"        id="st4"><div class="n">5</div><span class="l">Token</span></div>
     </div>
 
     <div class="msg" id="msgBox"></div>
 
-    <!-- Phase 1: Register -->
-    <div class="phase show" id="p1">
+    <!-- Phase 0: E-Mail first (D4 / AK-10 — a passkey is registered only on an e-mail-verified session) -->
+    <div class="phase show" id="p0">
       <div class="desc">
-        <strong data-i18n="p1.strong">Schritt 1 — Passkey anlegen (WebAuthn)</strong><br>
+        <strong data-i18n="p0.strong">Schritt 1 — E-Mail bestätigen</strong><br>
+        <span data-i18n="p0.body">Die E-Mail ist der Identitätsanker: dieselbe Adresse ergibt auf jedem Gerät dieselbe stabile Identität, an die dein Passkey gebunden wird. Gespeichert wird nur ein Hash — nie die Adresse.</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input class="vfield" id="emailInput" type="email" data-i18n-ph="email.inputPh" placeholder="deine@email.de"
+          style="margin:0;flex:1" oninput="previewEmailDomain(this.value)">
+        <button class="btn btn-c" id="btnSendEmail" onclick="doSendEmail()" style="white-space:nowrap;" data-i18n="btn.sendEmail">✉ Code senden</button>
+      </div>
+      <div id="emailCodeRow" style="display:none;gap:8px;margin-bottom:10px;">
+        <input class="vfield" id="emailCode" type="text" inputmode="numeric" maxlength="8" autocomplete="one-time-code"
+          placeholder="482 913" style="margin:0;flex:1">
+        <button class="btn btn-p" id="btnConfirmEmail" onclick="doConfirmEmail()" style="white-space:nowrap;" data-i18n="btn.confirmEmail">Code bestätigen →</button>
+      </div>
+      <div id="domainPreview" style="font-size:11px;color:var(--muted);min-height:16px;"></div>
+      <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>
+    </div>
+
+    <!-- Phase 1: Register -->
+    <div class="phase" id="p1">
+      <div class="desc">
+        <strong data-i18n="p1.strong">Schritt 2 — Passkey anlegen (WebAuthn)</strong><br>
         <span data-i18n="p1.body">Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.</span>
       </div>
       <div class="fp"><div class="fpr" id="fp1">🫆</div></div>
@@ -621,7 +641,7 @@ footer a{color:var(--cyan);text-decoration:none;}
     <!-- Phase 2: Auth -->
     <div class="phase" id="p2">
       <div class="desc">
-        <strong data-i18n="p2.strong">Schritt 2 — Menschsein beweisen</strong><br>
+        <strong data-i18n="p2.strong">Schritt 3 — Menschsein beweisen</strong><br>
         <span data-i18n="p2.body1">Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —</span> <strong data-i18n="p2.bodyStrong">kein biometrisches Datum verlässt das Gerät.</strong>
       </div>
       <div class="fp"><div class="fpr" id="fp2">🔐</div></div>
@@ -631,7 +651,7 @@ footer a{color:var(--cyan);text-decoration:none;}
     <!-- Phase 3: Role -->
     <div class="phase" id="p3">
       <div class="desc">
-        <strong data-i18n="p3.strong">Schritt 3 — Rolle deklarieren</strong><br>
+        <strong data-i18n="p3.strong">Schritt 4 — Rolle deklarieren</strong><br>
         <span data-i18n="p3.body">Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.</span>
       </div>
 
@@ -649,19 +669,12 @@ footer a{color:var(--cyan);text-decoration:none;}
       </div>
 
 
-      <!-- Email verification box -->
+      <!-- Email verification box (the e-mail itself is confirmed in step 1; this shows the resulting trust level) -->
       <div class="veri-box show" id="emailBox" style="margin-top:12px;border-color:rgba(0,229,255,0.2);">
         <h4 style="color:var(--cyan)" data-i18n="email.h4">// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN</h4>
         <p style="font-size:11px;color:var(--muted);margin-bottom:12px;line-height:1.6;">
-          <span data-i18n="email.p1">Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen. Bildungs-Domains (</span><code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code><span data-i18n="email.p2">), offizielle Behörden (</span><code style="color:var(--cyan)">bundestag.de</code><span data-i18n="email.p3">) und Verbände werden automatisch erkannt. </span><strong style="color:var(--text)" data-i18n="email.strong">Die Adresse wird nicht gespeichert.</strong>
+          <span data-i18n="email.p1">Deine in Schritt 1 bestätigte E-Mail erhöht deinen Trust Score. Bildungs-Domains (</span><code style="color:var(--cyan)">.uni-*</code>, <code style="color:var(--cyan)">.edu</code><span data-i18n="email.p2">), offizielle Behörden (</span><code style="color:var(--cyan)">bundestag.de</code><span data-i18n="email.p3">) und Verbände werden automatisch erkannt. </span><strong style="color:var(--text)" data-i18n="email.strong">Die Adresse wird nicht gespeichert.</strong>
         </p>
-        <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <input class="vfield" id="emailInput" type="email" data-i18n-ph="email.inputPh" placeholder="deine@email.de"
-            style="margin:0;flex:1" oninput="previewEmailDomain(this.value)">
-          <button class="btn btn-c" id="btnSendEmail" onclick="doSendEmail()" style="white-space:nowrap;" data-i18n="btn.sendEmail">✉ Link senden</button>
-        </div>
-        <div id="domainPreview" style="font-size:11px;color:var(--muted);min-height:16px;"></div>
-        <div class="msg" id="emailMsg" style="margin-top:8px;margin-bottom:0;"></div>
         <!-- Email verified badge -->
         <div id="emailVerifiedBadge" style="display:none;margin-top:10px;
           background:rgba(0,230,118,0.08);border:1px solid rgba(0,230,118,0.2);
@@ -968,15 +981,16 @@ const T = {
     "verify.inputPh":"HHTTPS-Token einfügen (eyJhbGc...)","verify.btn":"Prüfen →",
     "flow.title":"IDENTITÄTS-FLOW — INTERAKTIV","flow.ready":"bereit",
     "step.verify":"Verifizieren","step.role":"Rolle wählen","step.email":"E-Mail",
-    "p1.strong":"Schritt 1 — Passkey anlegen (WebAuthn)","p1.body":"Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.",
+    "p0.strong":"Schritt 1 — E-Mail bestätigen","p0.body":"Die E-Mail ist der Identitätsanker: dieselbe Adresse ergibt auf jedem Gerät dieselbe stabile Identität, an die dein Passkey gebunden wird. Gespeichert wird nur ein Hash — nie die Adresse.","btn.confirmEmail":"Code bestätigen →","msg.emailFirst":"Bitte zuerst die E-Mail bestätigen (Schritt 1).","msg.emailOk":"✓ E-Mail bestätigt — weiter mit dem Passkey.","msg.codeSent":"✓ Code gesendet — bitte Postfach prüfen und den 6-stelligen Code eingeben.","msg.passkeyExisting":"Passkey erkannt — bitte im nächsten Schritt bestätigen.",
+    "p1.strong":"Schritt 2 — Passkey anlegen (WebAuthn)","p1.body":"Dein Gerät erstellt ein kryptografisches Schlüsselpaar im sicheren Chip. Der private Schlüssel verlässt dein Gerät nie. Nach der Registrierung kannst du dich als Mensch verifizieren und eine Rolle deklarieren.",
     "btn.reg":"Passkey anlegen →","btn.skip":"Bereits registriert →","btn.skipTitle":"Wenn du schon einen Passkey hast",
-    "p2.strong":"Schritt 2 — Menschsein beweisen","p2.body1":"Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —","p2.bodyStrong":"kein biometrisches Datum verlässt das Gerät.",
+    "p2.strong":"Schritt 3 — Menschsein beweisen","p2.body1":"Dein Gerät signiert eine Server-Challenge lokal mit deinem privaten Schlüssel. Der Server verifiziert die Signatur —","p2.bodyStrong":"kein biometrisches Datum verlässt das Gerät.",
     "btn.auth":"Fingerabdruck / PIN bestätigen →",
-    "p3.strong":"Schritt 3 — Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
+    "p3.strong":"Schritt 4 — Rolle deklarieren","p3.body":"Wähle deine gesellschaftliche Rolle. Je nach Rolle kannst du optional eine Verifikation angeben (Presseausweis, E-Mail, ORCID...) um den Trust Score zu erhöhen.",
     "trust.label":"Trust Score","veri.optional":"// OPTIONALE VERIFIKATION",
     "email.h4":"// E-MAIL VERIFIKATION — TRUST SCORE ERHÖHEN",
-    "email.p1":"Gib deine E-Mail-Adresse ein um deinen Trust Score zu erhöhen. Bildungs-Domains (","email.p2":"), offizielle Behörden (","email.p3":") und Verbände werden automatisch erkannt. ","email.strong":"Die Adresse wird nicht gespeichert.",
-    "email.inputPh":"deine@email.de","btn.sendEmail":"✉ Link senden","email.verifiedBadge":"✓ E-Mail verifiziert — Trust Score erhöht!",
+    "email.p1":"Deine in Schritt 1 bestätigte E-Mail erhöht deinen Trust Score. Bildungs-Domains (","email.p2":"), offizielle Behörden (","email.p3":") und Verbände werden automatisch erkannt. ","email.strong":"Die Adresse wird nicht gespeichert.",
+    "email.inputPh":"deine@email.de","btn.sendEmail":"✉ Code senden","email.verifiedBadge":"✓ E-Mail verifiziert — Trust Score erhöht!",
     "btn.declare":"Rolle bestätigen + Token ausstellen →","tk.badge":"✓ HHTTPS-Token ausgestellt","btn.check":"/hhttps/check aufrufen — Live-Test →",
     "roletable.role":"Rolle","roletable.methods":"Verifikationsmethoden",
     "btn.checking":"Prüfe…","vh.loading":"Token wird kryptografisch geprüft …",
@@ -1002,15 +1016,16 @@ const T = {
     "verify.inputPh":"Paste HHTTPS token (eyJhbGc...)","verify.btn":"Verify →",
     "flow.title":"IDENTITY FLOW — INTERACTIVE","flow.ready":"ready",
     "step.verify":"Verify","step.role":"Choose role","step.email":"Email",
-    "p1.strong":"Step 1 — Create passkey (WebAuthn)","p1.body":"Your device creates a cryptographic key pair in the secure chip. The private key never leaves your device. After registration you can verify yourself as a human and declare a role.",
+    "p0.strong":"Step 1 — Confirm your email","p0.body":"The email is the identity anchor: the same address yields the same stable identity on every device, and your passkey is bound to it. Only a hash is stored — never the address.","btn.confirmEmail":"Confirm code →","msg.emailFirst":"Please confirm your email first (step 1).","msg.emailOk":"✓ Email confirmed — continue with the passkey.","msg.codeSent":"✓ Code sent — check your inbox and enter the 6-digit code.","msg.passkeyExisting":"Passkey found — please confirm it in the next step.",
+    "p1.strong":"Step 2 — Create passkey (WebAuthn)","p1.body":"Your device creates a cryptographic key pair in the secure chip. The private key never leaves your device. After registration you can verify yourself as a human and declare a role.",
     "btn.reg":"Create passkey →","btn.skip":"Already registered →","btn.skipTitle":"If you already have a passkey",
-    "p2.strong":"Step 2 — Prove you're human","p2.body1":"Your device signs a server challenge locally with your private key. The server verifies the signature —","p2.bodyStrong":"no biometric data leaves the device.",
+    "p2.strong":"Step 3 — Prove you're human","p2.body1":"Your device signs a server challenge locally with your private key. The server verifies the signature —","p2.bodyStrong":"no biometric data leaves the device.",
     "btn.auth":"Confirm fingerprint / PIN →",
-    "p3.strong":"Step 3 — Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
+    "p3.strong":"Step 4 — Declare role","p3.body":"Choose your societal role. Depending on the role you can optionally provide a verification (press card, email, ORCID...) to increase your trust score.",
     "trust.label":"Trust Score","veri.optional":"// OPTIONAL VERIFICATION",
     "email.h4":"// EMAIL VERIFICATION — INCREASE TRUST SCORE",
-    "email.p1":"Enter your email address to increase your trust score. Education domains (","email.p2":"), official authorities (","email.p3":") and associations are detected automatically. ","email.strong":"The address is not stored.",
-    "email.inputPh":"you@email.com","btn.sendEmail":"✉ Send link","email.verifiedBadge":"✓ Email verified — trust score increased!",
+    "email.p1":"The email you confirmed in step 1 raises your trust score. Educational domains (","email.p2":"), official authorities (","email.p3":") and associations are detected automatically. ","email.strong":"The address is not stored.",
+    "email.inputPh":"you@email.com","btn.sendEmail":"✉ Send code","email.verifiedBadge":"✓ Email verified — trust score increased!",
     "btn.declare":"Confirm role + issue token →","tk.badge":"✓ HHTTPS token issued","btn.check":"Call /hhttps/check — live test →",
     "roletable.role":"Role","roletable.methods":"Verification methods",
     "btn.checking":"Checking…","vh.loading":"Verifying token cryptographically …",
@@ -1268,7 +1283,7 @@ function showOAuthReturnBanner() {
 }
 
 function setStep(n) {
-  [1,2,3,4].forEach(i => {
+  [0,1,2,3,4].forEach(i => {
     const t = document.getElementById('st'+i);
     const p = document.getElementById('p'+i);
     t.classList.remove('active','done');
@@ -1381,31 +1396,59 @@ function selectVMethod(roleId, method) {
 }
 
 // ── WebAuthn Register ──────────────────────────────────────────────────────
+// ── Session (e-mail first, D4 / AK-10) ─────────────────────────────────────
+// register/start is bound to an e-mail-verified session: the WebAuthn user
+// handle is the session's stable userId; `hhttps_uid` is only a cache.
+async function ensureSession() {
+  if (sessionId) return sessionId;
+  const r = await fetch('/hhttps/session/start', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({})
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  sessionId = d.sessionId;
+  return sessionId;
+}
+
 async function doRegister() {
   const btn = document.getElementById('btnReg');
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Warte…';
   setFp(1,'scanning'); live('pend',tr('live.registering'));
   try {
-    userId = userId || null;
+    await ensureSession();
     const r1 = await fetch('/hhttps/webauthn/register/start', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ userId })
+      body: JSON.stringify({ sessionId })
     });
-    const { userId: uid, options } = await r1.json();
+    const d1 = await r1.json();
+    if (r1.status === 403 && d1.error === 'email_verification_required') {
+      msg(tr('msg.emailFirst'),'e'); setStep(0); throw new Error(d1.detail || d1.error);
+    }
+    if (!r1.ok) throw new Error(d1.detail || d1.error || `HTTP ${r1.status}`);
+    const { userId: uid, options } = d1;
     userId = uid; localStorage.setItem('hhttps_uid', userId);
 
-    msg(tr('msg.confirmBio'),'i');
-    const attResp = await startRegistration(options);
-
-    const r2 = await fetch('/hhttps/webauthn/register/finish', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ userId, response: attResp })
-    });
-    const d2 = await r2.json();
-    if (!r2.ok) throw new Error(d2.error);
+    // K-4: a returning user already has a passkey → skip straight to the login step.
+    let hasPasskey = ((options && options.excludeCredentials) || []).length > 0;
+    if (!hasPasskey) {
+      msg(tr('msg.confirmBio'),'i');
+      try {
+        const attResp = await startRegistration(options);
+        const r2 = await fetch('/hhttps/webauthn/register/finish', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ userId, response: attResp, sessionId })
+        });
+        const d2 = await r2.json();
+        if (!r2.ok) throw new Error(d2.detail || d2.error);
+      } catch(e) {
+        // The authenticator already holds a credential for this user handle.
+        if (e && e.name === 'InvalidStateError') hasPasskey = true; else throw e;
+      }
+    }
 
     setFp(1,'success'); live('on',tr('live.passkeyOk'));
-    msg(tr('msg.passkeyReg'),'s');
+    msg(hasPasskey ? tr('msg.passkeyExisting') : tr('msg.passkeyReg'),'s');
     setTimeout(() => setStep(2), 700);
   } catch(e) {
     setFp(1,'error'); live('err',tr('live.error'));
@@ -1433,7 +1476,7 @@ async function doAuth() {
 
     const r2 = await fetch('/hhttps/webauthn/auth/finish', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ sessionId: sid, response: assertResp })
+      body: JSON.stringify({ sessionId: sid, response: assertResp, priorSessionId: sessionId })
     });
     const d2 = await r2.json();
     if (!r2.ok) throw new Error(d2.error);
@@ -1442,6 +1485,7 @@ async function doAuth() {
     setFp(2,'success'); live('on',tr('live.verified'));
     msg(tr('msg.humanProven'),'s');
     buildRoleGrid();
+    checkEmailStatus();
     setTimeout(() => setStep(3), 600);
   } catch(e) {
     setFp(2,'error'); live('err',tr('live.error'));
@@ -1670,8 +1714,8 @@ function previewEmailDomain(email) {
   if (selRole) setTrust(Math.max(60, h.s));
 }
 
+// Step 1: session/start → email/send (6-digit code) → email/confirm-code.
 async function doSendEmail() {
-  if (!sessionId) { msg(tr('msg.doWebauthn'),'e'); return; }
   const email = document.getElementById('emailInput').value.trim();
   if (!email || !email.includes('@')) { msgEmail(tr('msg.validEmail'),'e'); return; }
 
@@ -1679,31 +1723,55 @@ async function doSendEmail() {
   btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
 
   try {
+    await ensureSession();
     const r = await fetch('/hhttps/email/send', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ sessionId, email, role: selRole || 'citizen' })
+      body: JSON.stringify({ sessionId, email })
     });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
+    if (!r.ok) throw new Error(d.detail || d.error);
 
-    if (d.devMode && d.devToken) {
-      // Dev mode: auto-verify without actual email
+    document.getElementById('emailCodeRow').style.display = 'flex';
+    const codeEl = document.getElementById('emailCode');
+    if (d.devCode) {
+      // Dev mode (EMAIL_DEV_MODE): the code comes back in the response.
+      codeEl.value = String(d.devCode);
       msgEmail(tr('msg.devMode'),'i');
-      setTimeout(() => autoVerifyDev(d.devToken), 800);
     } else {
-      msgEmail(`${tr('msg.emailSent1')} (${d.domain}). ${tr('msg.emailSent2')}: ${d.expiresIn}.`,'s');
+      msgEmail(tr('msg.codeSent'),'s');
     }
+    codeEl.focus();
   } catch(e) {
     msgEmail(tr('err.prefix')+e.message,'e');
+  } finally {
     btn.disabled = false; btn.innerHTML = tr('btn.sendEmail');
   }
 }
 
-async function autoVerifyDev(rawToken) {
-  // Simulate the verification call (dev mode only)
-  const r = await fetch(`/hhttps/email/verify?token=${rawToken}&session=${sessionId}`);
-  // The server redirects, so we check status via the status endpoint
-  await checkEmailStatus();
+async function doConfirmEmail() {
+  const code = document.getElementById('emailCode').value.trim().replace(/[\s-]/g,'');
+  if (!code) { msgEmail(tr('msg.validEmail'),'e'); return; }
+  const btn = document.getElementById('btnConfirmEmail');
+  btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    await ensureSession();
+    const r = await fetch('/hhttps/email/confirm-code', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ sessionId, code })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error);
+    // The stable userId comes from the session; hhttps_uid is only a cache.
+    if (d.userId) { userId = d.userId; localStorage.setItem('hhttps_uid', userId); }
+    msgEmail(tr('msg.emailOk'),'s');
+    document.getElementById('st0').classList.add('done');
+    await checkEmailStatus();
+    setTimeout(() => setStep(1), 600);
+  } catch(e) {
+    msgEmail(tr('err.prefix')+e.message,'e');
+  } finally {
+    btn.disabled = false; btn.innerHTML = tr('btn.confirmEmail');
+  }
 }
 
 async function checkEmailStatus() {

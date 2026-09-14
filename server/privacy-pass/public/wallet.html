@@ -393,6 +393,19 @@ footer .b { color: var(--text); }
     <button class="outline" id="btn-recovery-open" onclick="openRecovery()" data-i18n="btn.recoveryOpen">Schlüssel verloren?</button>
   </div>
 
+  <!-- #27: e-mail first — a passkey is registered only on an e-mail-verified session -->
+  <div id="auth-email-area" class="hidden" style="margin-top:14px;padding:14px;background:var(--s2);border-radius:6px;border:1px solid var(--b1);">
+    <p style="font-size:11px;color:var(--muted);margin-bottom:10px" data-i18n="js.emailFirst">Zuerst E-Mail bestätigen — dein Passkey wird an diese stabile Identität gebunden. Die Adresse wird nicht gespeichert.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input type="email" id="auth-email-input" placeholder="deine@email.de" autocomplete="email" style="flex:1;min-width:180px">
+      <button id="btn-auth-email-send" onclick="emailSend()" data-i18n="js.emailSend">Code senden</button>
+    </div>
+    <div id="auth-email-code-row" class="hidden" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      <input type="text" id="auth-email-code" placeholder="482 913" inputmode="numeric" maxlength="8" autocomplete="one-time-code" data-i18n-ph="js.emailCode" style="flex:1;min-width:180px">
+      <button id="btn-auth-email-confirm" onclick="emailConfirm()" data-i18n="js.emailConfirm">Code bestätigen</button>
+    </div>
+  </div>
+
   <!-- Recovery flow (initially hidden) -->
   <div id="recovery-area" class="hidden" style="margin-top:14px;padding:14px;background:var(--s2);border-radius:6px;border:1px solid var(--b1);">
     <h3 style="font-family:var(--syne);font-size:14px;margin-bottom:8px;color:var(--p-apricot)" data-i18n="recovery.h3">Mit Recovery-Code anmelden</h3>
@@ -665,7 +678,8 @@ const T = {
     "js.roleAttest":"mit HHTTPS attestieren …","js.roleAttested":"✓ Rolle attestiert","js.eligCheck":"Eligibility prüfen …","js.allMet":"✓ Alle Anforderungen erfüllt. Trust-Score:","js.domainHint":"Diese Rolle verlangt eine spezifische Domain:",
     "js.validEmail":"Bitte eine gültige E-Mail eingeben.","js.mailSent1":"✓ Mail an","js.mailSent2":"versandt. Klicke den Link in der Mail und dann hier auf \"Verifikation prüfen\".","js.pilotAccepted":"Im Pilot-Modus akzeptiert. Bei Live-Betrieb gegen offizielle Register geprüft.",
     "js.discovery":"Discovery: lade Issuer-Verzeichnis …","js.noIssuer1":"Kein Issuer-Schlüssel für Rolle","js.issuerLoaded1":"✓ Issuer für","js.issuerLoaded2":"geladen","js.tokensStored2":"Tokens in der Wallet gespeichert",
-    "js.clearConfirm":"Wirklich alle Tokens löschen?","js.walletCleared":"Wallet geleert.","js.noTokenStock":"Kein Token im Vorrat — hole oben in Schritt 4 erst welche.","js.redeemPost":"POST /privacy-pass/redeem — löse einen Token ein …","js.confirmedAnon1":"✓ Als Mensch bestätigt — anonym (Rolle:","js.confirmedAnon2":"1 Token verbraucht ·","js.confirmedAnon3":"im Vorrat · unverknüpfbar.","js.alreadySpent":"Dieser Token war bereits verbraucht — aus dem Vorrat entfernt.","js.tokenInvalid":"✗ Token ungültig:","js.unknown":"unbekannt","js.error":"Fehler: ","js.lab":"anonyme Tokens","js.passkeyRegistered":"✓ Passkey registriert","js.credActive":"aktiv","js.credRegistered":"registriert","js.cloudBackup":"Cloud-Backup","js.genReq1":"Erzeuge","js.genReq2":"geblindete Token-Anfragen lokal …","js.tokensStored1":"✓","js.tokensStored2":"Tokens in der Wallet gespeichert"
+    "js.clearConfirm":"Wirklich alle Tokens löschen?","js.walletCleared":"Wallet geleert.","js.noTokenStock":"Kein Token im Vorrat — hole oben in Schritt 4 erst welche.","js.redeemPost":"POST /privacy-pass/redeem — löse einen Token ein …","js.confirmedAnon1":"✓ Als Mensch bestätigt — anonym (Rolle:","js.confirmedAnon2":"1 Token verbraucht ·","js.confirmedAnon3":"im Vorrat · unverknüpfbar.","js.alreadySpent":"Dieser Token war bereits verbraucht — aus dem Vorrat entfernt.","js.tokenInvalid":"✗ Token ungültig:","js.unknown":"unbekannt","js.error":"Fehler: ","js.lab":"anonyme Tokens","js.passkeyRegistered":"✓ Passkey registriert","js.credActive":"aktiv","js.credRegistered":"registriert","js.cloudBackup":"Cloud-Backup","js.genReq1":"Erzeuge","js.genReq2":"geblindete Token-Anfragen lokal …","js.tokensStored1":"✓","js.tokensStored2":"Tokens in der Wallet gespeichert",
+    "js.emailFirst":"Zuerst E-Mail bestätigen — dein Passkey wird an diese stabile Identität gebunden. Die Adresse wird nicht gespeichert.","js.emailSend":"Code senden","js.emailCode":"6-stelliger Code","js.emailConfirm":"Code bestätigen","js.emailOk":"✓ E-Mail bestätigt","js.emailSent":"Code gesendet — bitte Postfach prüfen.","js.emailInvalid":"Bitte eine gültige E-Mail-Adresse eingeben.","js.passkeyExisting":"Passkey erkannt — bitte bestätigen"
   },
   en: {
     "nav.home":"Home",
@@ -692,7 +706,8 @@ const T = {
     "js.roleAttest":"attest with HHTTPS …","js.roleAttested":"✓ Role attested","js.eligCheck":"Checking eligibility …","js.allMet":"✓ All requirements met. Trust score:","js.domainHint":"This role requires a specific domain:",
     "js.validEmail":"Please enter a valid email.","js.mailSent1":"✓ Email sent to","js.mailSent2":". Click the link in the email and then here on \"Check verification\".","js.pilotAccepted":"Accepted in pilot mode. In live operation checked against official registers.",
     "js.discovery":"Discovery: loading issuer directory …","js.noIssuer1":"No issuer key for role","js.issuerLoaded1":"✓ Issuer for","js.issuerLoaded2":"loaded","js.tokensStored2":"tokens stored in the wallet",
-    "js.clearConfirm":"Really delete all tokens?","js.walletCleared":"Wallet cleared.","js.noTokenStock":"No token in stock — get some in step 4 above first.","js.redeemPost":"POST /privacy-pass/redeem — redeeming a token …","js.confirmedAnon1":"✓ Confirmed as human — anonymous (role:","js.confirmedAnon2":"1 token used ·","js.confirmedAnon3":"in stock · unlinkable.","js.alreadySpent":"This token was already used — removed from the stock.","js.tokenInvalid":"✗ Token invalid:","js.unknown":"unknown","js.error":"Error: ","js.lab":"anonymous tokens","js.passkeyRegistered":"✓ Passkey registered","js.credActive":"active","js.credRegistered":"registered","js.cloudBackup":"cloud backup","js.genReq1":"Generating","js.genReq2":"blinded token requests locally …","js.tokensStored1":"✓","js.tokensStored2":"tokens stored in the wallet"
+    "js.clearConfirm":"Really delete all tokens?","js.walletCleared":"Wallet cleared.","js.noTokenStock":"No token in stock — get some in step 4 above first.","js.redeemPost":"POST /privacy-pass/redeem — redeeming a token …","js.confirmedAnon1":"✓ Confirmed as human — anonymous (role:","js.confirmedAnon2":"1 token used ·","js.confirmedAnon3":"in stock · unlinkable.","js.alreadySpent":"This token was already used — removed from the stock.","js.tokenInvalid":"✗ Token invalid:","js.unknown":"unknown","js.error":"Error: ","js.lab":"anonymous tokens","js.passkeyRegistered":"✓ Passkey registered","js.credActive":"active","js.credRegistered":"registered","js.cloudBackup":"cloud backup","js.genReq1":"Generating","js.genReq2":"blinded token requests locally …","js.tokensStored1":"✓","js.tokensStored2":"tokens stored in the wallet",
+    "js.emailFirst":"Confirm your email first — your passkey is bound to this stable identity. The address is not stored.","js.emailSend":"Send code","js.emailCode":"6-digit code","js.emailConfirm":"Confirm code","js.emailOk":"✓ Email confirmed","js.emailSent":"Code sent — please check your inbox.","js.emailInvalid":"Please enter a valid email address.","js.passkeyExisting":"Passkey found — please confirm"
   }
 };
 let LANG = 'de';
@@ -797,6 +812,138 @@ async function walletRemove(id) {
   });
 }
 
+// ─── #27: e-mail first (D4 / AK-10) ──────────────────────────────────────
+// A passkey is registered only on an e-mail-verified session; the WebAuthn
+// user handle is the session's stable userId. Same flow as public/index.html:
+// session/start → email/send → email/confirm-code → register/start {sessionId}.
+async function ensureHhttpsSession() {
+  if (sessionId) return sessionId;
+  const r = await fetch('/hhttps/session/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+  sessionId = d.sessionId;
+  return sessionId;
+}
+
+let emailResolve = null;   // resolves the ensureEmailVerified() promise once confirm-code answers 200
+
+function showEmailDialog(show) {
+  document.getElementById('auth-email-area').classList.toggle('hidden', !show);
+  if (show) document.getElementById('auth-email-input').focus();
+}
+
+async function ensureEmailVerified() {
+  await ensureHhttpsSession();
+  const r = await fetch('/hhttps/email/status', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId }),
+  });
+  const d = await r.json().catch(() => ({}));
+  if (r.ok && d.emailVerified) return;
+  L.auth(tr('js.emailFirst'), 'info');
+  showEmailDialog(true);
+  await new Promise((res) => { emailResolve = res; });
+  showEmailDialog(false);
+}
+
+window.emailSend = async function () {
+  const email = document.getElementById('auth-email-input').value.trim();
+  if (!/.+@.+\..+/.test(email)) { L.auth(tr('js.emailInvalid'), 'warn'); return; }
+  const btn = document.getElementById('btn-auth-email-send');
+  btn.disabled = true;
+  try {
+    await ensureHhttpsSession();
+    const r = await fetch('/hhttps/email/send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, email }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+    document.getElementById('auth-email-code-row').classList.remove('hidden');
+    document.getElementById('auth-email-code').focus();
+    L.auth(tr('js.emailSent'), 'ok');
+  } catch (err) {
+    L.auth(`✗ ${err.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+window.emailConfirm = async function () {
+  const code = document.getElementById('auth-email-code').value.trim().replace(/[\s-]/g,'');
+  if (!code) return;
+  const btn = document.getElementById('btn-auth-email-confirm');
+  btn.disabled = true;
+  try {
+    await ensureHhttpsSession();
+    const r = await fetch('/hhttps/email/confirm-code', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, code }),
+    });
+    const d = await r.json();
+    // 409 identity_conflict: the session already carries a passkey for another
+    // stable userId — the server refuses to re-anchor; show its message as is.
+    if (!r.ok) throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+    if (d.userId) { userId = d.userId; localStorage.setItem('hhttps_uid', userId); }
+    L.auth(tr('js.emailOk') + (d.pseudonym ? ` · ${d.pseudonym}` : ''), 'ok');
+    const res = emailResolve; emailResolve = null;
+    if (res) res();
+  } catch (err) {
+    L.auth(`✗ ${err.message}`, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+/**
+ * register/start on the e-mail-verified session. On the 403 e-mail gate the
+ * inline dialog is shown once and the call retried.
+ */
+async function registerStart() {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch('/hhttps/webauthn/register/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId }),
+    });
+    const d = await r.json();
+    if (r.ok) return d;
+    if (r.status === 403 && d.error === 'email_verification_required' && attempt === 0) {
+      await ensureEmailVerified();
+      continue;
+    }
+    throw new Error(d.detail || d.error || `HTTP ${r.status}`);
+  }
+}
+
+/**
+ * Registers a passkey on the current e-mail-verified session and returns
+ * false when the user already has one (excludeCredentials non-empty or the
+ * authenticator answers InvalidStateError) — the caller then logs in instead.
+ */
+async function registerPasskey() {
+  const d1 = await registerStart();
+  userId = d1.userId; localStorage.setItem('hhttps_uid', userId);
+  const excl = (d1.options && d1.options.excludeCredentials) || [];
+  if (excl.length > 0) return false;
+  let att;
+  try {
+    att = await startRegistration(d1.options);
+  } catch (e) {
+    if (e && e.name === 'InvalidStateError') return false;
+    throw e;
+  }
+  const r2 = await fetch('/hhttps/webauthn/register/finish', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId, response: att, sessionId }),
+  });
+  const d2 = await r2.json();
+  if (!r2.ok) throw new Error(d2.detail || d2.error || `HTTP ${r2.status}`);
+  return true;
+}
+
 // ─── Step 1: Login ───────────────────────────────────────────────────────
 window.doLogin = async function () {
   const btn = document.getElementById('btn-login');
@@ -810,7 +957,11 @@ window.doLogin = async function () {
     });
     const d1 = await r1.json();
 
-    if (r1.ok && d1.options) {
+    // auth/start answers 200 even for an unknown userId (empty allowCredentials
+    // → discoverable-credential prompt); only a userId the server knows is a
+    // returning account.
+    const known = r1.ok && d1.options && (d1.options.allowCredentials || []).length > 0;
+    if (known) {
       L.auth('✓ Account gefunden, Passkey-Prompt', 'ok');
       const a = await startAuthentication(d1.options);
       const r2 = await fetch('/hhttps/webauthn/auth/finish', {
@@ -822,23 +973,13 @@ window.doLogin = async function () {
       sessionId = d2.sessionId;
     } else {
       L.auth('Kein Account, lege neuen Passkey an …', 'info');
-      const r1b = await fetch('/hhttps/webauthn/register/start', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId }),
-      });
-      const d1b = await r1b.json();
-      userId = d1b.userId; localStorage.setItem('hhttps_uid', userId);
+      // #27: e-mail first — session + verified e-mail, then register/start {sessionId}.
+      await ensureHhttpsSession();
+      await ensureEmailVerified();
+      const registered = await registerPasskey();   // false → passkey already exists (K-4)
+      L.auth(registered ? tr('js.passkeyRegistered') : tr('js.passkeyExisting'), 'ok');
 
-      const att = await startRegistration(d1b.options);
-      const r2 = await fetch('/hhttps/webauthn/register/finish', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, response: att }),
-      });
-      const d2 = await r2.json();
-      if (!r2.ok) throw new Error(d2.error || `HTTP ${r2.status}`);
-      L.auth(tr('js.passkeyRegistered'), 'ok');
-
-      // auto-login
+      // auto-login; auth/finish merges the e-mail session (priorSessionId)
       const r3 = await fetch('/hhttps/webauthn/auth/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId }),
@@ -847,7 +988,7 @@ window.doLogin = async function () {
       const a = await startAuthentication(d3.options);
       const r4 = await fetch('/hhttps/webauthn/auth/finish', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: d3.sessionId, response: a }),
+        body: JSON.stringify({ sessionId: d3.sessionId, response: a, priorSessionId: sessionId }),
       });
       const d4 = await r4.json();
       if (!r4.ok) throw new Error(d4.error);
@@ -908,15 +1049,16 @@ window.useRecoveryCode = async function () {
 };
 
 async function registerNewCredential() {
-  const r1 = await fetch('/hhttps/webauthn/register/start', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId }),
-  });
-  const d1 = await r1.json();
+  // #27: the new key is registered on an e-mail-verified session; confirm-code
+  // must resolve to the recovered userId (otherwise the server answers
+  // 409 identity_conflict and the message is shown as is).
+  await ensureHhttpsSession();
+  await ensureEmailVerified();
+  const d1 = await registerStart();
   const att = await startRegistration(d1.options);
   const r2 = await fetch('/hhttps/webauthn/register/finish', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId, response: att }),
+    body: JSON.stringify({ userId, response: att, sessionId }),
   });
   if (!r2.ok) throw new Error('Registrierung fehlgeschlagen');
   L.auth(tr('js.keyRegistered'), 'ok');
@@ -953,15 +1095,15 @@ async function refreshCredentials() {
 
 window.addCredential = async function () {
   try {
-    const r1 = await fetch('/hhttps/webauthn/register/start', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId }),
-    });
-    const d1 = await r1.json();
+    // #27: register/start needs the e-mail-verified session (the passkey
+    // session from auth/finish has no e-mail yet → inline dialog).
+    await ensureHhttpsSession();
+    await ensureEmailVerified();
+    const d1 = await registerStart();
     const att = await startRegistration(d1.options);
     const r2 = await fetch('/hhttps/webauthn/register/finish', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, response: att }),
+      body: JSON.stringify({ userId, response: att, sessionId }),
     });
     if (!r2.ok) throw new Error('Fehler beim Registrieren');
     await refreshCredentials();
