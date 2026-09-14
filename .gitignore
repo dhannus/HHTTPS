@@ -65,3 +65,7 @@ _backup_*/
 
 # PM2 ecosystem
 ecosystem.config.local.js
+
+# EUDI verifier keystore (state, never commit)
+server/eudi-keys/
+eudi-keys/
