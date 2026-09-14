@@ -252,6 +252,9 @@ for col in "identity_anchors:email_hash" "identity_claims_cache:user_id" "sessio
   n="$("${PSQL[@]}" -c "SELECT count(*) FROM information_schema.columns WHERE table_name='$t' AND column_name='$c'")"
   [[ "$n" == "1" ]] && ok "Schema: $t.$c" || fail "Schema fehlt: $t.$c (Boot-DDL nicht angewendet? pm2 logs $PM2_APP)"
 done
+# #31: state/nonce/pkce_challenge müssen TEXT sein (migration-phase-3a1-authcodes-text.sql, Boot-DDL)
+n="$("${PSQL[@]}" -c "SELECT count(*) FROM information_schema.columns WHERE table_name='authorization_codes' AND column_name IN ('state','nonce','pkce_challenge') AND data_type='text'")"
+[[ "$n" == "3" ]] && ok "Schema: authorization_codes.state/nonce/pkce_challenge = text" || fail "Schema: authorization_codes.state/nonce/pkce_challenge nicht text (Boot-DDL phase 3a.1 nicht angewendet? pm2 logs $PM2_APP)"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{}' "$BASE/hhttps/webauthn/register/start")"
 [[ "$CODE" == "400" ]] && ok "register/start ohne sessionId → 400 (Gate aktiv)" || warn "register/start ohne sessionId → $CODE (erwartet 400)"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"sessionId":"x","email":"deploy-check@example.org"}' "$BASE/hhttps/email/send")"
