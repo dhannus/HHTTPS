@@ -133,4 +133,4 @@ Lücke B-2 geschlossen. Urteil bleibt: **ABGENOMMEN** (28/28). Erstellt vom Feat
 
 ## Nachtrag Folgetasks (2026-09-13)
 - B-5 (#23) geschlossen: `register/finish` ist an die E-Mail-verifizierte Session gebunden. B-3 (#22) geschlossen. S-8 (#25) geschlossen: Playwright-E2E inkl. echter Passkey-Zeremonie (virtueller Authenticator) — AK-4/AK-5/AK-14/AK-15 sind damit auch im Browser nachgewiesen. #26 geschlossen (EUDI-Verifier 403). Zusätzlicher Bugfix: WebAuthn-User-Handle war `"[object Object]"` (Buffer statt String) — behoben, E2E-Nachweis `D4`.
-- Offen als eigene Issues: #20, #21, #24, #27.
+- #27 geschlossen: Wallet-Seite und sites/hhttps.html auf den E-Mail-zuerst-Flow umgestellt (statische Tests + Wallet-E2E). Offen als eigene Issues: #20, #21, #24.
