@@ -49,6 +49,7 @@ import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webho
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
 import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
+import { validateAuthorizeParams, stateForErrorRedirect } from './oauth-params.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -1454,6 +1455,13 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
     ));
   }
 
+  // #31: bounded state/nonce, well-formed PKCE (RFC 7636 §4.2). An over-long
+  // state is NOT echoed back at full length in the error redirect.
+  const v = validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method });
+  if (!v.ok) {
+    return redirectWithError(res, redirect_uri, stateForErrorRedirect(state), v.error, v.description);
+  }
+
   // PKCE: required for public clients (no client_secret_hash)
   const isPublicClient = !client.client_secret_hash;
   if (isPublicClient && !code_challenge) {
@@ -1506,8 +1514,21 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
 
   if (!token) return res.status(401).json({ error: 'token required' });
 
+  // #31: validate before touching the DB — an over-long state/nonce or a
+  // malformed code_challenge is a client error, not a 401/500.
+  const v = validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method });
+  if (!v.ok) return res.status(400).json({ error: v.error, error_description: v.description });
+
+  // Token errors (revoked / not active / jwt) stay 401 — everything after
+  // this point is an internal error (500 server_error, #31).
+  let d;
   try {
-    const d = await checkTokenValid(token);
+    d = await checkTokenValid(token);
+  } catch (e) {
+    return res.status(401).json({ error: e.message });
+  }
+
+  try {
     // Machines ARE allowed through OAuth. Their actor type travels as
     // verification_method 'machine-token' (no schema change needed) and the
     // token endpoint turns that into actor_type:'bot' claims.
@@ -1592,7 +1613,8 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
 
     return res.json({ redirect: url.toString() });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    console.error('[OAUTH] approve failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
   }
 });
 

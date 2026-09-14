@@ -412,6 +412,17 @@ export async function phase8SchemaApplied() {
   return rows[0]?.col === true && rows[0]?.tbl === true;
 }
 
+/** true when authorization_codes.state/nonce/pkce_challenge are already TEXT (#31). */
+export async function authCodesTextApplied() {
+  const { rows } = await q(
+    `SELECT count(*)::int AS n FROM information_schema.columns
+      WHERE table_name = 'authorization_codes'
+        AND column_name IN ('state', 'nonce', 'pkce_challenge')
+        AND data_type = 'text'`
+  );
+  return rows[0]?.n === 3;
+}
+
 /**
  * Boot-DDL list, in apply order. Each entry: the file under sql/, optionally
  * an `endMarker` (only the text above it is run), and an applied-check —
@@ -423,6 +434,8 @@ export const BOOT_DDL_FILES = [
     note: 'DDL only — run the OPERATOR section of the migration file for the data update' },
   // #7: machineOperators.create writes key_jkt; the column never had a migration.
   { file: 'migration-phase-4b-machine-key-jkt.sql', columns: [['machine_operators', 'key_jkt']] },
+  // #31: state/nonce/pkce_challenge were VARCHAR(128); longer client values broke the login.
+  { file: 'migration-phase-3a1-authcodes-text.sql', applied: authCodesTextApplied },
 ];
 
 function bootDdlOf({ file, endMarker }) {
