@@ -11,7 +11,15 @@ Stand: 2026-09-14 · Betrifft PR #19 (merged in `main`, Merge-Commit `2b1dd61`) 
 | Zustand (nicht im Git) | `/var/www/hhttps/.env`, `/var/www/hhttps/keys/` (Signaturschlüssel), `/var/www/hhttps/eudi-keys/` (EUDI-Verifier, Docker-Mount) | dürfen beim Deploy nie überschrieben werden |
 | Datenbank | PostgreSQL, Zugangsdaten in `.env` (`DB_*`) | |
 
-Bisheriger Ablauf: Repo aktualisieren, dann manuell nach `/var/www/hhttps` kopieren. Das Skript macht das Kopieren automatisch (rsync, Zustandsdateien ausgenommen) und kann das Kopieren durch einen Symlink ganz abschaffen (Abschnitt 6).
+Befund vom 2026-09-14 (Serverausgabe):
+- pm2 `hhttps-v4`: `script path /var/www/hhttps/server.js`, `exec cwd /var/www/hhttps`, fork_mode, Node 20.20.2 (ausreichend, ≥ 20).
+- nginx: `hhttps.org` → `location /` proxied vollständig an `localhost:3000`; nur `/spec` (alias `/var/www/hhttps-static/spec.html`), ACME (`/var/www/html`) und die EUDIPLO-`.well-known`-Pfade (Port 3002) sind Ausnahmen. **nginx liest nicht aus `/var/www/hhttps`** → ein Symlink auf `/root/HHTTPS/server` ist unproblematisch (Abschnitt 6). Offen: die Ausgabe war auf 40 Zeilen gekürzt; bitte nachreichen, ob es eine `location /developers` oder `/privacy-pass` mit `alias`/`root` gibt.
+- Repo `/root/HHTTPS` steht auf `main` @ `c5b67d0` (Stand vor PR #19). `scripts/deploy-phase8.sh` liegt dort als manuell kopierte, untracked Datei — **vor dem `git pull` löschen**, sonst blockiert Git den Pull (das Skript prüft das und bricht mit Hinweis ab).
+- In `/var/www/hhttps` liegen Dinge, die nicht im Repo sind: `developers/` (Portal, im Repo unter `../developers`), `privacy-pass/public/demo.html`, `force-verify-client.mjs`, `examples/`, `extension/`, diverse `*.bak*`/`*.backup*`/`privacy-pass.backup_*`. Außerdem weicht `eudi-verifier/docker/docker-compose.yaml` lokal vom Repo ab. Das Skript kopiert deshalb **ohne `--delete`** und rührt `docker-compose.yaml` nicht an.
+- `.env`: `HHTTPS_VERIFICATION_PEPPER` ist bereits gesetzt (**diesen Wert behalten**, er trägt die GitHub-Anker), `SMTP_HOST`, `EUDI_VERIFIER_SECRET`, `RP_ID`, `DB_HOST` vorhanden. **`NODE_ENV=production` fehlt** und muss ergänzt werden. `EMAIL_DEV_MODE` ist nicht gesetzt (gut).
+- Docker: `eudi-verifier-backend` ist seit 3 Monaten `unhealthy` — unabhängig von diesem Deploy, aber prüfenswert.
+
+Bisheriger Ablauf: Repo aktualisieren, dann manuell nach `/var/www/hhttps` kopieren. Das Skript macht das Kopieren automatisch (rsync ohne `--delete`, Zustandsdateien und lokale Extras ausgenommen) und kann das Kopieren durch einen Symlink ganz abschaffen (Abschnitt 6).
 
 ## 2. Was dieses Release am Betrieb ändert
 
@@ -27,15 +35,16 @@ Bisheriger Ablauf: Repo aktualisieren, dann manuell nach `/var/www/hhttps` kopie
 
 ```bash
 # als root auf srv1421412
-cd /root/HHTTPS && git fetch origin && git checkout main && git pull --ff-only
-# Pepper prüfen / anlegen (NUR wenn noch keiner existiert!)
-grep -q '^HHTTPS_VERIFICATION_PEPPER=' /var/www/hhttps/.env \
-  || echo "HHTTPS_VERIFICATION_PEPPER=$(openssl rand -hex 32)" >> /var/www/hhttps/.env
+rm -f /root/HHTTPS/server/scripts/deploy-phase8.sh      # manuell kopierte Fassung entfernen
+cd /root/HHTTPS && git fetch origin && git checkout main && git pull --ff-only   # holt das Skript aus main
+# Pepper existiert bereits — NICHT neu erzeugen. Nur NODE_ENV ergänzen:
 grep -q '^NODE_ENV=' /var/www/hhttps/.env || echo "NODE_ENV=production" >> /var/www/hhttps/.env
 sed -i '/^EMAIL_DEV_MODE=/d' /var/www/hhttps/.env
 # Trockenlauf: prüft alles, ändert nichts
 bash /root/HHTTPS/server/scripts/deploy-phase8.sh --dry-run
 ```
+
+Voraussetzung: das Skript muss in `main` gemerged sein (PR „ops: deploy runbook and script“). Bis dahin: `git fetch origin claude/kind-pasteur-kweqf1 && git checkout claude/kind-pasteur-kweqf1` und das Skript mit `BRANCH=claude/kind-pasteur-kweqf1` starten.
 
 Der Trockenlauf muss mit „Preflight bestanden“ enden. Typische Abbrüche: Repo nicht auf `main`, lokale Änderungen im Repo, Pepper fehlt, `NODE_ENV` fehlt, Postgres nicht erreichbar.
 
@@ -68,26 +77,26 @@ Dauer: etwa 1–2 Minuten, davon ~10 s Ausfall beim Restart.
 
 ## 6. Kopieren abschaffen: `/var/www/hhttps` als Symlink
 
-Ziel: `/var/www/hhttps → <Repo>/server`, damit `git pull` + `pm2 restart` reichen.
+Ziel: `/var/www/hhttps → /root/HHTTPS/server`, damit `git pull` + `pm2 restart` reichen.
 
-**Wichtige Einschränkung:** Das Repo darf dafür **nicht unter `/root`** liegen. nginx läuft als `www-data` und darf `/root` (Rechte 700) nicht betreten. Falls nginx statische Dateien direkt aus `/var/www/hhttps/public` ausliefert (statt alles an Node zu proxien), würden diese Dateien 403 liefern. Lösung: Repo einmalig nach `/var/www/HHTTPS` verschieben.
-
-```bash
-pm2 stop hhttps-v4
-mv /root/HHTTPS /var/www/HHTTPS          # Repo verschieben (Git bleibt intakt)
-cd /var/www/HHTTPS && git status         # Kontrolle
-REPO_DIR=/var/www/HHTTPS bash /var/www/HHTTPS/server/scripts/deploy-phase8.sh --link
-```
-
-`--link` übernimmt `.env`, `keys/`, `eudi-keys/` in `/var/www/HHTTPS/server/` (dort per `.gitignore` geschützt), benennt das alte Verzeichnis in `/var/www/hhttps_pre-link_<ts>` um, setzt den Symlink und startet pm2 neu. Ab dann ist `INSTALL_DIR` = Repo, Schritt 4 entfällt und jeder weitere Deploy ist:
+Laut nginx-Konfiguration proxied nginx alles an Node und liest keine Dateien aus `/var/www/hhttps`. Damit ist ein Symlink nach `/root` in Ordnung (Node läuft als root und liest das Repo direkt). Das Skript prüft das selbst: referenziert nginx `/var/www/hhttps` per `root`/`alias` (z. B. eine bisher nicht gezeigte `location /developers`), bricht `--link` ab und verlangt ein Repo außerhalb von `/root` (z. B. `mv /root/HHTTPS /var/www/HHTTPS`, dann `REPO_DIR=/var/www/HHTTPS`).
 
 ```bash
-REPO_DIR=/var/www/HHTTPS bash /var/www/HHTTPS/server/scripts/deploy-phase8.sh
+bash /root/HHTTPS/server/scripts/deploy-phase8.sh --link
 ```
 
-Danach zwei Dinge dauerhaft anpassen (einmalig):
-- `eudi-keys/` in `.gitignore` aufnehmen (Repo), damit die Schlüssel nicht versehentlich committet werden.
+`--link` übernimmt in `/root/HHTTPS/server/`: `.env`, `keys/`, `eudi-keys/` (per `.gitignore` geschützt) sowie die lokalen Extras `developers/`, `privacy-pass/public/demo.html`, `force-verify-client.mjs`; die lokal abweichende `docker-compose.yaml` wird als `docker-compose.yaml.local-<ts>` daneben abgelegt (die laufenden Container sind nicht betroffen; Unterschiede bitte ins Repo übernehmen). Danach wird `/var/www/hhttps` in `/var/www/hhttps_pre-link_<ts>` umbenannt, der Symlink gesetzt und pm2 neu gestartet. pm2 behält `script path`/`exec cwd` `/var/www/hhttps/...`, was über den Symlink weiter gilt. Ab dann ist `INSTALL_DIR` = Repo, Schritt 4 entfällt und jeder weitere Deploy ist:
+
+```bash
+bash /root/HHTTPS/server/scripts/deploy-phase8.sh
+```
+
+Aufräumen (optional, nach erfolgreichem Betrieb): `/var/www/hhttps_pre-link_<ts>` enthält nur noch Altlasten (`*.bak*`, `privacy-pass.backup_*`, `public.before-gh-rename`, `server.js.backup_*`) und kann gelöscht werden.
+
+Dauerhaft im Repo erledigt bzw. offen:
+- `eudi-keys/` steht jetzt in `.gitignore`.
 - Docker-Mount in `server/eudi-verifier/docker/docker-compose.yaml` zeigt auf `/var/www/hhttps/eudi-keys/…` — über den Symlink weiterhin gültig, Docker löst Symlinks als root auf.
+- Offen: `developers/` liegt im Repo unter `/developers` (Repo-Wurzel), auf dem Server aber unter `server/developers`. Wie es ausgeliefert wird (nginx-`alias` oder Node), klärt die nachgereichte nginx-Ausgabe; ggf. ein `express.static` in `server.js` oder ein Symlink `server/developers → ../developers`.
 
 Rückweg: `rm /var/www/hhttps && mv /var/www/hhttps_pre-link_<ts> /var/www/hhttps && pm2 restart hhttps-v4`.
 
@@ -112,4 +121,12 @@ node -v && psql --version && docker ps --format '{{.Names}} {{.Status}}' 2>/dev/
 grep -E '^(NODE_ENV|HHTTPS_VERIFICATION_PEPPER|EMAIL_DEV_MODE|SMTP_HOST|EUDI_VERIFIER_SECRET|RP_ID|DB_HOST)=' /var/www/hhttps/.env | sed 's/=.*/=***/'
 ```
 
-Entscheidend sind die nginx-Zeilen (liefert nginx `public/` selbst aus?) und das `diff` (gibt es in `/var/www/hhttps` lokale Änderungen, die nicht im Repo sind?).
+Stand 2026-09-14: Ausgabe liegt vor und ist oben eingearbeitet. Noch offen:
+
+```bash
+nginx -T 2>/dev/null | grep -n -E 'location|alias|root |proxy_pass' | grep -v acme      # vollständig, nicht gekürzt
+diff /root/HHTTPS/server/eudi-verifier/docker/docker-compose.yaml /var/www/hhttps/eudi-verifier/docker/docker-compose.yaml
+diff /root/HHTTPS/server/package.json /var/www/hhttps/package.json
+head -20 /var/www/hhttps/force-verify-client.mjs        # wird das noch gebraucht?
+grep -n 'demo' /var/www/hhttps/privacy-pass/index.js    # wird demo.html ausgeliefert?
+```

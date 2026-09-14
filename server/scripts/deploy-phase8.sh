@@ -84,15 +84,31 @@ ENV_FILE="$STATE_DIR/.env"
 if [[ $DO_LINK -eq 1 ]]; then
   step "LINK: $INSTALL_DIR → $SRC_DIR"
   [[ $LINKED -eq 1 ]] && { ok "bereits verlinkt"; exit 0; }
-  # nginx (www-data) darf /root nicht betreten: Repo muss außerhalb von /root liegen
-  case "$(readlink -f "$SRC_DIR")" in
-    /root/*) fail "Repo liegt unter /root — nginx/www-data hätte keinen Zugriff. Erst Repo z. B. nach /var/www/HHTTPS verschieben (Runbook Abschnitt 6), dann --link mit REPO_DIR=/var/www/HHTTPS" ;;
-  esac
-  for f in .env keys eudi-keys; do
+  # nginx (www-data) darf /root nicht betreten. Auf srv1421412 proxied nginx alles
+  # an Node (kein Dateizugriff auf INSTALL_DIR) — dann ist ein Symlink nach /root ok.
+  # Referenziert nginx INSTALL_DIR aber direkt (alias/root), muss das Repo außerhalb
+  # von /root liegen.
+  if command -v nginx >/dev/null && nginx -T 2>/dev/null | grep -E '^\s*(root|alias)\s' | grep -q "$INSTALL_DIR"; then
+    case "$(readlink -f "$SRC_DIR")" in
+      /root/*) fail "nginx liest Dateien direkt aus $INSTALL_DIR und das Repo liegt unter /root (für www-data unlesbar). Repo z. B. nach /var/www/HHTTPS verschieben, dann --link mit REPO_DIR=/var/www/HHTTPS" ;;
+    esac
+    warn "nginx referenziert $INSTALL_DIR direkt — Symlink-Ziel muss für www-data lesbar sein"
+  else
+    ok "nginx liest nicht direkt aus $INSTALL_DIR (nur Proxy) — Symlink-Ziel darf unter /root liegen"
+  fi
+  # Lokale Zustände/Extras, die nicht im Git-Repo liegen, mit übernehmen
+  for f in .env keys eudi-keys developers privacy-pass/public/demo.html force-verify-client.mjs; do
     if [[ -e "$INSTALL_DIR/$f" && ! -e "$SRC_DIR/$f" ]]; then
+      run mkdir -p "$(dirname "$SRC_DIR/$f")"
       run cp -a "$INSTALL_DIR/$f" "$SRC_DIR/$f"; ok "übernommen: $f"
     fi
   done
+  # Lokal geänderte, aber git-getrackte Dateien: Kopie ablegen, nicht überschreiben
+  DC="eudi-verifier/docker/docker-compose.yaml"
+  if [[ -f "$INSTALL_DIR/$DC" ]] && ! cmp -s "$INSTALL_DIR/$DC" "$SRC_DIR/$DC"; then
+    run cp -a "$INSTALL_DIR/$DC" "$SRC_DIR/${DC}.local-${TS}"
+    warn "$DC weicht lokal ab — Kopie unter ${DC}.local-${TS}; Unterschiede ins Repo übernehmen (laufende Container sind nicht betroffen)"
+  fi
   run pm2 stop "$PM2_APP"
   run mv "$INSTALL_DIR" "${INSTALL_DIR}_pre-link_${TS}"
   run ln -s "$SRC_DIR" "$INSTALL_DIR"
@@ -109,6 +125,9 @@ git fetch -q origin "$BRANCH" || fail "git fetch fehlgeschlagen"
 CUR="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$CUR" == "$BRANCH" ]] || fail "Repo steht auf '$CUR', erwartet '$BRANCH' (git checkout $BRANCH)"
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "Repo hat lokale Änderungen — erst committen/stashen"
+# Untracked Dateien, die auf origin/BRANCH getrackt sind, würden `git pull` blockieren
+CONFLICTS="$(comm -12 <(git ls-files --others --exclude-standard | sort) <(git ls-tree -r --name-only "origin/$BRANCH" | sort) || true)"
+[[ -z "$CONFLICTS" ]] || fail "Untracked Dateien kollidieren mit origin/$BRANCH (vor dem Pull entfernen): $(echo "$CONFLICTS" | tr '\n' ' ')"
 ok "Repo auf $BRANCH, sauber; Remote-Head $(git rev-parse --short "origin/$BRANCH")"
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
@@ -179,11 +198,15 @@ step "4/7 Sync"
 if [[ $LINKED -eq 1 ]]; then
   ok "übersprungen (Symlink-Layout)"
 else
-  rsync -a --delete \
+  # Kein --delete: in INSTALL_DIR liegen lokale Extras (developers/, demo.html,
+  # force-verify-client.mjs, Backups), die nicht im Repo sind. Lokal angepasste,
+  # git-getrackte Dateien (docker-compose.yaml) werden nicht überschrieben.
+  rsync -a \
     --exclude '.env' --exclude 'keys/' --exclude 'eudi-keys/' \
-    --exclude '.git/' --exclude 'test/' \
+    --exclude '.git/' --exclude 'test/' --exclude 'node_modules/.cache/' \
+    --exclude 'eudi-verifier/docker/docker-compose.yaml' \
     "$SRC_DIR/" "$INSTALL_DIR/"
-  ok "rsync $SRC_DIR → $INSTALL_DIR (.env, keys/, eudi-keys/ unberührt)"
+  ok "rsync $SRC_DIR → $INSTALL_DIR (ohne --delete; .env, keys/, eudi-keys/, docker-compose.yaml unberührt)"
 fi
 
 # ─── 5. Restart ───────────────────────────────────────────────────────────────
