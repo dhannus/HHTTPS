@@ -232,7 +232,7 @@ if [[ $SKIP_OPERATOR -eq 1 ]]; then
 else
   MIG="$INSTALL_DIR/$MIGRATION"
   [[ -f "$MIG" ]] || fail "Migration nicht gefunden: $MIG"
-  grep -q "$OPERATOR_MARKER" "$MIG" || fail "Marker '$OPERATOR_MARKER' nicht in $MIG"
+  grep -qF -- "$OPERATOR_MARKER" "$MIG" || fail "Marker '$OPERATOR_MARKER' nicht in $MIG"
   # Nur den OPERATOR-Abschnitt (alles NACH dem Marker) ausführen; idempotent.
   awk -v m="$OPERATOR_MARKER" 'f{print} index($0,m)==1{f=1}' "$MIG" | "${PSQL[@]}" >/dev/null \
     || fail "Operator-Abschnitt fehlgeschlagen"
