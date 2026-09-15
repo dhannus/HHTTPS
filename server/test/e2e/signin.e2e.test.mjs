@@ -149,6 +149,55 @@ test('K-9/AK-14: ?email_verify=success&session=…&pseudonym=… unlocks the met
   } finally { await context.close(); }
 });
 
+test('AK-31/AK-32: ?login_hint=…&pseudonym=…&returnTo=… pre-fills the email panel, auto-sends the code once and keeps returnTo', { skip }, async () => {
+  const email = freshEmail('e2e-hint');
+  const returnTo = 'https://example.org/cb';
+  const context = await browser.newContext();
+  await context.route((url) => url.origin !== srv.baseUrl, (route) => {
+    const body = /unpkg\.com\/@simplewebauthn\/browser@9\.0\.1\//.test(route.request().url()) ? SWA_BUNDLE : '';
+    return route.fulfill({ status: 200, contentType: 'application/javascript', body });
+  });
+  const page = await context.newPage();
+  page.on('response', (r) => {
+    if (r.url().endsWith('/hhttps/session/start') || r.url().endsWith('/hhttps/email/confirm-code')) {
+      r.json().then((j) => { track.add({ sessionId: j.sessionId, userId: j.userId }); if (j.userId) userIds.add(j.userId); }).catch(() => {});
+    }
+  });
+  try {
+    const sends = [];
+    page.on('request', (r) => { if (r.url().includes('/hhttps/email/send')) sends.push(r.postDataJSON()); });
+    const [sendRes] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/hhttps/email/send')),
+      page.goto(`${srv.baseUrl}/?login_hint=${encodeURIComponent(email)}&pseudonym=Anna&returnTo=${encodeURIComponent(returnTo)}`),
+    ]);
+    track.add({ email });
+    assert.equal(sendRes.status(), 200, await sendRes.text());
+    const sent = await sendRes.json();
+    assert.equal(await page.locator('#panel-email').isVisible(), true, 'email panel open');
+    assert.equal(await page.inputValue('#emailInput'), email, '#emailInput pre-filled');
+    assert.equal(await page.inputValue('#pseudoInput'), 'Anna', '#pseudoInput pre-filled');
+    assert.equal(sends.length, 1, 'exactly one /email/send');
+    assert.equal(sends[0].email, email);
+    assert.equal(sends[0].pseudonym, 'Anna', '/email/send body carries pseudonym');
+    await page.waitForSelector('#emailCodeRow:not(.hidden)');
+    assert.equal(await page.locator('#emailCodeRow').isVisible(), true, '#emailCodeRow visible');
+    const url = new URL(page.url());
+    assert.equal(url.searchParams.get('returnTo'), returnTo, 'returnTo kept');
+    assert.equal(url.searchParams.has('login_hint'), false, 'login_hint removed');
+    assert.equal(url.searchParams.has('pseudonym'), false, 'pseudonym removed');
+
+    const [confirmRes] = await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/hhttps/email/confirm-code')),
+      (async () => { await page.fill('#emailCode', String(sent.devCode)); await page.click('#emailVerify'); })(),
+    ]);
+    assert.equal(confirmRes.status(), 200, await confirmRes.text());
+    assert.equal((await confirmRes.json()).pseudonym, 'Anna');
+    await page.waitForSelector('#m-passkey:not([disabled])');
+    for (const id of ['m-passkey', 'm-eudi', 'm-github', 'm-age']) assert.equal(await isDisabled(page, id), false, `#${id} unlocked`);
+    assert.equal(sends.length, 1, 'still exactly one /email/send');
+  } finally { await context.close(); }
+});
+
 test('passkey: register + login with the virtual authenticator, then K-4 login again without re-registration', { skip }, async (t) => {
   const email = freshEmail('e2e-passkey');
   let credentials, userHandle, userId;

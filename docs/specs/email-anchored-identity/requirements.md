@@ -76,6 +76,12 @@ verifizierte Methoden zuverlässig erhalten wollen.
 - **AK-25** WHEN die Verifikations-Mail erzeugt wird, THE system SHALL das helle hhttps.org-Design verwenden: Hintergrund `#F9F9F8`, Textfarbe `#0A0A0A`, Schriftstack Inter/Syne (mit System-Fallback), Code in JetBrains Mono/monospace, Pill-Button (`border-radius:999px`, schwarz mit weißer Schrift); keine Cyan-Neon-Farben (`#00e5ff`) im Mail-Body.
 - **AK-26** WHEN die Verifikations-Mail erzeugt wird, THE system SHALL im Datenschutzhinweis wahrheitsgemäß angeben, dass die E-Mail-Adresse bis zur Übertragung an die angemeldete Plattform zwischengespeichert wird.
 
+### F. Login-Hint (Songbird)
+- **AK-29** WHEN `/hhttps/oauth/authorize` mit `login_hint` und/oder `pseudonym` aufgerufen wird, THE system SHALL beide Werte in die Consent-Seiten-Parameter übernehmen (`login_hint` nur, wenn es syntaktisch eine E-Mail-Adresse ≤ 254 Zeichen ist — normalisiert per `normalizeEmail`; `pseudonym` via `sanitizePseudonym`), sonst SHALL es sie stillschweigend weglassen (kein Fehler, keine leeren Parameter).
+- **AK-30** WHEN die Consent-Seite mangels Identität `relogin()` ausführt, THE system SHALL `login_hint` und `pseudonym` zusätzlich als eigene Query-Parameter an die Sign-in-Seite übergeben (`/?returnTo=…&login_hint=…&pseudonym=…`); das Consent-Feld `#pseudoInput` SHALL mit `pseudonym` vorbefüllt sein (per DOM, nicht per HTML-Interpolation).
+- **AK-31** WHEN die Sign-in-Seite mit `login_hint` geladen wird, THE system SHALL das E-Mail-Panel öffnen, `#emailInput` (und bei Vorhandensein `#pseudoInput`) vorbefüllen, `/hhttps/email/send` genau einmal automatisch auslösen und das Code-Feld anzeigen; `login_hint`/`pseudonym` SHALL danach per `history.replaceState` aus der URL entfernt werden, `returnTo` bleibt erhalten.
+- **AK-32** IF `login_hint` keine gültige E-Mail-Adresse ist oder das automatische Senden fehlschlägt, THEN the sign-in page SHALL das Panel mit vorbefüllten Feldern und einem Hinweis anzeigen, ohne Endlosschleife (kein erneutes Auto-Senden nach Reload, da die Parameter vor dem Senden entfernt werden).
+
 ## 4. Beispiele
 
 **Beispiel 1 (AK-1/2/3):** Session S1 bestätigt `Anna@Example.org` → Anker für `anna@example.org`, `userId = U`. Session S2 (anderes Gerät) bestätigt ` anna@example.org ` → S2.userId = U. Beide Logins bei `client_id = ask` liefern `sub = HMAC(U|ask)`.
