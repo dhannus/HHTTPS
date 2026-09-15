@@ -58,6 +58,9 @@ Datenschutzhinweis wahrheitsgemäß angepasst (Cache bis Übertragung).
 **D9 — Test- und Lint-Infrastruktur.**
 `node --test` (kein zusätzliches Framework). `test/unit/*.test.mjs` (reine Funktionen aus `identity.js`, `email.js`-Template), `test/integration/*.test.mjs` starten `server.js` als Kindprozess gegen eine lokale Postgres (env `TEST_PG_HOST`, Skip wenn nicht gesetzt) und sprechen HTTP. ESLint 9 Flat-Config, `recommended`, `no-empty` mit `allowEmptyCatch`, `no-unused-vars` als `warn` (Legacy-Code). Gates: `npm test` und `npm run lint` (Paketmanager ist npm mit `package-lock.json`; `pnpm test`/`pnpm lint` laufen identisch — W-13). Voraussetzungen und Aufruf stehen in README („Tests lokal ausführen“) und CONTRIBUTING (W-30).
 
+**D10 — Login-Hint durchreichen (AK-29..AK-32, Songbird).**
+`GET /hhttps/oauth/authorize` nimmt `login_hint` (nur wenn `normalizeEmail` + `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` und ≤ 254 Zeichen) und `pseudonym` (`sanitizePseudonym`) in die Consent-Params auf; ungültige Werte werden ohne Fehler weggelassen (nie geechot; die Einbettung läuft über `URLSearchParams` und ist damit URL-kodiert). Die Consent-Seite befüllt `#pseudoInput` per DOM und hängt beide Werte in `relogin()` als eigene Query-Parameter an `/?returnTo=…`. Die Sign-in-Seite (`handleLoginHint()`, nach `handleEmailVerifyReturn()`) öffnet das E-Mail-Panel, befüllt Felder, entfernt `login_hint`/`pseudonym` per `history.replaceState` **vor** dem Senden (kein erneutes Auto-Senden bei Reload; `returnTo` bleibt für `maybeReturnTo()`), und ruft `emailStart()` genau einmal. Der Hint ist nur Vorbefüllung, keine Identitätsbindung — der Code geht nur an die Adresse, die der Nutzer tatsächlich absendet und bestätigt.
+
 ## Bewusste Nicht-Ziele
 Siehe requirements.md §2. Zusätzlich: kein Umbau des EUDI-Verifiers, keine Pseudonym-Eindeutigkeit, keine Anker-Migration für Alt-Sessions (es gab nie stabile Ids).
 

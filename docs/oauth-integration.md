@@ -88,6 +88,47 @@ HHTTPS implements standard OAuth 2.0 authorization code flow with PKCE. If you'v
        │ <───────────────────────────────────────────────────────── │
 ```
 
+### `login_hint` / `pseudonym` (optional, pre-filled sign-in)
+
+If your platform already knows the user's e-mail address (for example a
+Songbird-style invite flow), you can pass it to the authorize endpoint so the
+user does not have to type it again on hhttps.org:
+
+```
+https://hhttps.org/hhttps/oauth/authorize
+  ?response_type=code&client_id=…&redirect_uri=…&scope=openid%20role&state=…
+  &code_challenge=…&code_challenge_method=S256
+  &login_hint=anna%40example.org
+  &pseudonym=Anna
+```
+
+**Behaviour**
+
+- Both parameters are carried into the consent page. `pseudonym` pre-fills the
+  "display name" field on the consent screen.
+- If the user is **not signed in** on hhttps.org, the consent page sends them to
+  the sign-in page as `/?returnTo=<consent-url>&login_hint=…&pseudonym=…`. The
+  sign-in page opens the e-mail panel, pre-fills e-mail and pseudonym, requests
+  the verification code **once** automatically and shows the code field. After
+  the code is confirmed the user is sent back to the consent page, approves,
+  and is redirected to your `redirect_uri` as usual.
+- If the user **is** signed in, the hint changes nothing — the existing account
+  is used (the hint is never a login on its own).
+
+**Limits**
+
+- `login_hint` must be a syntactically valid e-mail address of at most 254
+  characters; it is trimmed and lower-cased. Anything else is silently dropped
+  (no error, no echo). `pseudonym` is sanitized like the pseudonym on
+  `POST /hhttps/email/send` (letters, digits, `_ - . space äöüß`, max. 32
+  chars); an empty result is dropped.
+- The hint pre-fills the e-mail; it does not bind the resulting identity to
+  it. The user can change the address before the code is sent, and the code
+  is only ever delivered to the address the user confirms.
+- `login_hint`/`pseudonym` are removed from the sign-in URL with
+  `history.replaceState` before the code is sent, so a reload does not send a
+  second code.
+
 ---
 
 ## Discovery endpoint

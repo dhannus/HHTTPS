@@ -438,7 +438,7 @@ const T={
    'role.ral0':'Selbst angegeben (RAL 0) · von keiner Stelle geprüft',
    'role.ral1':'Mit Nachweis (RAL 1) · im Pilot Selbstangabe, live gegen Register geprüft',
    'foot.about':'Über iamhmn','foot.proto':'Protokoll',
-   'progress.one':'1 Weg bestätigt','progress.more':' Wege bestätigt','codeSent':'Code gesendet — prüfe dein Postfach.','err':'Hat nicht geklappt — bitte erneut versuchen.'},
+   'progress.one':'1 Weg bestätigt','progress.more':' Wege bestätigt','codeSent':'Code gesendet — prüfe dein Postfach.','email.hintAuto':'E-Mail übernommen — Code wird gesendet …','err':'Hat nicht geklappt — bitte erneut versuchen.'},
  en:{'hero.a':'Prove you are a','hero.em':'human','hero.b':' or AI bot.',
    'hero.p':'Equal rights for everyone — pseudonymously verified, your person stays anonymous. Humans and AIs declare their role just as openly and accountably.',
    'm.email':'Continue with email','m.email.sub':'Code by email · worldwide',
@@ -481,7 +481,7 @@ const T={
    'role.ral0':'Self-declared (RAL 0) · not checked by any authority',
    'role.ral1':'With proof (RAL 1) · pilot: self-asserted, verified against registers in production',
    'foot.about':'About iamhmn','foot.proto':'Protocol',
-   'progress.one':'1 way confirmed','progress.more':' ways confirmed','codeSent':'Code sent — check your inbox.','err':'That did not work — please try again.'}
+   'progress.one':'1 way confirmed','progress.more':' ways confirmed','codeSent':'Code sent — check your inbox.','email.hintAuto':'Email taken over — sending code …','err':'That did not work — please try again.'}
 };
 function tr(k){return (T[LANG]&&T[LANG][k])||k}
 function applyLang(){
@@ -1024,8 +1024,36 @@ function handleEmailVerifyReturn(){
   }catch(e){}
 }
 
+/* ── T9 / AK-31, AK-32: login_hint from the OAuth consent page ─────────────
+   The consent page (relogin) sends a not-yet-signed-in user here as
+   /?returnTo=<consent-url>&login_hint=<email>&pseudonym=<name>. Open the
+   email panel, pre-fill both fields, strip login_hint/pseudonym from the URL
+   (returnTo stays — maybeReturnTo() needs it) and request the code ONCE.
+   Because the params are removed BEFORE the send, a reload never re-sends;
+   an invalid address just leaves the pre-filled panel with a hint. */
+function handleLoginHint(){
+  let params;
+  try{params=new URLSearchParams(window.location.search);}catch(e){return;}
+  const loginHint=(params.get('login_hint')||'').trim();
+  if(!loginHint)return;
+  const pseudonym=(params.get('pseudonym')||'').trim();
+  ['login_hint','pseudonym'].forEach(k=>params.delete(k));
+  try{
+    const q=params.toString();
+    history.replaceState(null,'',window.location.pathname+(q?'?'+q:'')+window.location.hash);
+  }catch(e){}
+  pick('email');
+  document.getElementById('emailInput').value=loginHint;
+  const pi=document.getElementById('pseudoInput'); if(pi&&pseudonym) pi.value=pseudonym;
+  const hint=document.getElementById('emailHint');
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginHint)){if(hint)hint.textContent=tr('err');return;}
+  if(hint)hint.textContent=tr('email.hintAuto');
+  emailStart();
+}
+
 applyLang();
 handleEmailVerifyReturn();
+handleLoginHint();
 restoreIdentity();
 </script>
 </body>

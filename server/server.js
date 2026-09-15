@@ -1422,6 +1422,10 @@ function pairwiseSubjectId(userId, clientId, subjectType) {
 // opener relationship to the platform page breaks and postMessage fails.
 // Per the COOP spec the popup target must send unsafe-none while the opener
 // sends same-origin-allow-popups. We scope unsafe-none to these routes only.
+// AK-29: login_hint must look like an e-mail address (single @, a dot in the
+// domain, no whitespace) — the same shape the sign-in page checks before
+// calling /hhttps/email/send.
+const LOGIN_HINT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function popupCoop(_req, res, next) {
   res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
   next();
@@ -1435,7 +1439,9 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
     state,
     nonce,
     code_challenge,
-    code_challenge_method
+    code_challenge_method,
+    login_hint,
+    pseudonym
   } = req.query;
 
   // Step 1: validate the request
@@ -1500,6 +1506,19 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
     code_challenge:        code_challenge || '',
     code_challenge_method: code_challenge_method || ''
   });
+
+  // AK-29 (T9, Songbird): optional login_hint / pseudonym are carried to the
+  // consent page so a not-yet-signed-in user lands on the sign-in page with
+  // the address pre-filled (AK-30/AK-31). Only syntactically valid values are
+  // taken over; anything else is silently dropped — never echoed, never an
+  // error. The consent page embeds the params URL-encoded (URLSearchParams),
+  // so no raw user input reaches the HTML.
+  const hintEmail = typeof login_hint === 'string' ? normalizeEmail(login_hint) : '';
+  if (hintEmail && hintEmail.length <= 254 && LOGIN_HINT_EMAIL_RE.test(hintEmail)) {
+    params.set('login_hint', hintEmail);
+  }
+  const hintPseudonym = typeof pseudonym === 'string' ? sanitizePseudonym(pseudonym) : null;
+  if (hintPseudonym) params.set('pseudonym', hintPseudonym);
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(renderConsentPage({ client, scopes: requestedScopes, params: params.toString() }));
@@ -2152,10 +2171,24 @@ function hhttpsTokenExpired(tok){
   return (p.exp * 1000) <= (Date.now() + 5000);
 }
 function clearIdentity(){ try { localStorage.removeItem('hhttps_identity'); } catch(e){} }
+// AK-30: hand login_hint/pseudonym (if the platform sent them, AK-29) on to
+// the sign-in page as their own query params so it can pre-fill and
+// auto-send the code (AK-31); returnTo brings the user back here.
 function relogin(){
   clearIdentity();
-  window.location = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
+  let url = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
+  const loginHint = params.get('login_hint');
+  const pseudonym = params.get('pseudonym');
+  if (loginHint) url += '&login_hint=' + encodeURIComponent(loginHint);
+  if (pseudonym) url += '&pseudonym=' + encodeURIComponent(pseudonym);
+  window.location = url;
 }
+// AK-30: pre-fill the display name from the platform's pseudonym hint — via
+// the DOM (never interpolated into the HTML).
+(function(){
+  const pi = document.getElementById('pseudoInput');
+  if (pi && !pi.value) pi.value = params.get('pseudonym') || '';
+})();
 // Try to mint a fresh access token from the stored refresh token. Returns the
 // new access token, or null if refresh is impossible (then we re-login).
 async function tryRefresh(identity){

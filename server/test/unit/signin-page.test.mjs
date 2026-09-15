@@ -181,3 +181,30 @@ test('#26: pollEudi() and pollAge() stop on status:error email_verification_requ
     assert.match(gate[1], /\breturn\b/, `${name} returns (stops polling) on the e-mail gate`);
   }
 });
+
+// ── T9 / AK-31, AK-32: login_hint / pseudonym from the consent page ──
+test('AK-31: handleLoginHint() reads login_hint/pseudonym, pre-fills, cleans the URL and auto-sends once', () => {
+  const js = inlineScript();
+  const fn = js.match(/function handleLoginHint\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'handleLoginHint() is defined');
+  const body = fn[1];
+  assert.match(body, /params\.get\('login_hint'\)/, 'reads login_hint');
+  assert.match(body, /params\.get\('pseudonym'\)/, 'reads pseudonym');
+  assert.match(body, /pick\('email'\)/, 'opens the email panel');
+  assert.match(body, /getElementById\('emailInput'\)\.value=/, 'pre-fills #emailInput');
+  assert.match(body, /getElementById\('pseudoInput'\)/, 'pre-fills #pseudoInput');
+  assert.match(body, /history\.replaceState\(/, 'removes the params via replaceState');
+  assert.match(body, /emailStart\(\)/, 'triggers emailStart()');
+  assert.match(body, /tr\('email\.hintAuto'\)/, "shows the 'email.hintAuto' text");
+  assert.match(body, /tr\('err'\)/, 'AK-32: invalid address → err hint');
+  assert.ok(body.indexOf('replaceState') < body.indexOf('emailStart()'), 'URL is cleaned BEFORE the auto-send (no loop on reload)');
+  assert.doesNotMatch(body, /params\.delete\('returnTo'\)/, 'returnTo is kept');
+  const calls = js.match(/^handleLoginHint\(\);/gm) || [];
+  assert.equal(calls.length, 1, 'handleLoginHint() is invoked exactly once at startup');
+  assert.ok(js.indexOf('handleEmailVerifyReturn();') < js.indexOf('\nhandleLoginHint();'), 'runs after handleEmailVerifyReturn()');
+});
+
+test('AK-31: i18n email.hintAuto exists in de and en', () => {
+  assert.match(i18nBlock('de'), /'email\.hintAuto':'E-Mail übernommen — Code wird gesendet …'/);
+  assert.match(i18nBlock('en'), /'email\.hintAuto':'Email taken over — sending code …'/);
+});
