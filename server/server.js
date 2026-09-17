@@ -27,6 +27,7 @@ import helmet            from 'helmet';
 import rateLimit         from 'express-rate-limit';
 import { v4 as uuid }    from 'uuid';
 import crypto            from 'crypto';
+import { readFileSync }   from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -54,7 +55,10 @@ import { escapeHtml } from './html.js';
 // AP3-36 (#169): ONE resolution of the issuer's public identity — email.js
 // reads exactly the same values, so mail links can no longer point elsewhere.
 import { RP_ID, ORIGIN, BASE_URL } from './config.js';
-import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect } from './oauth-params.js';
+import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect, validateScopes, SCOPES_KNOWN } from './oauth-params.js';
+// AP2-31 (#165): the consent page's labels — the same table its browser
+// script uses, so DE text is not written twice.
+import { CONSENT_I18N, scopeLabel } from './consent-client.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -1515,7 +1519,7 @@ app.post('/hhttps/signatures/:slug/revoke', async (req, res) => {
 // Short-link redirect: /s/:slug → /hhttps/s/:slug (HTML-friendly)
 app.get('/s/:slug', (req, res) => {
   const slug = (req.params.slug || '').trim();
-  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) return res.status(400).send('Invalid slug');
+  if (!/^hp-[A-Z0-9-]+$/i.test(slug)) return res.status(400).send('Invalid slug');
   res.redirect(`/hhttps/s/${slug}`);
 });
 
@@ -1527,7 +1531,14 @@ app.get('/s/:slug', (req, res) => {
 const OAUTH_CODE_TTL  = 60;         // seconds
 const OAUTH_TOKEN_TTL = 5 * 60;     // 5 min for third-party access tokens
 const OAUTH_REFRESH_TTL = 30 * 24 * 3600; // 30 days — RFC 6749 §6 refresh grant
-const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method', 'age_group', 'email']);
+// AP2-30 (#157): SCOPES_KNOWN and the scope policy live in oauth-params.js.
+//
+// AP2-26 (#198): `db.oauthClients.get()` runs three times per login flow
+// (/authorize, /approve, /token) and is deliberately NOT cached — a client
+// that is deactivated (`is_active`) or has its redirect_uris changed must take
+// effect on the very next request, and the row is a single primary-key lookup.
+// If this ever shows up in a profile, cache it with a TTL of a few seconds and
+// a bounded size; do not cache it indefinitely.
 
 // Discovery (RFC 8414 / OpenID Connect Discovery 1.0)
 app.get('/.well-known/openid-configuration', (req, res) => {
@@ -1538,7 +1549,7 @@ app.get('/.well-known/openid-configuration', (req, res) => {
     userinfo_endpoint:               `${BASE_URL}/hhttps/oauth/userinfo`,
     revocation_endpoint:              `${BASE_URL}/hhttps/oauth/revoke`,
     jwks_uri:                         `${BASE_URL}/.well-known/jwks.json`,
-    scopes_supported:                 ['openid', 'role', 'verification_method', 'age_group', 'email'],
+    scopes_supported:                 [...SCOPES_KNOWN],
     response_types_supported:         ['code'],
     grant_types_supported:            ['authorization_code', 'refresh_token'],
     subject_types_supported:          ['pairwise', 'public'],
@@ -1633,28 +1644,19 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
       'PKCE code_challenge is required for public clients.');
   }
 
-  // Scope validation
-  const requestedScopes = (scope || 'openid').split(/\s+/).filter(Boolean);
-  if (!requestedScopes.includes('openid')) {
-    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
-      'The "openid" scope is required.');
+  // Scope validation — AP2-30 (#157): one rule, shared with /approve.
+  const sv = validateScopes(scope, client);
+  if (!sv.ok) {
+    return redirectWithError(res, redirect_uri, state, sv.error, sv.description);
   }
-  const unknownScopes = requestedScopes.filter(s => !SCOPES_KNOWN.has(s));
-  if (unknownScopes.length > 0) {
-    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
-      `Unknown scopes: ${unknownScopes.join(', ')}`);
-  }
-  const deniedScopes = requestedScopes.filter(s => !client.allowed_scopes.includes(s));
-  if (deniedScopes.length > 0) {
-    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
-      `Platform may not request these scopes: ${deniedScopes.join(', ')}`);
-  }
+  const requestedScopes = sv.scopes;
 
-  // Step 2: render the consent page. The user's session/identity will be
-  // picked up from a cookie OR (when the browser extension is installed)
-  // from localStorage published by hhttps.org itself.
-  // For now we render a server-side consent page that asks the user to
-  // identify (passkey) and approve.
+  // Step 2: render the consent page. AP2-37 (#198): the identity is NOT read
+  // from a cookie or the browser extension — the consent page's script reads
+  // `hhttps_identity` from localStorage (published by the sign-in page after
+  // an e-mail/passkey login) and, if it is missing or expired, sends the user
+  // to the sign-in page with ?returnTo= pointing back here. See
+  // server/consent-client.js and docs/oauth-integration.md.
 
   const params = new URLSearchParams({
     client_id, redirect_uri,
@@ -1682,14 +1684,18 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
   res.send(renderConsentPage({ client, scopes: requestedScopes, params: params.toString() }));
 });
 
-// Approve endpoint: called from the consent page after the user has
-// authenticated (passkey) and confirmed. Exchanges the user's session for a
-// short-lived authorization code.
+// Approve endpoint: called by the consent page's script with the HHTTPS token
+// it read from localStorage (AP2-37 — no cookie, no browser extension is
+// involved). Exchanges that token for a short-lived authorization code.
+// AP2-33 (#175): every answer here uses an RFC 6749/6750 error code plus an
+// `error_description` carrying the human-readable text.
 app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
   const { token, client_id, redirect_uri, scope, state, nonce,
           code_challenge, code_challenge_method, pseudonym } = req.body || {};
 
-  if (!token) return res.status(401).json({ error: 'token required' });
+  if (!token) {
+    return res.status(401).json({ error: 'invalid_token', error_description: 'token required' });
+  }
 
   // #31: validate before touching the DB — an over-long state/nonce or a
   // malformed code_challenge is a client error, not a 401/500.
@@ -1702,7 +1708,7 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
   try {
     d = await checkTokenValid(token);
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return res.status(401).json({ error: 'invalid_token', error_description: e.message });
   }
 
   try {
@@ -1712,24 +1718,31 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
     const isMachine = (d.sub === 'machine');
 
     const client = await db.oauthClients.get(client_id);
-    if (!client) return res.status(400).json({ error: 'unknown client' });
+    if (!client) {
+      return res.status(400).json({ error: 'invalid_client', error_description: 'Unknown client_id. Platform is not registered.' });
+    }
     if (!client.redirect_uris.includes(redirect_uri)) {
-      return res.status(400).json({ error: 'redirect_uri mismatch' });
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'redirect_uri does not match the registered value. Rejected for security reasons.'
+      });
     }
-    const scopes = (scope || 'openid').split(/\s+/).filter(Boolean);
-    if (!scopes.includes('openid')) {
-      return res.status(400).json({ error: 'openid scope required' });
+    // AP2-06 (#198): PKCE is required for public clients here too — /authorize
+    // has always enforced it, so a direct call to /approve used to be the way
+    // around it (code stored with pkce_challenge = NULL, redeemable without a
+    // verifier).
+    if (!client.client_secret_hash && !code_challenge) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'PKCE code_challenge is required for public clients.'
+      });
     }
-    // F-8 (K-8/S-9b): same scope policy as /authorize — a direct approve call
-    // must not obtain scopes (e.g. `email`) the client was never granted.
-    const unknownScopes = scopes.filter(s => !SCOPES_KNOWN.has(s));
-    if (unknownScopes.length > 0) {
-      return res.status(400).json({ error: 'invalid_scope', error_description: `Unknown scopes: ${unknownScopes.join(', ')}` });
-    }
-    const deniedScopes = scopes.filter(s => !client.allowed_scopes.includes(s));
-    if (deniedScopes.length > 0) {
-      return res.status(400).json({ error: 'invalid_scope', error_description: `Platform may not request these scopes: ${deniedScopes.join(', ')}` });
-    }
+    // F-8 (K-8/S-9b) / AP2-30 (#157): same scope policy as /authorize — a
+    // direct approve call must not obtain scopes (e.g. `email`) the client was
+    // never granted.
+    const sv = validateScopes(scope, client);
+    if (!sv.ok) return res.status(400).json({ error: sv.error, error_description: sv.description });
+    const scopes = sv.scopes;
 
     // Generate authorization code
     const code = 'hp-' + crypto.randomBytes(24).toString('base64url');
@@ -1780,8 +1793,14 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
       ttlSec:             OAUTH_CODE_TTL
     });
 
-    await db.oauthClients.touchLastUsed(client_id);
-    await db.stats.increment('oauth_authorizations');
+    // AP2-25 (#198): bookkeeping is decoupled from the login path — the
+    // `oauth_clients` row and the global stats hot row are written without
+    // being awaited (as the token endpoint already does). A failure is logged,
+    // never surfaced. Throttling the UPDATE itself belongs in db.js.
+    Promise.all([
+      db.oauthClients.touchLastUsed(client_id),
+      db.stats.increment('oauth_authorizations')
+    ]).catch(err => console.warn('[OAUTH] approve bookkeeping failed:', err.message));
 
     // Build redirect URL with code (and state if provided)
     const url = new URL(redirect_uri);
@@ -1808,134 +1827,172 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   }
 });
 
+// AP2-28 (#138): the token endpoint used to be a single 268-line handler with
+// both grants written out inline. It is now a dispatcher over `grant_type`
+// with one function per grant; the JWT bodies come from the shared builders
+// below (AP2-29) and client authentication from authenticateOAuthClient
+// (AP2-30).
 async function handleTokenRequest(req, res) {
   const tv = validateTokenParams(req.body || {});
   if (!tv.ok) return res.status(400).json({ error: tv.error, error_description: tv.description });
 
-  const {
-    grant_type,
-    code,
-    redirect_uri,
-    client_id,
-    client_secret,
-    code_verifier
-  } = req.body || {};
+  const grantType = (req.body || {}).grant_type;
+  if (grantType === 'refresh_token') return handleRefreshGrant(req, res);
+  if (grantType === 'authorization_code') return handleCodeGrant(req, res);
+  return res.status(400).json({ error: 'unsupported_grant_type' });
+}
 
-  // ── RFC 6749 §6: refresh_token grant ──────────────────────────────────
-  if (grant_type === 'refresh_token') {
-    const { refresh_token } = req.body || {};
-    if (!refresh_token || !client_id) {
-      return res.status(400).json({ error: 'invalid_request' });
-    }
-    const rClient = await db.oauthClients.get(client_id);
-    if (!rClient) return res.status(401).json({ error: 'invalid_client' });
-    if (rClient.client_secret_hash) {
-      if (!client_secret) return res.status(401).json({ error: 'invalid_client' });
-      const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
-      if (expected !== rClient.client_secret_hash) {
-        return res.status(401).json({ error: 'invalid_client' });
-      }
-    }
-    let rd;
-    try { rd = await verifyToken(refresh_token); }
-    catch { return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token invalid' }); }
-    if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
-      return res.status(400).json({ error: 'invalid_grant' });
-    }
-    // AP2-03 (#68): rotation is ONE atomic claim — the old jti is deleted with
-    // a conditional DELETE … RETURNING, so of N parallel refreshes with the
-    // same token exactly one wins; the rest get invalid_grant (RFC 6749
-    // §10.4). Only the winner mints the successor. (Inline SQL — db.js belongs
-    // to another package in this review wave; a refreshTokens.claim() helper
-    // is the follow-up.)
-    const newJti = uuid();
-    try {
-      const claimed = await db.q(
-        `DELETE FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW() RETURNING jti`, [rd.jti]
-      );
-      if (claimed.rowCount !== 1) {
-        return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
-      }
-      // AP2-01: "disconnect platform" must end the chain. The claim above has
-      // already removed the row, so a disconnected platform simply stops here.
-      if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
-        return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
-      }
-      await db.refreshTokens.create({
-        jti: newJti, userId: rd.ouid, credentialId: null,
-        role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
-      });
-    } catch (err) {
-      console.error('[OAUTH] refresh rotation failed:', err.message);
-      return res.status(500).json({ error: 'server_error' });
-    }
-    // Phase 8 (AK-18): identity claims travel inside the refresh JWT itself
-    // (stateless — nothing is read from a per-user table on refresh).
-    const rScopes   = String(rd.scope || 'openid').split(' ').filter(Boolean);
-    const rIdentity = buildIdentityClaims({
-      methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes: rScopes
-    });
-    const newRefresh = signToken({
-      sub: 'oauth_refresh', token_use: 'refresh', jti: newJti, client_id,
-      ouid: rd.ouid, scope: rd.scope || 'openid',
-      role: rd.role || null, trust_score: rd.trust_score ?? 0,
-      verification_method: rd.verification_method || null,
-      ...(rd.age_group ? { age_group: rd.age_group,
-        age_verified: rd.age_verified ?? false,
-        age_verification_method: rd.age_verification_method || 'self-declared' } : {}),
-      ...rIdentity
-    }, { expiresIn: OAUTH_REFRESH_TTL });
+// ─── Token claim builders (AP2-29 #147) ──────────────────────────────────────
+// Both grants mint the same two JWTs from two differently-named sources (the
+// claimed authorization-code row, or the payload of the presented refresh
+// JWT). The claim-producing parts live here exactly once; `source` only has to
+// expose role / trust_score / verification_method / age_* — which both shapes
+// already do.
 
-    // Frischer Access-Token — dieselben Claims wie im Code-Zweig.
-    const rPairwise = pairwiseSubjectId(rd.ouid, client_id, rClient.subject_type);
-    const newAccess = signToken({
-      iss:        `https://${RP_ID}`,
-      hhttps_iss: `hhttps://${RP_ID}`,
-      sub:        rPairwise,
-      aud:        client_id,
-      token_use:  'access',
-      client_id,
-      scope:      rScopes.join(' '),
-      role:       rd.role || null,
-      trustScore: rd.trust_score ?? 0,
-      ...rIdentity,
-      ...(rd.verification_method === 'machine-token'
-          ? { actor_type: 'bot', human: false } : {}),
-      ...(rScopes.includes('age_group') && rd.age_group ? {
-        age_group:               rd.age_group,
-        age_verified:            rd.age_verified ?? false,
-        age_verification_method: rd.age_verification_method || 'self-declared'
-      } : {})
-    }, { expiresIn: OAUTH_TOKEN_TTL });
+/** age_group + its two companions, only when the source carries a group. */
+function ageClaims(source) {
+  if (!source.age_group) return {};
+  return {
+    age_group:               source.age_group,
+    age_verified:            source.age_verified ?? false,
+    age_verification_method: source.age_verification_method || 'self-declared'
+  };
+}
 
-    return res.json({
-      access_token:  newAccess,
-      token_type:    'Bearer',
-      expires_in:    OAUTH_TOKEN_TTL,
-      refresh_token: newRefresh,
-      scope:         rScopes.join(' ')
-    });
+/**
+ * Actor type survives the whole chain: verification_method 'machine-token'
+ * (set by /approve for a machine token) becomes explicit bot claims.
+ */
+function actorClaims(source) {
+  return source.verification_method === 'machine-token'
+    ? { actor_type: 'bot', human: false }
+    : {};
+}
+
+/**
+ * Body of an OAuth ACCESS token (JWT, OAUTH_TOKEN_TTL).
+ * NOTE (AP2-34, #185): the trust score travels as `trustScore` here while the
+ * ID token, the refresh JWT, /userinfo and `claims_supported` all use
+ * `trust_score`. Renaming it is a wire-format change — server/sdk/client.js
+ * (`_normalizeClaims`) reads `p.trustScore` from a decoded JWT — so the name
+ * stays until the SDK and the examples accept both. Issue #185 stays open.
+ */
+function buildOAuthAccessClaims({ source, scopes, pairwiseId, clientId, identityClaims }) {
+  return {
+    iss:        `https://${RP_ID}`,
+    hhttps_iss: `hhttps://${RP_ID}`,
+    sub:        pairwiseId,
+    aud:        clientId,
+    token_use:  'access',
+    client_id:  clientId,
+    scope:      scopes.join(' '),
+    role:       source.role ?? null,
+    trustScore: source.trust_score ?? 0,
+    ...identityClaims,
+    ...actorClaims(source),
+    // age_group travels with the access token only when the scope was granted,
+    // so /userinfo can echo it. Orthogonal to role; self-declared in Phase 1.
+    ...(scopes.includes('age_group') ? ageClaims(source) : {})
+  };
+}
+
+/**
+ * Body of an OAuth REFRESH token (JWT, OAUTH_REFRESH_TTL). Phase 8 (AK-18):
+ * the identity claims travel inside the JWT itself, so a refresh reads nothing
+ * from a per-user table. Unlike the access token this keeps age_group
+ * regardless of the granted scopes — the scope filter is applied when the next
+ * access token is minted from it.
+ */
+function buildOAuthRefreshClaims({ source, jti, clientId, userId, scopes, identityClaims }) {
+  return {
+    sub: 'oauth_refresh', token_use: 'refresh', jti, client_id: clientId,
+    ouid: userId, scope: scopes.join(' '),
+    role: source.role || null, trust_score: source.trust_score ?? 0,
+    verification_method: source.verification_method || null,
+    ...ageClaims(source),
+    ...identityClaims
+  };
+}
+
+// ─── RFC 6749 §6: refresh_token grant ────────────────────────────────────────
+async function handleRefreshGrant(req, res) {
+  const { refresh_token, client_id, client_secret } = req.body || {};
+  if (!refresh_token || !client_id) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  // AP2-30 (#157) / AP2-20: one client authentication for every OAuth route.
+  const client = await authenticateOAuthClient(client_id, client_secret);
+  if (!client) return res.status(401).json({ error: 'invalid_client' });
+
+  let rd;
+  try { rd = await verifyToken(refresh_token); }
+  catch { return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token invalid' }); }
+  if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
+    return res.status(400).json({ error: 'invalid_grant' });
   }
 
-  if (grant_type !== 'authorization_code') {
-    return res.status(400).json({ error: 'unsupported_grant_type' });
+  // AP2-03 (#68): rotation is ONE atomic claim — the old jti is deleted with
+  // a conditional DELETE … RETURNING, so of N parallel refreshes with the
+  // same token exactly one wins; the rest get invalid_grant (RFC 6749
+  // §10.4). Only the winner mints the successor. (Inline SQL — db.js belongs
+  // to another package in this review wave; a refreshTokens.claim() helper
+  // is the follow-up.)
+  const newJti = uuid();
+  try {
+    const claimed = await db.q(
+      `DELETE FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW() RETURNING jti`, [rd.jti]
+    );
+    if (claimed.rowCount !== 1) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
+    }
+    // AP2-01: "disconnect platform" must end the chain. The claim above has
+    // already removed the row, so a disconnected platform simply stops here.
+    if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
+    }
+    await db.refreshTokens.create({
+      jti: newJti, userId: rd.ouid, credentialId: null,
+      role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
+    });
+  } catch (err) {
+    console.error('[OAUTH] refresh rotation failed:', err.message);
+    return res.status(500).json({ error: 'server_error' });
   }
+
+  const scopes   = String(rd.scope || 'openid').split(' ').filter(Boolean);
+  const identityClaims = buildIdentityClaims({
+    methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes
+  });
+
+  const newRefresh = signToken(buildOAuthRefreshClaims({
+    source: rd, jti: newJti, clientId: client_id, userId: rd.ouid, scopes, identityClaims
+  }), { expiresIn: OAUTH_REFRESH_TTL });
+
+  const newAccess = signToken(buildOAuthAccessClaims({
+    source: rd, scopes, clientId: client_id, identityClaims,
+    pairwiseId: pairwiseSubjectId(rd.ouid, client_id, client.subject_type)
+  }), { expiresIn: OAUTH_TOKEN_TTL });
+
+  return res.json({
+    access_token:  newAccess,
+    token_type:    'Bearer',
+    expires_in:    OAUTH_TOKEN_TTL,
+    refresh_token: newRefresh,
+    scope:         scopes.join(' ')
+  });
+}
+
+// ─── RFC 6749 §4.1.3: authorization_code grant ───────────────────────────────
+async function handleCodeGrant(req, res) {
+  const { code, redirect_uri, client_id, client_secret, code_verifier } = req.body || {};
   if (!code || !client_id) {
     return res.status(400).json({ error: 'invalid_request' });
   }
 
-  const client = await db.oauthClients.get(client_id);
+  // AP2-30 (#157) / AP2-20: same client authentication as every other OAuth
+  // route — a public client (no secret hash) authenticates by PKCE below.
+  const client = await authenticateOAuthClient(client_id, client_secret);
   if (!client) return res.status(401).json({ error: 'invalid_client' });
-
-  // Authenticate client (secret OR PKCE)
-  const isPublicClient = !client.client_secret_hash;
-  if (!isPublicClient) {
-    if (!client_secret) return res.status(401).json({ error: 'invalid_client' });
-    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
-    if (expected !== client.client_secret_hash) {
-      return res.status(401).json({ error: 'invalid_client' });
-    }
-  }
 
   // Claim the code (single-use, atomic)
   const claimed = await db.authCodes.claim(code);
@@ -1952,12 +2009,9 @@ async function handleTokenRequest(req, res) {
     if (!code_verifier) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier required' });
     }
-    let computed;
-    if (claimed.pkce_method === 'S256') {
-      computed = crypto.createHash('sha256').update(code_verifier).digest('base64url');
-    } else {
-      computed = code_verifier;
-    }
+    const computed = claimed.pkce_method === 'S256'
+      ? crypto.createHash('sha256').update(code_verifier).digest('base64url')
+      : code_verifier;
     if (computed !== claimed.pkce_challenge) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
     }
@@ -1976,7 +2030,6 @@ async function handleTokenRequest(req, res) {
     scopesGranted:      claimed.scopes
   });
 
-  // Build the access token (a JWT with limited scope, short TTL)
   const roleDef = ROLES[claimed.role] || ROLES.citizen;
   const vMethod = VERIFICATION_LEVELS[claimed.verification_method] || {};
 
@@ -1990,38 +2043,20 @@ async function handleTokenRequest(req, res) {
     scopes:    claimed.scopes
   });
 
-  const accessToken = signToken({
-    iss:        `https://${RP_ID}`,
-    hhttps_iss: `hhttps://${RP_ID}`,
-    sub:        pairwiseId,
-    aud:        client_id,
-    token_use:  'access',
-    client_id,
-    scope:      claimed.scopes.join(' '),
-    role:       claimed.role,
-    trustScore: claimed.trust_score,
-    ...identityClaims,
-    // Actor type survives the code flow: 'machine-token' in the code row
-    // becomes explicit bot claims here (and in the ID token below).
-    ...(claimed.verification_method === 'machine-token'
-        ? { actor_type: 'bot', human: false } : {}),
-    // age_group travels with the access token only when the scope was granted,
-    // so /userinfo can echo it. Orthogonal to role; self-declared in Phase 1.
-    ...(claimed.scopes.includes('age_group') && claimed.age_group ? {
-      age_group:               claimed.age_group,
-      age_verified:            claimed.age_verified ?? false,
-      age_verification_method: claimed.age_verification_method || 'self-declared'
-    } : {})
-  }, { expiresIn: OAUTH_TOKEN_TTL });
+  const accessToken = signToken(buildOAuthAccessClaims({
+    source: claimed, scopes: claimed.scopes, pairwiseId, clientId: client_id, identityClaims
+  }), { expiresIn: OAUTH_TOKEN_TTL });
 
   // ID token (OIDC) — claims based on requested scopes
   const idTokenClaims = {
-    ...(claimed.verification_method === 'machine-token'
-        ? { actor_type: 'bot', human: false } : {}),
+    ...actorClaims(claimed),
     iss:       `https://${RP_ID}`,
     sub:       pairwiseId,
     aud:       client_id,
     nonce:     claimed.nonce || undefined,
+    // AP2-09 (#198, open): this is the moment the code is redeemed, not the
+    // moment the user authenticated. Fixing it needs an `auth_time` column on
+    // authorization_codes (db.js).
     auth_time: Math.floor(Date.now() / 1000)
   };
   if (claimed.scopes.includes('role')) {
@@ -2034,10 +2069,8 @@ async function handleTokenRequest(req, res) {
     idTokenClaims.verification_method       = claimed.verification_method;
     idTokenClaims.verification_method_label = vMethod.label || null;
   }
-  if (claimed.scopes.includes('age_group') && claimed.age_group) {
-    idTokenClaims.age_group               = claimed.age_group;
-    idTokenClaims.age_verified            = claimed.age_verified ?? false;
-    idTokenClaims.age_verification_method = claimed.age_verification_method || 'self-declared';
+  if (claimed.scopes.includes('age_group')) {
+    Object.assign(idTokenClaims, ageClaims(claimed));
   }
   Object.assign(idTokenClaims, identityClaims);
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
@@ -2054,11 +2087,11 @@ async function handleTokenRequest(req, res) {
     db.clientStats.recordLogin(client_id, idTokenClaims.role || 'unknown', idTokenClaims.trust_score || 0)
   ]).catch(err => console.warn('[STATS] oauth token stats failed:', err.message));
 
-  // Refresh-Token für die stille Erneuerung (RFC 6749 §6), rotierend.
-  // Die Persistenz darf den Login NIE brechen: schlägt sie fehl, antworten
-  // wir schlicht ohne refresh_token. credential_id bleibt null — die Spalte
-  // trägt einen FK auf credentials; die OAuth-Bindung steckt signiert im
-  // Refresh-JWT selbst (client_id-Claim).
+  // Refresh token for the silent renewal (RFC 6749 §6), rotating. Persisting it
+  // must NEVER break the login: if it fails we simply answer without a
+  // refresh_token. credential_id stays null — the column carries an FK on
+  // credentials; the OAuth binding sits signed inside the refresh JWT itself
+  // (client_id claim).
   let oauthRefreshToken = null;
   const refreshJti = uuid();
   const refreshRowWritten = db.refreshTokens.create({
@@ -2070,16 +2103,10 @@ async function handleTokenRequest(req, res) {
   });
   await connectionRecorded;
   if (await refreshRowWritten) {
-    oauthRefreshToken = signToken({
-      sub: 'oauth_refresh', token_use: 'refresh', jti: refreshJti, client_id,
-      ouid: claimed.user_id, scope: claimed.scopes.join(' '),
-      role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
-      verification_method: claimed.verification_method || null,
-      ...(claimed.age_group ? { age_group: claimed.age_group,
-        age_verified: claimed.age_verified ?? false,
-        age_verification_method: claimed.age_verification_method || 'self-declared' } : {}),
-      ...identityClaims
-    }, { expiresIn: OAUTH_REFRESH_TTL });
+    oauthRefreshToken = signToken(buildOAuthRefreshClaims({
+      source: claimed, jti: refreshJti, clientId: client_id,
+      userId: claimed.user_id, scopes: claimed.scopes, identityClaims
+    }), { expiresIn: OAUTH_REFRESH_TTL });
   }
 
   return res.json({
@@ -2092,16 +2119,19 @@ async function handleTokenRequest(req, res) {
   });
 }
 
+
 // UserInfo endpoint: returns claims for the bearer token
 app.get('/hhttps/oauth/userinfo', async (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'unauthorized' });
+  // AP2-33 (#175): RFC 6750 §3 all the way — `invalid_token` plus a
+  // WWW-Authenticate header, never a free-text `unauthorized`.
+  if (!token) return userinfoInvalidToken(res, 'bearer access token required');
 
   let d;
   try {
     d = verifyToken(token);
-  } catch (e) {
+  } catch {
     return userinfoInvalidToken(res, 'access token invalid or expired');
   }
   // AP2-10 (#105): only an OAuth ACCESS token is accepted — positively marked
@@ -2149,18 +2179,29 @@ function userinfoInvalidToken(res, description) {
   return res.status(401).json({ error: 'invalid_token', error_description: description });
 }
 
-// AP2-02 (#59): client authentication for /revoke (same rule as /token) —
-// confidential clients (client_secret_hash set) must present their secret,
-// public clients authenticate by client_id alone. Returns the client row or
-// null (→ 401 invalid_client).
+/**
+ * AP2-02 (#59): client authentication for every OAuth route — confidential
+ * clients (client_secret_hash set) must present their secret, public clients
+ * authenticate by client_id alone. Returns the client row or null
+ * (→ 401 invalid_client).
+ *
+ * AP2-30 (#157): both `/token` grants used to carry their own copy of this.
+ * AP2-20 (#198): the digests are compared in constant time. The stored hash is
+ * still an unsalted SHA-256 of the secret — salting it is a schema change
+ * (db.js / oauth_clients) and stays open.
+ */
 async function authenticateOAuthClient(client_id, client_secret) {
   if (!client_id) return null;
   const client = await db.oauthClients.get(client_id);
   if (!client) return null;
   if (client.client_secret_hash) {
-    if (!client_secret) return null;
-    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
-    if (expected !== client.client_secret_hash) return null;
+    if (typeof client_secret !== 'string' || !client_secret) return null;
+    const expected = crypto.createHash('sha256').update(client_secret).digest();
+    let stored;
+    try { stored = Buffer.from(client.client_secret_hash, 'hex'); }
+    catch { return null; }
+    if (stored.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(stored, expected)) return null;
   }
   return client;
 }
@@ -2206,7 +2247,7 @@ app.post('/hhttps/oauth/revoke', async (req, res) => {
     return res.status(400).json({ error: 'invalid_request' });
   }
   if (!token || typeof token !== 'string' || !client_id) {
-    return res.status(400).json({ error: 'invalid_request', error_description: 'token + client_id required' });
+    return res.status(400).json({ error: 'invalid_request', error_description: 'token and client_id are required' });
   }
 
   // (1) user disconnect — checkTokenValid rejects refresh JWTs and OAuth
@@ -2237,14 +2278,15 @@ app.post('/hhttps/oauth/revoke', async (req, res) => {
 // 401 instead of an RFC 7009 no-op 200.
 app.post('/hhttps/oauth/disconnect', async (req, res) => {
   const { token, client_id } = req.body || {};
+  // AP2-33 (#175): RFC 6749/6750 codes, human text in error_description.
   if (!token || !client_id || typeof token !== 'string' || typeof client_id !== 'string') {
-    return res.status(400).json({ error: 'token + client_id required' });
+    return res.status(400).json({ error: 'invalid_request', error_description: 'token and client_id are required' });
   }
   let d;
   try {
     d = await checkTokenValid(token);
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return res.status(401).json({ error: 'invalid_token', error_description: e.message });
   }
   return disconnectPlatform(res, d, client_id);
 });
@@ -2255,7 +2297,7 @@ function redirectWithError(res, redirectUri, state, errorCode, errorDescription)
   let url;
   try {
     url = new URL(redirectUri);
-  } catch (e) {
+  } catch {
     return res.status(400).send(renderOAuthError('redirect_uri is not a valid URL.', 400));
   }
   url.searchParams.set('error', errorCode);
@@ -2264,7 +2306,12 @@ function redirectWithError(res, redirectUri, state, errorCode, errorDescription)
   return res.redirect(302, url.toString());
 }
 
-function renderOAuthError(message, status) {
+// AP2-40 (#198): the messages are our own constants today, but the page is the
+// one OAuth surface a client can reach with a broken request — `message` is
+// escaped so it can never become markup. (Folding it into renderSimplePage is
+// still open: that page has a different, darker design.)
+function renderOAuthError(rawMessage, status) {
+  const message = escapeHtml(rawMessage);
   return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
 <title>OAuth error · HHTTPS</title>
 <style>body{font-family:system-ui;background:#F8F1E4;color:#2D2823;padding:60px 20px;text-align:center}
@@ -2276,32 +2323,53 @@ a{color:#A86246;text-decoration:none}
 <p><a href="${escapeHtml(BASE_URL)}">← back to ${escapeHtml(RP_ID)}</a></p></div></body></html>`;
 }
 
+// AP2-31 (#165): the consent page's browser script lives in
+// server/consent-client.js (lintable, unit-testable) and is served from here
+// as an ES module. It is read once and cached — the file ships with the
+// server, so there is nothing to invalidate at runtime.
+let consentClientSource = null;
+app.get('/hhttps/oauth/consent.js', (req, res) => {
+  if (consentClientSource === null) {
+    consentClientSource = readFileSync(join(__dirname, 'consent-client.js'), 'utf8');
+  }
+  res.type('application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send(consentClientSource);
+});
+
+/**
+ * Consent page for GET /hhttps/oauth/authorize.
+ *
+ * AP2-31 (#165): CSS → server/public/consent.css, script → consent-client.js.
+ * Scope labels come from CONSENT_I18N (the same table the browser uses), so
+ * they exist exactly once. Nothing the client supplies is interpolated into
+ * executable code: the script reads `base`/`params` from a JSON block.
+ */
 function renderConsentPage({ client, scopes, params }) {
   const verifiedBadge = client.verified
-    ? `<span class="badge badge-ok" data-i18n="consent.verified">✓ Verifizierte Plattform</span>`
-    : `<span class="badge badge-warn" data-i18n="consent.unverified">⚠ Nicht verifiziert</span>`;
+    ? `<span class="badge badge-ok" data-i18n="consent.verified">${CONSENT_I18N.de['consent.verified']}</span>`
+    : `<span class="badge badge-warn" data-i18n="consent.unverified">${CONSENT_I18N.de['consent.unverified']}</span>`;
 
+  const de = CONSENT_I18N.de;
   const unverifiedWarning = client.verified ? '' : `
     <div class="warning">
-      <strong data-i18n="consent.warnStrong">Achtung — Diese Plattform ist nicht von hhttps.org geprüft.</strong>
-      <span data-i18n="consent.warnB1">Klicke nur auf "Erlauben", wenn du der Plattform</span> <em>${escapeHtml(client.name)}</em> <span data-i18n="consent.warnB2">wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit</span> <code>${escapeHtml(client.homepage_url || '?')}</code> <span data-i18n="consent.warnB3">übereinstimmt.</span>
+      <strong data-i18n="consent.warnStrong">${de['consent.warnStrong']}</strong>
+      <span data-i18n="consent.warnB1">${de['consent.warnB1']}</span> <em>${escapeHtml(client.name)}</em> <span data-i18n="consent.warnB2">${de['consent.warnB2']}</span> <code>${escapeHtml(client.homepage_url || '?')}</code> <span data-i18n="consent.warnB3">${de['consent.warnB3']}</span>
     </div>
   `;
 
   const scopeRows = scopes.map(s => {
-    const label = {
-      'openid':              { icon: '🆔', title: 'Anonyme Identität',  desc: 'Eine pseudonyme Kennung, die nur diese Plattform sieht.' },
-      'role':                { icon: '🎭', title: 'Berufsrolle', desc: 'Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).' },
-      'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' },
-      'age_group':           { icon: '🔞', title: 'Altersgruppe', desc: 'Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.' },
-      'email':               { icon: '✉️', title: 'E-Mail-Adresse', desc: 'Deine verifizierte E-Mail-Adresse wird an diese Plattform übertragen.' }
-    }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
-    return `<div class="scope-row" data-scope="${s}">
+    const label = scopeLabel(s, 'de');
+    return `<div class="scope-row" data-scope="${escapeHtml(s)}">
       <span class="scope-icon">${label.icon}</span>
-      <div><div class="scope-title" data-i18n="scope.${s}.title">${label.title}</div>
-           <div class="scope-desc" data-i18n="scope.${s}.desc">${label.desc}</div></div>
+      <div><div class="scope-title" data-i18n="scope.${escapeHtml(s)}.title">${escapeHtml(label.title)}</div>
+           <div class="scope-desc" data-i18n="scope.${escapeHtml(s)}.desc">${escapeHtml(label.desc)}</div></div>
     </div>`;
   }).join('');
+
+  // AP2-07 (#87): the server's own base URL (BASE_URL) — never a hard-coded
+  // host. `</` is escaped so the JSON can never close its own script element.
+  const config = JSON.stringify({ base: BASE_URL, params }).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html><html lang="de"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2309,96 +2377,8 @@ function renderConsentPage({ client, scopes, params }) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --bg:#F9F9F8; --surface:#FFFFFF; --ink:#0A0A0A; --ink-2:#5C5C5C;
-    --line:#8A8A8A; --line-subtle:#E6E6E4;
-    --ok:#1C6B3F; --ok-bg:#EDF6F0;
-    --warn:#8A4A12; --warn-bg:#FDF3E8;
-    --font-display:'Syne',system-ui,sans-serif;
-    --font-ui:'Inter',system-ui,sans-serif;
-    --font-mono:'JetBrains Mono',ui-monospace,monospace;
-    --r-card:24px; --r-pill:999px;
-    --sh-md:0 4px 16px rgba(10,10,10,.08);
-    --sh-lg:0 12px 40px rgba(10,10,10,.10);
-    --ease:cubic-bezier(.22,1,.36,1);
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:var(--font-ui);background:var(--bg);color:var(--ink);
-    min-height:100vh;display:flex;align-items:center;justify-content:center;
-    padding:40px 20px;line-height:1.55;-webkit-font-smoothing:antialiased}
-  .wrap{width:100%;max-width:480px}
-
-  /* Brand — same dot mark and Syne wordmark as the sign-in page */
-  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
-  .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);
-    font-weight:800;font-size:22px;letter-spacing:-.02em;color:inherit;text-decoration:none}
-  .brand .dot{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--ink);
-    position:relative;flex:none}
-  .brand .dot::after{content:'';position:absolute;inset:5px;border-radius:50%;background:var(--ink)}
-  .lang-toggle{display:inline-flex;gap:2px;border:1.5px solid var(--line-subtle);
-    border-radius:var(--r-pill);padding:2px}
-  .lang-toggle button{border:none;background:none;color:var(--ink-2);
-    font:500 12px/1 var(--font-mono);letter-spacing:.5px;padding:6px 11px;
-    border-radius:var(--r-pill);cursor:pointer;transition:all .16s var(--ease)}
-  .lang-toggle button:hover{color:var(--ink)}
-  .lang-toggle button.active{background:var(--ink);color:#fff}
-
-  .card{background:var(--surface);border:1.5px solid var(--ink);
-    border-radius:var(--r-card);box-shadow:var(--sh-lg);overflow:hidden}
-  .card-head{padding:32px 28px 24px;text-align:center;border-bottom:1px solid var(--line-subtle)}
-  .client-logo{width:56px;height:56px;border-radius:16px;border:1.5px solid var(--line-subtle);
-    background:var(--bg);margin:0 auto 18px;display:flex;align-items:center;
-    justify-content:center;font-size:26px;overflow:hidden}
-  h1{font-family:var(--font-display);font-weight:800;font-size:1.6rem;
-    line-height:1.15;letter-spacing:-.02em}
-  /* the platform name carries the same shimmer accent as the home page hero */
-  h1 .name{background:linear-gradient(100deg,#0A7C99 0%,#B05A1E 32%,#FFD9A8 50%,#B05A1E 68%,#0A7C99 100%);
-    background-size:200% auto;-webkit-background-clip:text;background-clip:text;
-    -webkit-text-fill-color:transparent;animation:shimmer 6.5s ease-in-out infinite}
-  @keyframes shimmer{0%,100%{background-position:0% center}50%{background-position:100% center}}
-  @media (prefers-reduced-motion:reduce){h1 .name{animation:none}}
-  .client-url{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);margin-top:12px;
-    word-break:break-all}
-  .badge{display:inline-block;font:500 11px/1 var(--font-mono);letter-spacing:.4px;
-    padding:6px 12px;border-radius:var(--r-pill);margin-top:14px}
-  .badge-ok{background:var(--ok-bg);color:var(--ok)}
-  .badge-warn{background:var(--warn-bg);color:var(--warn)}
-
-  .warning{background:var(--warn-bg);border-bottom:1px solid var(--line-subtle);
-    padding:16px 28px;font-size:13px;color:var(--ink-2)}
-  .warning strong{color:var(--warn);display:block;margin-bottom:4px;font-weight:600}
-  .warning code{font-family:var(--font-mono);font-size:11px;background:#fff;
-    padding:2px 6px;border-radius:6px;border:1px solid var(--line-subtle)}
-
-  .scope-list{padding:22px 28px}
-  .scope-list-head{font-family:var(--font-mono);font-size:10px;color:var(--ink-2);
-    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px}
-  .scope-row{display:flex;gap:14px;padding:12px 0;align-items:flex-start;
-    border-bottom:1px solid var(--line-subtle)}
-  .scope-row:last-child{border-bottom:none;padding-bottom:0}
-  .scope-icon{font-size:22px;line-height:1.2}
-  .scope-title{font-weight:600;margin-bottom:2px}
-  .scope-desc{font-size:13px;color:var(--ink-2);line-height:1.45}
-
-  .status{padding:14px 28px;font-size:13px;text-align:center;display:none}
-  .status.error{background:var(--warn-bg);color:var(--warn);display:block;font-weight:500}
-
-  .actions{padding:8px 28px 28px;display:flex;gap:10px}
-  .btn{flex:1;min-height:52px;border-radius:var(--r-pill);font-family:var(--font-ui);
-    font-size:15px;font-weight:700;cursor:pointer;transition:transform .16s var(--ease),opacity .16s}
-  .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-  .btn-allow{background:var(--ink);color:#fff;border:none;box-shadow:var(--sh-md)}
-  .btn-allow:hover{transform:translateY(-1px)}
-  .btn-allow:disabled{opacity:.35;cursor:not-allowed;transform:none;box-shadow:none}
-  .btn-deny{background:none;color:var(--ink);border:1.5px solid var(--line-subtle);font-weight:500}
-  .btn-deny:hover{border-color:var(--ink)}
-
-  .footer-note{padding:16px 28px;background:var(--bg);border-top:1px solid var(--line-subtle);
-    text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--ink-2);line-height:1.6}
-  .footer-note a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
-  @media (max-width:420px){.actions{flex-direction:column-reverse}}
-</style></head><body>
+<link rel="stylesheet" href="/consent.css">
+</head><body>
 <div class="wrap">
   <div class="top">
     <a class="brand" href="${escapeHtml(BASE_URL)}">
@@ -2412,255 +2392,31 @@ function renderConsentPage({ client, scopes, params }) {
   <div class="card">
     <div class="card-head">
       <div class="client-logo">${client.logo_url ? `<img src="${escapeHtml(client.logo_url)}" alt="" style="width:100%;height:100%;object-fit:cover">` : '🏛️'}</div>
-      <h1><span class="name">${escapeHtml(client.name)}</span> <span data-i18n="consent.heading">möchte deine Identität sehen</span></h1>
+      <h1><span class="name">${escapeHtml(client.name)}</span> <span data-i18n="consent.heading">${de['consent.heading']}</span></h1>
       ${client.homepage_url ? `<div class="client-url">${escapeHtml(client.homepage_url)}</div>` : ''}
       ${verifiedBadge}
     </div>
     ${unverifiedWarning}
     <div class="scope-list">
-      <div class="scope-list-head" data-i18n="consent.scopeHead">Folgende Daten werden geteilt</div>
+      <div class="scope-list-head" data-i18n="consent.scopeHead">${de['consent.scopeHead']}</div>
       ${scopeRows}
     </div>
     <div class="pseudo-field" style="margin:14px 0 4px;">
-      <label for="pseudoInput" style="display:block;font-size:13px;opacity:.75;margin-bottom:6px;" data-i18n="consent.pseudoLabel">Anzeigename (frei wählbar, optional)</label>
+      <label for="pseudoInput" style="display:block;font-size:13px;opacity:.75;margin-bottom:6px;" data-i18n="consent.pseudoLabel">${de['consent.pseudoLabel']}</label>
       <input id="pseudoInput" type="text" maxlength="32" autocomplete="nickname"
              style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid rgba(0,0,0,.15);border-radius:10px;font-size:15px;background:#fff;" />
-      <div style="font-size:12px;opacity:.6;margin-top:5px;" data-i18n="consent.pseudoHint">Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.</div>
+      <div style="font-size:12px;opacity:.6;margin-top:5px;" data-i18n="consent.pseudoHint">${de['consent.pseudoHint']}</div>
     </div>
     <div class="status" id="status"></div>
     <div class="actions">
-      <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
-      <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">Erlauben</button>
+      <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">${de['consent.deny']}</button>
+      <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">${de['consent.allow']}</button>
     </div>
-    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="${escapeHtml(BASE_URL)}">${escapeHtml(RP_ID)}</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
+    <div class="footer-note"><span data-i18n="consent.footPre">${de['consent.footPre']}</span> <a href="${escapeHtml(BASE_URL)}">${escapeHtml(RP_ID)}</a> <span data-i18n="consent.footPost">${de['consent.footPost']}</span></div>
   </div>
 </div>
-<script>
-// AP2-07 (#87): the server's own base URL (BASE_URL) — never a hard-coded host.
-const HHTTPS_BASE = ${JSON.stringify(BASE_URL)};
-const params = new URLSearchParams(${JSON.stringify(params)});
-
-document.getElementById('denyBtn').addEventListener('click', () => {
-  const redirectUri = params.get('redirect_uri');
-  const state = params.get('state') || '';
-  const url = new URL(redirectUri);
-  url.searchParams.set('error', 'access_denied');
-  url.searchParams.set('error_description', 'User denied the request');
-  if (state) url.searchParams.set('state', state);
-  window.location = url.toString();
-});
-
-// Read a JWT payload without verifying (client-side, for the exp check only).
-function jwtPayload(tok){
-  try { return JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
-  catch(e){ return null; }
-}
-// Expired (with a small clock-skew margin) or unreadable → treat as expired.
-function hhttpsTokenExpired(tok){
-  const p = jwtPayload(tok);
-  if (!p || !p.exp) return true;
-  return (p.exp * 1000) <= (Date.now() + 5000);
-}
-function clearIdentity(){ try { localStorage.removeItem('hhttps_identity'); } catch(e){} }
-// AK-30: hand login_hint/pseudonym (if the platform sent them, AK-29) on to
-// the sign-in page as their own query params so it can pre-fill and
-// auto-send the code (AK-31); returnTo brings the user back here.
-function relogin(){
-  clearIdentity();
-  let url = HHTTPS_BASE + '/?returnTo=' + encodeURIComponent(window.location.href);
-  const loginHint = params.get('login_hint');
-  const pseudonym = params.get('pseudonym');
-  if (loginHint) url += '&login_hint=' + encodeURIComponent(loginHint);
-  if (pseudonym) url += '&pseudonym=' + encodeURIComponent(pseudonym);
-  window.location = url;
-}
-// AK-30: pre-fill the display name from the platform's pseudonym hint — via
-// the DOM (never interpolated into the HTML).
-(function(){
-  const pi = document.getElementById('pseudoInput');
-  if (pi && !pi.value) pi.value = params.get('pseudonym') || '';
-})();
-// Try to mint a fresh access token from the stored refresh token. Returns the
-// new access token, or null if refresh is impossible (then we re-login).
-async function tryRefresh(identity){
-  if (!identity || !identity.refreshToken) return null;
-  if (identity.refreshExpiresAt && new Date(identity.refreshExpiresAt).getTime() <= Date.now()) return null;
-  try {
-    const r = await fetch(HHTTPS_BASE + '/hhttps/token/refresh', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: identity.refreshToken })
-    });
-    if (!r.ok) return null;
-    const d = await r.json();
-    if (!d.token) return null;
-    // AP3-18 (#116): /hhttps/token/refresh rotates. Without adopting the new
-    // refresh token here, the consent page would write the INVALIDATED one back
-    // into the shared localStorage['hhttps_identity'] and break the sign-in
-    // page's silent refresh too.
-    const merged = Object.assign({}, identity, {
-      token: d.token,
-      expiresAt: d.expiresAt || identity.expiresAt || null,
-      refreshToken: d.refreshToken || identity.refreshToken,
-      refreshExpiresAt: d.refreshExpiresAt || identity.refreshExpiresAt || null
-    });
-    try { localStorage.setItem('hhttps_identity', JSON.stringify(merged)); } catch(e){}
-    return d.token;
-  } catch(e){ return null; }
-}
-
-document.getElementById('allowBtn').addEventListener('click', async () => {
-  const allow = document.getElementById('allowBtn');
-  const status = document.getElementById('status');
-  allow.disabled = true;
-  allow.textContent = t('consent.processing');
-
-  // Identity is published to localStorage by the sign-in page after a token
-  // is issued (publishIdentity). Without it we send the user there and come
-  // back via ?returnTo=.
-  let identity = null;
-  try {
-    const raw = localStorage.getItem('hhttps_identity');
-    if (raw) identity = JSON.parse(raw);
-  } catch (e) {}
-
-  if (!identity || !identity.token) {
-    // No identity at all → straight to sign-in (no error shown).
-    relogin();
-    return;
-  }
-
-  // Expired access token → silently refresh, or re-login. The user never sees
-  // an "expired" error.
-  if (hhttpsTokenExpired(identity.token)) {
-    const fresh = await tryRefresh(identity);
-    if (fresh) {
-      identity.token = fresh;
-    } else {
-      relogin();
-      return;
-    }
-  }
-
-  try {
-    const r = await fetch('/hhttps/oauth/approve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: identity.token,
-        client_id:             params.get('client_id'),
-        redirect_uri:          params.get('redirect_uri'),
-        scope:                 params.get('scope'),
-        state:                 params.get('state'),
-        nonce:                 params.get('nonce'),
-        code_challenge:        params.get('code_challenge'),
-        code_challenge_method: params.get('code_challenge_method'),
-        pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
-      })
-    });
-    const d = await r.json();
-    if (!r.ok) {
-      // Server-side expiry (race between our check and the request): try one
-      // refresh, then re-login — never surface an expiry error to the user.
-      const msg = (d.error || '') + ' ' + (d.error_description || '');
-      if (/expired|jwt/i.test(msg)) {
-        const fresh = await tryRefresh(identity);
-        if (fresh) {
-          const r2 = await fetch('/hhttps/oauth/approve', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              token: fresh,
-              client_id:             params.get('client_id'),
-              redirect_uri:          params.get('redirect_uri'),
-              scope:                 params.get('scope'),
-              state:                 params.get('state'),
-              nonce:                 params.get('nonce'),
-              code_challenge:        params.get('code_challenge'),
-              code_challenge_method: params.get('code_challenge_method'),
-              pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
-            })
-          });
-          const d2 = await r2.json();
-          if (r2.ok) { window.location = d2.redirect; return; }
-        }
-        relogin();
-        return;
-      }
-      throw new Error(d.error || 'OAuth error');
-    }
-    window.location = d.redirect;
-  } catch (e) {
-    status.className = 'status error';
-    status.textContent = t('consent.errorPrefix') + e.message;
-    allow.disabled = false;
-    allow.textContent = t('consent.allow');
-  }
-});
-
-// ─── Consent page i18n (DE/EN toggle, shared storage key) ──────────────────
-const CONSENT_I18N = {
-  de: {
-    "consent.verified":"✓ Verifizierte Plattform","consent.unverified":"⚠ Nicht verifiziert",
-    "consent.warnStrong":"Achtung — Diese Plattform ist nicht von hhttps.org geprüft.",
-    "consent.warnB1":"Klicke nur auf „Erlauben“, wenn du der Plattform",
-    "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
-    "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
-    "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
-    "consent.pseudoLabel":"Anzeigename (frei wählbar, optional)","consent.pseudoHint":"Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.",
-    "consent.footPre":"Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf",
-    "consent.footPost":"widerrufen.","consent.processing":"Wird verarbeitet…",
-    "consent.noIdentity":"Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.",
-    "consent.errorPrefix":"Fehler: ",
-    "scope.openid.title":"Anonyme Identität","scope.openid.desc":"Eine pseudonyme Kennung, die nur diese Plattform sieht.",
-    "scope.role.title":"Berufsrolle","scope.role.desc":"Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).",
-    "scope.verification_method.title":"Verifikationsmethode","scope.verification_method.desc":"Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).",
-    "scope.age_group.title":"Altersgruppe","scope.age_group.desc":"Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.",
-    "scope.email.title":"E-Mail-Adresse","scope.email.desc":"Deine verifizierte E-Mail-Adresse wird an diese Plattform übertragen."
-  },
-  en: {
-    "consent.verified":"✓ Verified platform","consent.unverified":"⚠ Not verified",
-    "consent.warnStrong":"Caution — this platform has not been checked by hhttps.org.",
-    "consent.warnB1":"Only click “Allow” if you really trust the platform",
-    "consent.warnB2":". Check in particular that the URL in the address bar matches",
-    "consent.warnB3":".","consent.heading":"wants to see your identity",
-    "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
-    "consent.pseudoLabel":"Display name (your choice, optional)","consent.pseudoHint":"It does not have to be your real name. You decide what to reveal.",
-    "consent.footPre":"No personal data is shared. You can revoke the connection any time at",
-    "consent.footPost":".","consent.processing":"Processing…",
-    "consent.noIdentity":"No HHTTPS identity found. Please log in at hhttps.org first.",
-    "consent.errorPrefix":"Error: ",
-    "scope.openid.title":"Anonymous identity","scope.openid.desc":"A pseudonymous identifier that only this platform sees.",
-    "scope.role.title":"Professional role","scope.role.desc":"Your verified professional role — only if present (e.g. via EUDI wallet).",
-    "scope.verification_method.title":"Verification method","scope.verification_method.desc":"How your role was verified (e.g. ORCID, press card).",
-    "scope.age_group.title":"Age group","scope.age_group.desc":"Your rough age group (e.g. 18+), not your date of birth. Currently self-declared.",
-    "scope.email.title":"E-mail address","scope.email.desc":"Your verified e-mail address is passed on to this platform."
-  }
-};
-let CONSENT_LANG = 'de';
-function t(k){ return (CONSENT_I18N[CONSENT_LANG]||CONSENT_I18N.de)[k] ?? (CONSENT_I18N.de[k] ?? k); }
-function applyConsentLang(lang){
-  CONSENT_LANG = CONSENT_I18N[lang] ? lang : 'de';
-  document.documentElement.lang = CONSENT_LANG;
-  document.querySelectorAll('[data-i18n]').forEach(function(e){ var v = t(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
-  document.querySelectorAll('.lang-toggle button').forEach(function(b){ b.classList.toggle('active', b.dataset.lang === CONSENT_LANG); });
-  try { localStorage.setItem('iamhmn-lang', CONSENT_LANG); } catch(e){}
-}
-function detectConsentLang(){
-  try { var sv = localStorage.getItem('iamhmn-lang'); if (sv && CONSENT_I18N[sv]) return sv; } catch(e){}
-  var n = (navigator.language || 'de').slice(0,2).toLowerCase();
-  return CONSENT_I18N[n] ? n : 'de';
-}
-document.querySelectorAll('.lang-toggle button').forEach(function(b){
-  b.addEventListener('click', function(){ applyConsentLang(b.dataset.lang); });
-});
-applyConsentLang(detectConsentLang());
-try {
-  var _idn = JSON.parse(localStorage.getItem('hhttps_identity')||'null');
-  if (!_idn || !_idn.role) {
-    var _rr = document.querySelector('.scope-row[data-scope="role"]');
-    if (_rr) _rr.style.display = 'none';
-  }
-} catch(e){}
-</script>
+<script type="application/json" id="consent-config">${config}</script>
+<script type="module" src="/hhttps/oauth/consent.js"></script>
 </body></html>`;
 }
 

@@ -17,6 +17,11 @@ export const CODE_CHALLENGE_MAX_LENGTH = 128;
 export const CODE_CHALLENGE_METHODS    = Object.freeze(['S256', 'plain']);
 export const SCOPE_MAX_LENGTH          = 1024;
 
+/** Every scope this issuer knows. `openid` is mandatory in every request. */
+export const SCOPES_KNOWN = Object.freeze(new Set(
+  ['openid', 'role', 'verification_method', 'age_group', 'email']
+));
+
 const CODE_CHALLENGE_RE = /^[A-Za-z0-9._~-]+$/;
 
 const fail = (description) => ({ ok: false, error: 'invalid_request', description });
@@ -53,6 +58,35 @@ export function validateAuthorizeParams({ state, nonce, scope, code_challenge, c
   }
 
   return { ok: true };
+}
+
+/**
+ * AP2-30 (#157): the scope policy of GET /hhttps/oauth/authorize and
+ * POST /hhttps/oauth/approve, which used to be written out twice with
+ * identical error texts (comment "F-8: same scope policy as /authorize"
+ * documented the divergence that caused). One rule, one place:
+ *
+ *   1. `openid` is mandatory,
+ *   2. every scope must be known to this issuer,
+ *   3. every scope must be in the client's `allowed_scopes`.
+ *
+ * `scope` defaults to 'openid' when absent, exactly as both routes did.
+ * @returns {{ok:true, scopes:string[]} | {ok:false, error:'invalid_scope', description:string}}
+ */
+export function validateScopes(scope, client) {
+  const scopes = String(scope || 'openid').split(/\s+/).filter(Boolean);
+  const deny = (description) => ({ ok: false, error: 'invalid_scope', description });
+
+  if (!scopes.includes('openid')) return deny('The "openid" scope is required.');
+
+  const unknown = scopes.filter(s => !SCOPES_KNOWN.has(s));
+  if (unknown.length > 0) return deny(`Unknown scopes: ${unknown.join(', ')}`);
+
+  const allowed = client?.allowed_scopes || [];
+  const denied = scopes.filter(s => !allowed.includes(s));
+  if (denied.length > 0) return deny(`Platform may not request these scopes: ${denied.join(', ')}`);
+
+  return { ok: true, scopes };
 }
 
 /** `state` as it may be echoed in an error redirect: capped so an over-long value never bounces back at full length. */
