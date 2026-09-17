@@ -523,27 +523,30 @@ function readIdentityCookie(req) {
   return null;
 }
 
+// AP3-08 (#65): revoked jtis seen by the identity-cookie middleware. A jti
+// never comes back from revocation, so remembering it is safe; the negative
+// case is NOT cached, otherwise a revoke would take effect only after the TTL.
+const revokedCookieJtis = new Set();
+
+async function isIdentityCookieRevoked(jti) {
+  if (!jti) return false;
+  if (revokedCookieJtis.has(jti)) return true;
+  if (!await db.revokedTokens.has(jti)) return false;
+  if (revokedCookieJtis.size > 10_000) revokedCookieJtis.clear();  // bounded
+  revokedCookieJtis.add(jti);
+  return true;
+}
+
 // Advertise HHTTPS on every static/landing response. If the visitor carries a
 // valid identity cookie (i.e. they logged in on hhttps.org), surface their real
 // identity in the headers; otherwise emit the issuer-level headers. We never
 // invent identity — headers reflect a verified token or nothing.
-// AP1-17: the cookie is checked like any other bearer — positive list
-// (sub === 'human-verified' with a jti; text signatures, OAuth access tokens
-// and refresh tokens are NOT identities) plus the revocation list. The
-// revocation lookup is cached per jti so a page with many asset requests costs
-// one query, not one per request.
-const COOKIE_REVOKE_CACHE_MS = 60_000;
-const _cookieRevoked = new Map(); // jti → { revoked, until }
-async function cookieTokenRevoked(jti) {
-  const now = Date.now();
-  const hit = _cookieRevoked.get(jti);
-  if (hit && hit.until > now) return hit.revoked;
-  const revoked = await db.revokedTokens.has(jti);
-  if (_cookieRevoked.size > 5000) _cookieRevoked.clear();
-  _cookieRevoked.set(jti, { revoked, until: now + COOKIE_REVOKE_CACHE_MS });
-  return revoked;
-}
-
+// AP1-17 / AP3-08 (#81, #65): the cookie is checked like any other bearer —
+// positive list (sub === 'human-verified' with a jti; text signatures, OAuth
+// access tokens, machine and refresh tokens are NOT identities) plus the
+// revocation list. Only the POSITIVE result is remembered (a jti never comes
+// back from revocation), so a revoke takes effect immediately while a stale
+// cookie that keeps being sent costs exactly one query.
 app.use(async (req, res, next) => {
   res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
 
@@ -554,7 +557,7 @@ app.use(async (req, res, next) => {
       if (d.sub !== 'human-verified' || typeof d.jti !== 'string' || !d.jti) {
         throw new Error('not an identity token');
       }
-      if (await cookieTokenRevoked(d.jti)) throw new Error('revoked');
+      if (await isIdentityCookieRevoked(d.jti)) throw new Error('token_revoked');
       setHHTPPS(res, {
         status:     'verified',
         human:      true,
@@ -2726,15 +2729,18 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
   // challenge lookup so a rejected call never touches the challenge.
   const { userId, response, sessionId } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  const session = await db.sessions.get(sessionId);
-  if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
-  if (!requireEmailVerified(session, res)) return;
-  if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
 
-  const stored = await db.challenges.get(userId);
-  if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
-
+  // AP3-03 (#46): every await lives inside the try — a DB error must answer,
+  // not turn into an unhandled rejection with no response at all.
   try {
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    if (!requireEmailVerified(session, res)) return;
+    if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
+
+    const stored = await db.challenges.get(userId);
+    if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
+
     const v = await verifyRegistrationResponse({
       response, expectedChallenge: stored.challenge,
       expectedOrigin: ORIGIN, expectedRPID: RP_ID,
@@ -2795,14 +2801,21 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
   // is merged into the new passkey session. Email-flow continues uninterrupted,
   // and the final session carries BOTH the passkey credential and the email
   // verification info, so /role/declare sees the full picture.
-  const { sessionId, response, emailSessionId, priorSessionId } = req.body;
-  const stored = await db.challenges.get(sessionId);
-  if (!stored) return res.status(400).json({ error: 'Session expired.' });
-
-  const cred = await db.credentials.get(response.id);
-  if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
+  // AP3-03 (#46): validate BEFORE any await. `response.id` used to be read
+  // outside the try — a body without `response` produced an unhandled rejection
+  // and the request never got an answer at all. Both DB lookups now live inside
+  // the try, so a DB error answers 400 instead of hanging.
+  const { sessionId, response, emailSessionId, priorSessionId } = req.body || {};
+  if (typeof sessionId !== 'string' || !sessionId || typeof response?.id !== 'string' || !response.id)
+    return res.status(400).json({ error: 'sessionId and response.id required' });
 
   try {
+    const stored = await db.challenges.get(sessionId);
+    if (!stored) return res.status(400).json({ error: 'Session expired.' });
+
+    const cred = await db.credentials.get(response.id);
+    if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
+
     const v = await verifyAuthenticationResponse({
       response, expectedChallenge: stored.challenge,
       expectedOrigin: ORIGIN, expectedRPID: RP_ID,
@@ -2873,14 +2886,28 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
 
 // ─── Token Refresh ────────────────────────────────────────────────────────────
 
-app.post('/hhttps/token/refresh', async (req, res) => {
-  const { refreshToken } = req.body;
-  if (!refreshToken) return res.status(400).json({ error: 'refreshToken required' });
+// AP3-18 (#116): `limit.revoke` (30/min per IP) also guards the refresh route —
+// it used to run under the global limiter only, so a stolen 7-day token could
+// be probed as fast as the process answered.
+app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
+  const { refreshToken } = req.body || {};
+  if (typeof refreshToken !== 'string' || !refreshToken)
+    return res.status(400).json({ error: 'refreshToken required' });
 
   try {
     const d = verifyToken(refreshToken);
     if (d.sub !== 'refresh')              throw new Error('Kein Refresh-Token');
-    if (await db.revokedTokens.has(d.jti)) throw new Error('Refresh token revoked');
+
+    // AP3-18 (#116), RFC 6819 §5.2.2.3: refresh tokens rotate, so a token that
+    // is presented a SECOND time is either a replay or a stolen copy racing the
+    // legitimate client. We cannot tell which — so the whole family dies and
+    // both parties have to authenticate again.
+    if (await db.revokedTokens.has(d.jti)) {
+      const ended = await db.refreshTokens.deleteByUser(d.userId, null);
+      for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'refresh-reuse-detected');
+      console.warn('[token/refresh] reuse detected — refresh family revoked for user', d.userId);
+      return res.status(401).json({ error: 'refresh_token_reuse_detected' });
+    }
 
     const stored = await db.refreshTokens.get(d.jti);
     if (!stored) throw new Error('Refresh-Token nicht aktiv');
@@ -2910,6 +2937,18 @@ app.post('/hhttps/token/refresh', async (req, res) => {
       ...ageCarry
     });
 
+    // AP3-18 (#116): ROTATION. The presented token is retired (row deleted and
+    // jti blacklisted, so the branch above catches a later reuse) and the client
+    // gets a fresh one. The 7-day window no longer belongs to whoever copied the
+    // token once — only to whoever holds the newest one.
+    const newRefresh = await issueRefreshToken(stored.user_id, stored.credential_id, stored.role, {
+      verifiedMethods: methods, trustScore, emailDomain: domainVal, pseudonym,
+      ...(d.age_group ? { ageGroup: d.age_group, ageVerified: d.age_verified === true,
+                          ageVerificationMethod: d.age_verification_method || null } : {})
+    });
+    await db.refreshTokens.delete(d.jti);
+    await db.revokedTokens.add(d.jti, stored.role, 'refresh-rotated');
+
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
                      role: null, trustScore, token: newAccess,
                      method: 'verification-methods',
@@ -2919,7 +2958,8 @@ app.post('/hhttps/token/refresh', async (req, res) => {
     res.json({
       hhttps:    { version: '0.5.0', status: 'refreshed', human: true, actorType: 'human',
                    trustScore, verifiedMethods: methods },
-      token:     newAccess,
+      token:        newAccess,
+      refreshToken: newRefresh,   // AP3-18: rotated — the old one is dead
       expiresAt: new Date(Date.now() + ACCESS_TTL * 1000).toISOString(),
       role:      null,
       message:   '✓ New access token issued — no re-authentication needed.'
@@ -3041,6 +3081,35 @@ async function readEmailContext(sessionId) {
   try { return JSON.parse(row.challenge); } catch { return null; }
 }
 
+// ─── AP3-19 (#122): failed-attempt counter per session ──────────────────────
+// The counter lives in the existing `challenges` table (same primitive as the
+// parked e-mail context): one row per session, value = number of wrong codes,
+// TTL = the validity of the code it protects. No schema change, and the row
+// disappears with the code it guards.
+const MAX_EMAIL_CODE_ATTEMPTS = 5;
+const emailAttemptsId = (sessionId) => `email-attempts:${sessionId}`;
+
+async function readEmailAttempts(sessionId) {
+  const row = await db.challenges.get(emailAttemptsId(sessionId));
+  const n = row ? parseInt(row.challenge, 10) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+async function bumpEmailAttempts(sessionId, userId, value) {
+  await db.challenges.create(
+    emailAttemptsId(sessionId), String(value), userId, 'email-attempts', EMAIL_CONTEXT_TTL_MS
+  );
+}
+
+/** Too many wrong codes: burn the pending verification AND the parked context. */
+async function burnEmailVerification(sessionId, userId, value) {
+  await bumpEmailAttempts(sessionId, userId, value);
+  await Promise.all([
+    db.emailVerifications.invalidateForSession(sessionId),
+    db.challenges.delete(emailContextId(sessionId)),
+  ]);
+}
+
 // F-1 (K-1/S-1): the consumed email_verifications row stores sha256(lower(email)).
 // The parked context must describe the SAME address, otherwise a code/token for
 // address A would bind the session to whatever address the context holds now.
@@ -3119,9 +3188,7 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
 }
 
 app.post('/hhttps/email/send', limit.email, async (req, res) => {
-  const { sessionId, email: rawEmail, role, pseudonym } = req.body;
-  const session = await db.sessions.get(sessionId);
-  if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+  const { sessionId, email: rawEmail, role, pseudonym } = req.body || {};
   // AK-2: case/whitespace variants of the same address are the same anchor.
   const email = normalizeEmail(rawEmail);
   // AP3-13: strict syntax — no comments/quotes/non-ASCII that the mail
@@ -3129,31 +3196,47 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   if (!isValidEmail(email))
     return res.status(400).json({ error: 'Invalid email address.' });
 
-  const sentCount = await db.sessions.incrementEmailsSent(sessionId);
-  if (sentCount > 3)
-    return res.status(429).json({ error: 'Zu viele E-Mail-Anfragen pro Session.' });
-
-  const classification = classifyDomain(email);
-
+  // AP3-03 (#46): every await below is inside the try — a DB error answers 500
+  // instead of leaving the request without any response.
   try {
+    const session = await db.sessions.get(sessionId);
+    if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+
+    // AP3-05 (#61): the code, the parked e-mail context and the SESSION must
+    // not outlive each other. The session TTL runs from session start, the mail
+    // TTL from send time — so a late send gets the session's remaining lifetime,
+    // and a session with almost nothing left is refused instead of producing a
+    // code that is dead on arrival.
+    const remainingMs = Math.max(0, (session.expires || 0) - Date.now());
+    if (remainingMs < 60_000)
+      return res.status(410).json({ error: 'session_expired', detail: 'Start a new session before requesting a code.' });
+    // W-5: code row, magic-link token and the parked context share ONE value.
+    const mailTtlMs = Math.min(EMAIL_CONTEXT_TTL_MS, remainingMs);
+
+    const sentCount = await db.sessions.incrementEmailsSent(sessionId);
+    if (sentCount > 3)
+      return res.status(429).json({ error: 'Zu viele E-Mail-Anfragen pro Session.' });
+
+    const classification = classifyDomain(email);
+
     // v0.5: the sign-in page no longer declares a role here — fall back to the
     // base identity so the mail does not read: role "undefined".
     // F-1: only the LAST send of a session stays valid (context and row agree).
     await db.emailVerifications.invalidateForSession(sessionId);
     // F-5 (S-7): whitelist the role — an arbitrary string must never reach the mail.
     const safeRole = ROLES[role] ? role : 'citizen';
-    const result = await sendVerificationEmail({ email, role: safeRole, sessionId, baseUrl: BASE_URL });
+    const result = await sendVerificationEmail({ email, role: safeRole, sessionId, baseUrl: BASE_URL, ttlMs: mailTtlMs });
     // T4: park plaintext email + pseudonym wish until the code/link is confirmed.
     await db.challenges.create(
       emailContextId(sessionId),
       JSON.stringify({ email, pseudonym: sanitizePseudonym(pseudonym) }),
-      session.userId, 'email-pending', EMAIL_CONTEXT_TTL_MS
+      session.userId, 'email-pending', mailTtlMs   // AP3-05: = code TTL = session remainder
     );
     const resp   = {
       sent: result.sent || result.devMode, devMode: result.devMode || false,
       domain: classification.domain, expectedLevel: classification.level,
       expectedTrustScore: classification.trustBonus, category: classification.category,
-      expiresIn: '15 Minuten'
+      expiresIn: `${Math.max(1, Math.round(mailTtlMs / 60_000))} Minuten`
     };
     if (result.devMode) {
       // In dev mode (no SMTP), surface the code so the page can show it.
@@ -3170,37 +3253,47 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
 });
 
 app.get('/hhttps/email/verify', async (req, res) => {
+  // AP3-04 (#54): query parameters are attacker-controlled in SHAPE too —
+  // `?token=a&token=b` yields an array, `?token[x]=a` an object. Both used to
+  // reach createHash() inside verifyEmailToken and threw outside any try, so
+  // the browser got no redirect and no response at all.
   const { token, session: sessionId } = req.query;
-  if (!token || !sessionId) return res.redirect('/?email_verify=error&reason=missing_params');
+  if (typeof token !== 'string' || !token || typeof sessionId !== 'string' || !sessionId)
+    return res.redirect('/?email_verify=error&reason=missing_params');
 
-  const result = await verifyEmailToken(token);
-  if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
-  // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
-  if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
-
-  const session = await db.sessions.get(sessionId);
-  if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
-
-  const ctx = await readEmailContext(sessionId);
-  if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
-  if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
-
-  let bound;
   try {
-    bound = await bindSessionToEmailAnchor({
-      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
-    });
-  } catch (e) {
-    if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
-    console.error('[email/verify] anchor bind failed:', e.message);
-    return res.redirect('/?email_verify=error&reason=anchor_failed');
-  }
+    const result = await verifyEmailToken(token);
+    if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
+    // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
+    if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
 
-  res.redirect(
-    `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
-    `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}` +
-    `&pseudonym=${encodeURIComponent(bound.pseudonym)}`
-  );
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
+
+    const ctx = await readEmailContext(sessionId);
+    if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
+    if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
+
+    let bound;
+    try {
+      bound = await bindSessionToEmailAnchor({
+        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+      });
+    } catch (e) {
+      if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
+      console.error('[email/verify] anchor bind failed:', e.message);
+      return res.redirect('/?email_verify=error&reason=anchor_failed');
+    }
+
+    res.redirect(
+      `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
+      `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}` +
+      `&pseudonym=${encodeURIComponent(bound.pseudonym)}`
+    );
+  } catch (e) {
+    console.error('[email/verify] failed:', e.message);
+    res.redirect('/?email_verify=error&reason=internal');
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3215,62 +3308,99 @@ app.get('/hhttps/email/verify', async (req, res) => {
 //
 app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   const { sessionId, code } = req.body || {};
-  if (!sessionId || !code) return res.status(400).json({ error: 'sessionId and code required.' });
+  if (typeof sessionId !== 'string' || !sessionId || typeof code !== 'string' || !code)
+    return res.status(400).json({ error: 'sessionId and code required.' });
 
-  // #22: load the session BEFORE consuming the code. verifyEmailCode() marks
-  // the verification row `used`; with an unknown/expired session that would
-  // burn a code the user can still legitimately confirm on the real session.
-  const session = await db.sessions.get(sessionId);
-  if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
-
-  const result = await verifyEmailCode(code, sessionId);
-  if (!result.valid) return res.status(400).json({ error: result.error });
-
-  // T4: the plaintext email was parked by /email/send in the same session.
-  const ctx = await readEmailContext(sessionId);
-  if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
-  // F-1 (K-1/S-1): the code must belong to the address the context describes.
-  if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
-
-  // Bind the session to the stable identity anchor (AK-1/AK-2), store the
-  // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
-  // surface reported here is what the user has RIGHT NOW (before adding more
-  // methods), so the UI can immediately show the confirmed method badges. Trust
-  // is internal/API-only; the UI renders `methods`, never the number.
-  let bound;
+  // AP3-03 (#46): all awaits inside the try — no unanswered request on a DB error.
   try {
-    bound = await bindSessionToEmailAnchor({
-      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+    // #22: load the session BEFORE consuming the code. verifyEmailCode() marks
+    // the verification row `used`; with an unknown/expired session that would
+    // burn a code the user can still legitimately confirm on the real session.
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+
+    // AP3-19 (#122): a 6-digit code has 10^6 values, and the only brake used to
+    // be the IP rate limit. Wrong guesses are counted PER SESSION; after
+    // MAX_EMAIL_CODE_ATTEMPTS the pending verification is burned and the parked
+    // context dropped, so a further guess cannot hit anything — the user has to
+    // request a new mail.
+    const attempts = await readEmailAttempts(sessionId);
+    if (attempts >= MAX_EMAIL_CODE_ATTEMPTS)
+      return res.status(429).json({ error: 'too_many_attempts' });
+
+    const result = await verifyEmailCode(code, sessionId);
+    if (!result.valid) {
+      const used = attempts + 1;
+      if (used >= MAX_EMAIL_CODE_ATTEMPTS) {
+        await burnEmailVerification(sessionId, session.userId, used);
+        return res.status(429).json({ error: 'too_many_attempts' });
+      }
+      await bumpEmailAttempts(sessionId, session.userId, used);
+      return res.status(400).json({ error: result.error, attemptsLeft: MAX_EMAIL_CODE_ATTEMPTS - used });
+    }
+
+    // T4: the plaintext email was parked by /email/send in the same session.
+    const ctx = await readEmailContext(sessionId);
+    if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
+    // F-1 (K-1/S-1): the code must belong to the address the context describes.
+    if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
+
+    // The code was right — the guess counter has done its job.
+    await db.challenges.delete(emailAttemptsId(sessionId));
+
+    // Bind the session to the stable identity anchor (AK-1/AK-2), store the
+    // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
+    // surface reported here is what the user has RIGHT NOW (before adding more
+    // methods), so the UI can immediately show the confirmed method badges. Trust
+    // is internal/API-only; the UI renders `methods`, never the number.
+    let bound;
+    try {
+      bound = await bindSessionToEmailAnchor({
+        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+      });
+    } catch (e) {
+      if (e.status === 409) return res.status(409).json({ error: e.code });
+      console.error('[email/confirm-code] anchor bind failed:', e.message);
+      return res.status(500).json({ error: 'anchor_bind_failed' });
+    }
+
+    res.json({
+      verified:      true,
+      level:         result.level,
+      domain:        result.domain,
+      trustBonus:    result.trustBonus,
+      category:      result.category,
+      methods:       bound.methods,   // confirmed verification methods (UI shows these)
+      accountTrust:  bound.trust,     // API only — the UI must not render this number
+      userId:        bound.userId,    // stable identity (AK-1/AK-2)
+      pseudonym:     bound.pseudonym, // account pseudonym (AK-6..AK-8)
+      anchorCreated: bound.created,
     });
   } catch (e) {
-    if (e.status === 409) return res.status(409).json({ error: e.code });
-    console.error('[email/confirm-code] anchor bind failed:', e.message);
-    return res.status(500).json({ error: 'anchor_bind_failed' });
+    console.error('[email/confirm-code] failed:', e.message);
+    res.status(500).json({ error: 'internal_error' });
   }
-
-  res.json({
-    verified:      true,
-    level:         result.level,
-    domain:        result.domain,
-    trustBonus:    result.trustBonus,
-    category:      result.category,
-    methods:       bound.methods,   // confirmed verification methods (UI shows these)
-    accountTrust:  bound.trust,     // API only — the UI must not render this number
-    userId:        bound.userId,    // stable identity (AK-1/AK-2)
-    pseudonym:     bound.pseudonym, // account pseudonym (AK-6..AK-8)
-    anchorCreated: bound.created,
-  });
 });
 
 app.post('/hhttps/email/status', async (req, res) => {
-  const session = await db.sessions.get(req.body.sessionId);
-  if (!session) return res.status(404).json({ error: 'Session not found.' });
-  res.json({
-    emailVerified: session.emailVerified || false,
-    emailLevel:    session.emailLevel    || null,
-    emailDomain:   session.emailDomain   || null,
-    trustBonus:    session.emailTrustBonus || null
-  });
+  // AP3-03 (#46): the session lookup is inside the try (and the body may be
+  // anything at all — an object sessionId used to reach the query builder).
+  const sessionId = req.body?.sessionId;
+  if (typeof sessionId !== 'string' || !sessionId)
+    return res.status(400).json({ error: 'sessionId required' });
+  try {
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found.' });
+    res.json({
+      emailVerified: session.emailVerified || false,
+      emailLevel:    session.emailLevel    || null,
+      emailDomain:   session.emailDomain   || null,
+      trustBonus:    session.emailTrustBonus || null
+    });
+  } catch (e) {
+    console.error('[email/status] failed:', e.message);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // ─── GitHub Verification (for `developer` role) ───────────────────────────────
@@ -3307,8 +3437,7 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
   if (!code || !state) return res.redirect('/?github_verify=error&reason=missing_params');
 
   try {
-    const result = await handleGithubCallback({ code, state, redirectBase: BASE_URL });
-    const warn = result.alreadyOwnedBy ? ' (warning: anchor collision)' : '';
+    await handleGithubCallback({ code, state, redirectBase: BASE_URL });
     // Render a self-closing landing page instead of redirecting the popup back
     // to the SPA. The original tab is already polling /hhttps/verify/github/status
     // and will pick up the verification on its own — we just need this tab to
@@ -3316,9 +3445,19 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
     res.send(renderGithubReturnPage({
       ok: true,
       title: 'GitHub verified',
-      message: 'You can close this tab and return to hhttps.org.' + warn
+      message: 'You can close this tab and return to hhttps.org.'
     }));
   } catch (e) {
+    // AP3-09 (#76): the anchor collision is a hard failure now — the session
+    // was NOT verified and the anchor still belongs to the first account.
+    if (e.code === 'github_already_bound') {
+      return res.send(renderGithubReturnPage({
+        ok: false,
+        title: 'GitHub account already linked',
+        message: 'This GitHub account is already linked to another iamhmn identity. ' +
+                 'Sign in with that identity or use a different GitHub account.'
+      }));
+    }
     res.send(renderGithubReturnPage({
       ok: false,
       title: 'GitHub verification failed',
@@ -3363,9 +3502,15 @@ function renderGithubReturnPage({ ok, title, message }) {
 }
 
 app.post('/hhttps/verify/github/status', async (req, res) => {
-  const { sessionId } = req.body;
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  res.json(await getGithubStatus(sessionId));
+  const { sessionId } = req.body || {};
+  if (typeof sessionId !== 'string' || !sessionId) return res.status(400).json({ error: 'sessionId required' });
+  // AP3-03 (#46): a DB error here used to leave the polling tab without any answer.
+  try {
+    res.json(await getGithubStatus(sessionId));
+  } catch (e) {
+    console.error('[verify/github/status] failed:', e.message);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // ─── Role Declaration ─────────────────────────────────────────────────────────

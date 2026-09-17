@@ -21,7 +21,8 @@
  *   - SMTP (production) — via nodemailer (Strato, Brevo, Mailgun, ...)
  *   - sendmail fallback (system MTA, only if /usr/sbin/sendmail exists)
  *   - Dev mode (EMAIL_DEV_MODE=1, never in production) — code/link in the API
- *     response; otherwise the send fails closed (D8).
+ *     response; otherwise EVERY send fails closed (D8, AP3-16). One shared
+ *     transport with bounded SMTP timeouts (AP3-25).
  *
  * Data at rest: `email_verifications` holds the code and token as sha256 and
  * the address as sha256 only. The PLAINTEXT address is kept elsewhere for a
@@ -152,23 +153,49 @@ export function emailDevModeAllowed(env = process.env) {
   return env.EMAIL_DEV_MODE === '1' && env.NODE_ENV !== 'production';
 }
 
+// AP3-25 (#135): SMTP timeouts. nodemailer's defaults (2 min connect, 30 s
+// greeting, 10 min socket) would keep /hhttps/email/send hanging on a dead
+// relay; these bound every phase of a delivery.
+const SMTP_TIMEOUTS = { connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 30_000 };
+// sendmail only when a system MTA binary actually exists — otherwise the
+// transport is created fine but sendMail() fails with ENOENT. Probed ONCE
+// (AP3-25: no fs.existsSync per mail). Without a binary we fail closed unless
+// dev mode was opted in explicitly.
+const SENDMAIL_BIN = ['/usr/sbin/sendmail', '/usr/bin/sendmail'].find((f) => fs.existsSync(f)) || null;
+
+let _transport = null;
+let _transportResolved = false;
+
+/**
+ * The process-wide mail transport, created lazily on first use and reused for
+ * every send (AP3-25: pooled SMTP connections, no per-mail TLS handshake).
+ * Returns null when neither SMTP nor a sendmail binary is configured — the
+ * caller (deliverMail) then fails closed or, in explicit dev mode, logs.
+ */
 function createTransport() {
+  if (_transportResolved) return _transport;
+  _transportResolved = true;
   if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
-    return nodemailer.createTransport({
+    _transport = nodemailer.createTransport({
       host:   SMTP_HOST,
       port:   SMTP_PORT,
       secure: SMTP_PORT === 465,         // SMTPS on 465, STARTTLS on 587
       auth:   { user: SMTP_USER, pass: SMTP_PASS },
-      tls:    { rejectUnauthorized: true }
+      tls:    { rejectUnauthorized: true },
+      pool:   true, maxConnections: 2, maxMessages: 100,
+      ...SMTP_TIMEOUTS
     });
+  } else if (SENDMAIL_BIN) {
+    try {
+      _transport = nodemailer.createTransport({ sendmail: true, path: SENDMAIL_BIN });
+    } catch { _transport = null; }
   }
-  // sendmail only when a system MTA binary actually exists — otherwise the
-  // transport is created fine but sendMail() fails with ENOENT. Without a
-  // binary we fall back to dev mode (code surfaced in the API response).
-  if (fs.existsSync('/usr/sbin/sendmail') || fs.existsSync('/usr/bin/sendmail')) {
-    try { return nodemailer.createTransport({ sendmail: true }); } catch(e) {}
-  }
-  return null;
+  return _transport;
+}
+
+/** Options the shared transport is created with (exported for tests). */
+export function emailTransportConfig() {
+  return { ...SMTP_TIMEOUTS, pool: true, sendmailBin: SENDMAIL_BIN };
 }
 
 function buildMailOptions(extra) {
@@ -178,6 +205,30 @@ function buildMailOptions(extra) {
   };
   if (REPLY_TO) opts.replyTo = REPLY_TO;
   return opts;
+}
+
+function transportUnavailable() {
+  const err = new Error('email_transport_unavailable');
+  err.code = 'email_transport_unavailable';
+  return err;
+}
+
+/**
+ * AP3-16 (#109): the ONE delivery path for every mail this module sends.
+ * Without a transport the send fails closed (`email_transport_unavailable`)
+ * unless dev mode was opted in explicitly (EMAIL_DEV_MODE=1, never in
+ * production) — only then is the link/token logged and `devMode: true`
+ * returned. Previously four of the five senders fell back to the log silently.
+ */
+async function deliverMail({ kind, to, link, meta, subject, text, html }) {
+  const transporter = createTransport();
+  if (!transporter) {
+    if (!emailDevModeAllowed()) throw transportUnavailable();
+    devLog(kind, to, link, meta);
+    return { sent: false, devMode: true };
+  }
+  await transporter.sendMail(buildMailOptions({ to, subject, text, html }));
+  return { sent: true, devMode: false };
 }
 
 // ─── Shared email shell (DRY for both purposes) ────────────────────────────
@@ -258,6 +309,8 @@ const SHELL_THEMES = {
 
 function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote, theme = 'dark' }) {
   const t = SHELL_THEMES[theme] || SHELL_THEMES.dark;
+  // AP3-15 (#99): the CTA URL lands in an href attribute AND as text — escape both.
+  const safeCta = escapeHtml(ctaUrl);
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>${t.css}
@@ -270,10 +323,10 @@ function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote, t
   <div class="body">
     ${bodyHtml}
     <div class="btn-wrap">
-      <a href="${ctaUrl}" class="btn">${ctaLabel}</a>
+      <a href="${safeCta}" class="btn">${ctaLabel}</a>
     </div>
     <p style="font-size:11px;color:${t.muted};">If the button does not work, copy this link into your browser:<br>Falls der Button nicht funktioniert, kopiere diesen Link in deinen Browser:</p>
-    <div class="url-fallback">${ctaUrl}</div>
+    <div class="url-fallback">${safeCta}</div>
     ${footerNote ? `<p style="font-size:11px;color:${t.muted};margin-top:20px;">${footerNote}</p>` : ''}
   </div>
   <div class="footer">
@@ -311,8 +364,14 @@ function generateCode6() {
  * server accepts. The legacy magic-link still ships below the code for users
  * who open the email on a phone and want to confirm there.
  */
-export function renderVerificationEmail({ code, verifyUrl, role, classification }) {
+export function renderVerificationEmail({ code, verifyUrl, role, classification,
+                                          ttlMs = EMAIL_VERIFICATION_TTL_MS }) {
   const t = SHELL_THEMES.light;
+  // AP3-05 (#61): the mail states the validity it actually has. When the
+  // session expires sooner than the 15-minute default, /email/send shortens
+  // the TTL and the text follows — no mail promising 15 minutes for a code
+  // that dies with the session in 4.
+  const validMin = Math.max(1, Math.round((Number(ttlMs) || EMAIL_VERIFICATION_TTL_MS) / 60_000));
   // F-5 (S-7): only catalogued roles reach the mail (subject AND body); the
   // label and the classification fields are HTML-escaped as defence in depth.
   const safeRole = ROLES[role] ? role : 'citizen';
@@ -330,7 +389,7 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification 
     <div style="margin:24px 0 18px;padding:24px 16px;text-align:center;background:#F9F9F8;border:1px solid #E6E6E4;border-radius:16px;">
       <div style="font-family:'Inter',system-ui,sans-serif;font-size:11px;letter-spacing:2px;color:#5C5C5C;margin-bottom:10px;">VERIFICATION CODE · BESTÄTIGUNGS-CODE</div>
       <div style="font-family:'JetBrains Mono',ui-monospace,monospace;font-size:36px;letter-spacing:4px;color:#0A0A0A;font-weight:500;">${code}</div>
-      <div style="font-family:'Inter',system-ui,sans-serif;font-size:12px;color:#5C5C5C;margin-top:10px;">Valid for 15 minutes · 15 Minuten gültig</div>
+      <div style="font-family:'Inter',system-ui,sans-serif;font-size:12px;color:#5C5C5C;margin-top:10px;">Valid for ${validMin} minutes · ${validMin} Minuten gültig</div>
     </div>
   `;
 
@@ -356,8 +415,8 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification 
   // platform the user signs in to; the copy on the authorization code is
   // deleted at transfer.
   const footerNote =
-    `<strong style="color:${t.strong}">Privacy:</strong> your email address is held temporarily — for up to 7 days, or until it has been passed on to the platform you sign in to. The code expires automatically after 15 minutes. — ` +
-    `<strong style="color:${t.strong}">Datenschutz:</strong> Deine E-Mail-Adresse wird nur vorübergehend zwischengespeichert — bis zu 7 Tage bzw. bis zur Übertragung an die Plattform, bei der du dich anmeldest. Der Code verfällt automatisch nach 15 Minuten.`;
+    `<strong style="color:${t.strong}">Privacy:</strong> your email address is held temporarily — for up to 7 days, or until it has been passed on to the platform you sign in to. The code expires automatically after ${validMin} minutes. — ` +
+    `<strong style="color:${t.strong}">Datenschutz:</strong> Deine E-Mail-Adresse wird nur vorübergehend zwischengespeichert — bis zu 7 Tage bzw. bis zur Übertragung an die Plattform, bei der du dich anmeldest. Der Code verfällt automatisch nach ${validMin} Minuten.`;
 
   const html = emailShell({
     theme:     'light',
@@ -370,16 +429,20 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification 
   });
 
   const text = biText(
-    `HHTTPS — Email verification\n\nRole: ${textLabel}\nDomain: ${raw.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (15 min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held temporarily — for up to 7 days, or until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
-    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${textLabel}\nDomain: ${raw.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (15 Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur vorübergehend zwischengespeichert — bis zu 7 Tage bzw. bis zur Übertragung an die Plattform, bei der du dich anmeldest.\n\n— HHTTPS Project · hhttps.org`
+    `HHTTPS — Email verification\n\nRole: ${textLabel}\nDomain: ${raw.domain}\nTrust bonus: +${cls.trustBonus}\n\nYour verification code (${validMin} min):\n\n    ${code}\n\nEnter it in the browser tab where you started.\nMobile users can also tap: ${verifyUrl}\n\nPrivacy: your email address is held temporarily — for up to 7 days, or until it has been passed on to the platform you sign in to.\n\n— HHTTPS Project · hhttps.org`,
+    `HHTTPS — E-Mail-Verifikation\n\nRolle: ${textLabel}\nDomain: ${raw.domain}\nTrust-Bonus: +${cls.trustBonus}\n\nDein Bestätigungs-Code (${validMin} Min):\n\n    ${code}\n\nGib ihn im Browser-Tab ein, in dem du gestartet hast.\nMobil-Nutzer können auch tippen: ${verifyUrl}\n\nDatenschutz: Deine E-Mail-Adresse wird nur vorübergehend zwischengespeichert — bis zu 7 Tage bzw. bis zur Übertragung an die Plattform, bei der du dich anmeldest.\n\n— HHTTPS Project · hhttps.org`
   );
 
   const subject = `[HHTTPS] Verify email for role "${roleLabel(safeRole, 'en')}" / E-Mail-Verifikation`;
   return { subject, html, text };
 }
 
-export async function sendVerificationEmail({ email, role, sessionId, baseUrl }) {
+export async function sendVerificationEmail({ email, role, sessionId, baseUrl,
+                                             ttlMs = EMAIL_VERIFICATION_TTL_MS }) {
   const base = baseUrl || BASE_URL;
+  // AP3-05 (#61): the caller may shorten the validity to the session's
+  // remaining lifetime; it is never longer than the 15-minute default.
+  const validMs = Math.min(EMAIL_VERIFICATION_TTL_MS, Math.max(60_000, Number(ttlMs) || 0));
 
   // Two artifacts are generated up-front:
   //   • code6     — what the user types in. Stored as sha256(code).
@@ -404,26 +467,18 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl })
     trustBonus: classification.trustBonus,
     category:   classification.category,
     sessionId,
-    ttlMs:      EMAIL_VERIFICATION_TTL_MS
+    ttlMs:      validMs
   });
 
   const verifyUrl = `${base}/hhttps/email/verify?token=${rawToken}&session=${sessionId}`;
-  const { subject, html, text } = renderVerificationEmail({ code: code6, verifyUrl, role, classification });
+  const { subject, html, text } = renderVerificationEmail({ code: code6, verifyUrl, role, classification, ttlMs: validMs });
 
-  const transporter = createTransport();
-  if (!transporter) {
-    if (!emailDevModeAllowed()) {
-      const err = new Error('email_transport_unavailable');
-      err.code = 'email_transport_unavailable';
-      throw err;
-    }
-    devLog('User email verification', email, verifyUrl, { role, classification, code: code6 });
-    return { sent: false, devMode: true, verifyUrl, code: code6, classification, rawToken };
-  }
-
-  await transporter.sendMail(buildMailOptions({ to: email, subject, text, html }));
-
-  return { sent: true, devMode: false, classification };
+  const r = await deliverMail({
+    kind: 'User email verification', to: email, link: verifyUrl,
+    meta: { role, classification, code: code6 }, subject, text, html
+  });
+  if (r.devMode) return { ...r, verifyUrl, code: code6, classification, rawToken };
+  return { ...r, classification };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -450,12 +505,18 @@ export async function sendPlatformRegistrationEmail({
   // When a CMS plugin (WordPress) registered the platform, the next step is
   // NOT the developer portal — it is step 3 of the plugin's own setup wizard,
   // after which the site is approved automatically.
-  const isPlugin = !!setupUrl;
+  // AP3-15 (#99): setupUrl is derived from the caller-supplied homepage_url
+  // (path/query/fragment untouched). Only an http(s) URL is used at all, its
+  // WHATWG-serialised form percent-encodes quotes/angle brackets, and the
+  // value is HTML-escaped on top before it lands in the href attribute.
+  const safeSetupUrl = httpUrlOrNull(setupUrl);
+  const isPlugin = !!safeSetupUrl;
+  const setupHref = escapeHtml(safeSetupUrl);
   const nextParaEn = isPlugin
-    ? `<p>After confirmation, go back to your WordPress admin — <a href="${setupUrl}" style="color:#a0b8d8">Settings → iamhmn Setup</a> — and continue with <strong>step 3 (DNS TXT record)</strong>. Once the record is verified, your site is approved <strong>automatically</strong>. No further action needed.</p>`
+    ? `<p>After confirmation, go back to your WordPress admin — <a href="${setupHref}" style="color:#a0b8d8">Settings → iamhmn Setup</a> — and continue with <strong>step 3 (DNS TXT record)</strong>. Once the record is verified, your site is approved <strong>automatically</strong>. No further action needed.</p>`
     : `<p>After confirmation your platform moves to status <code>unverified</code> and can immediately be used by users for login. For <code>verified</code> status (green badge on the consent screen) you additionally need to set a DNS TXT record and request a review.</p>`;
   const nextParaDe = isPlugin
-    ? `<p>Gehe nach der Bestätigung zurück in dein WordPress-Backend — <a href="${setupUrl}" style="color:#a0b8d8">Einstellungen → iamhmn Setup</a> — und mache mit <strong>Schritt 3 (DNS-TXT-Record)</strong> weiter. Sobald der Record verifiziert ist, wird deine Seite <strong>automatisch</strong> freigeschaltet. Mehr ist nicht zu tun.</p>`
+    ? `<p>Gehe nach der Bestätigung zurück in dein WordPress-Backend — <a href="${setupHref}" style="color:#a0b8d8">Einstellungen → iamhmn Setup</a> — und mache mit <strong>Schritt 3 (DNS-TXT-Record)</strong> weiter. Sobald der Record verifiziert ist, wird deine Seite <strong>automatisch</strong> freigeschaltet. Mehr ist nicht zu tun.</p>`
     : `<p>Nach der Bestätigung wechselt deine Plattform in den Status <code>unverified</code> und kann sofort von Usern für den Login genutzt werden. Für den <code>verified</code>-Status (grüner Badge auf der Consent-Seite) musst du zusätzlich einen DNS-TXT-Record setzen und einen Review beantragen.</p>`;
 
   const titleEn = isChange ? 'Confirm new contact email' : 'Confirm platform registration';
@@ -505,14 +566,10 @@ export async function sendPlatformRegistrationEmail({
     ? `[HHTTPS] Confirm new email for platform "${platformName}" / Neue Email bestätigen`
     : `[HHTTPS] Confirm your platform registration: ${platformName}`;
 
-  const transporter = createTransport();
-  if (!transporter) {
-    devLog('Platform registration', to, confirmUrl, { platformName, homepageUrl, kind });
-    return { sent: false, devMode: true };
-  }
-
-  await transporter.sendMail(buildMailOptions({ to, subject, text, html }));
-  return { sent: true, devMode: false };
+  return deliverMail({
+    kind: 'Platform registration', to, link: confirmUrl,
+    meta: { platformName, homepageUrl, kind }, subject, text, html
+  });
 }
 
 /**
@@ -560,19 +617,11 @@ export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl 
      `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n')
   );
 
-  const transporter = createTransport();
-  if (!transporter) {
-    devLog('Platform verified', to, `${BASE_URL}/developers`, { platformName });
-    return { sent: false, devMode: true };
-  }
-
-  await transporter.sendMail(buildMailOptions({
-    to,
+  return deliverMail({
+    kind: 'Platform verified', to, link: `${BASE_URL}/developers`, meta: { platformName },
     subject: `[HHTTPS] ✓ ${platformName} is now verified / ist jetzt verifiziert`,
     text, html
-  }));
-
-  return { sent: true };
+  });
 }
 
 /**
@@ -609,19 +658,11 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
      '', `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n')
   );
 
-  const transporter = createTransport();
-  if (!transporter) {
-    devLog('Platform rejected', to, `${BASE_URL}/developers`, { platformName, reason });
-    return { sent: false, devMode: true };
-  }
-
-  await transporter.sendMail(buildMailOptions({
-    to,
+  return deliverMail({
+    kind: 'Platform rejected', to, link: `${BASE_URL}/developers`, meta: { platformName, reason },
     subject: `[HHTTPS] Request for "${platformName}" rejected / Antrag abgelehnt`,
     text, html
-  }));
-
-  return { sent: true };
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -732,22 +773,15 @@ export async function sendAdminPlatformNotification({
     '— HHTTPS Project · hhttps.org'
   ].join('\n');
 
-  const transporter = createTransport();
-  if (!transporter) {
-    devLog(isReview ? 'Admin review request' : 'Admin new platform',
-           recipient, adminUrl, { platformName, clientId });
-    return { sent: false, devMode: true };
-  }
-
-  await transporter.sendMail(buildMailOptions({
-    to: recipient,
+  const r = await deliverMail({
+    kind: isReview ? 'Admin review request' : 'Admin new platform',
+    to: recipient, link: adminUrl, meta: { platformName, clientId },
     subject: isReview
       ? `[HHTTPS Admin] Prüfung erforderlich: "${platformName}"`
       : `[HHTTPS Admin] Neue Plattform: "${platformName}"`,
     text, html
-  }));
-
-  return { sent: true, to: recipient };
+  });
+  return { ...r, to: recipient };
 }
 
 // ─── Verify token (used by /hhttps/email/verify, legacy user flow) ─────────
@@ -815,6 +849,15 @@ function devLog(kind, to, link, meta) {
   }
   console.log(`   Link:  ${link}`);
   console.log('─'.repeat(60) + '\n');
+}
+
+/** AP3-15: only an absolute http(s) URL passes; returns its WHATWG-serialised form or null. */
+export function httpUrlOrNull(u) {
+  if (u == null || u === '') return null;
+  try {
+    const parsed = new URL(String(u));
+    return /^https?:$/.test(parsed.protocol) ? parsed.href : null;
+  } catch { return null; }
 }
 
 function escapeHtml(s) {
