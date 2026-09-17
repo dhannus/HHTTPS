@@ -40,6 +40,12 @@ import crypto from 'crypto';
 // Heuristic public-suffix list for the common two-part TLDs. Not the full PSL,
 // but it covers the domains real registrations use. Adding an entry makes the
 // resulting apex more specific — never less — so this list is safe to grow.
+import net from 'node:net';
+
+// AP1-07 (#220): the bound_domain column is VARCHAR(120); RFC 1035 caps a label at 63.
+export const DOMAIN_MAX_LEN = 120;
+export const DNS_LABEL_MAX  = 63;
+
 export const TWO_PART_TLDS = new Set([
   'co.uk', 'co.jp', 'co.kr', 'co.nz', 'co.za', 'co.in', 'co.il',
   'com.au', 'com.br', 'com.cn', 'com.mx', 'com.tr', 'com.tw', 'com.ar',
@@ -58,8 +64,15 @@ export function normalizeApexDomain(hostname) {
   let h = hostname.toLowerCase().trim();
   // Strip protocol and path if accidentally included
   h = h.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
+  // AP1-18 (#220): an IPv4/IPv6 literal is not a domain. Splitting 192.168.1.10
+  // on '.' and keeping the last two parts produced the nonsense apex "1.10".
+  if (net.isIP(h)) return null;
   if (!/^[a-z0-9.-]+$/.test(h)) return null;
+  // AP1-07 (#220): RFC 1035 limits. `bound_domain` is VARCHAR(120); without a
+  // bound here an over-long host reached the driver and surfaced as a bogus 401.
+  if (h.length > DOMAIN_MAX_LEN) return null;
   const parts = h.split('.').filter(Boolean);
+  if (parts.some(p => p.length > DNS_LABEL_MAX)) return null;
   if (parts.length < 2) return parts.join('.') || null;
   if (parts.length >= 3) {
     const lastTwo = parts.slice(-2).join('.');

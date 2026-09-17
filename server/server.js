@@ -1,22 +1,18 @@
 import 'dotenv/config';
 /**
- * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
+ * HHTTPS — Role Identity API (PostgreSQL persistence)
  * iamhmn Initiative · daniel.hannuschka@tweakz.de
  * https://github.com/dhannus/HHTTPS
  *
- * v4.1 changes from v4:
- *   ✓ PostgreSQL persistence (sessions, tokens, credentials, etc.)
- *   ✓ Server restarts no longer wipe user state
- *   ✓ All v4 live bugs fixed and consolidated:
- *     - trust proxy 1 (express-rate-limit + nginx)
- *     - CSP allows inline event handlers (Helmet)
- *     - WebAuthn v9 API syntax (startRegistration/Authentication w/o optionsJSON)
- *     - Buffer.from(credentialId, 'base64url') for excludeCredentials/allowCredentials
- *     - authenticatorAttachment removed (allows YubiKey, cross-platform)
- *     - /hhttps/role/declare (no /v2 suffix)
- *   ✓ 14 roles (citizen, journalist, student, teacher, researcher, creative,
- *               developer, medical_professional, caregiver, lawyer, notary,
- *               civil_servant, politician, business, craftsman)
+ * AP1-47 (#220): the former header described the v4.1 release and a fixed
+ * catalogue of "14 roles" that no longer exists. Current model:
+ *   • Protocol version PROTOCOL_VERSION ('0.5.0'), advertised in every response.
+ *   • Identity is email-anchored; further verification methods (passkey, GitHub,
+ *     domain, EUDI) are additive — see VERIFICATION_METHODS in roles.js.
+ *   • Roles are ESCO-dynamic (roles.taxonomy.js). There is no role enumeration:
+ *     `citizen` is the base identity, every professional role arrives as an
+ *     EUDI (Q)EAA and carries a role-assurance level (RAL).
+ *   • State lives in PostgreSQL (db.js); restarts do not wipe user state.
  */
 
 import express           from 'express';
@@ -34,10 +30,11 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse
 } from '@simplewebauthn/server';
 
+// AP1-50 (#191): VERIFICATION_LEVELS is imported as a LABEL MAP only — its
+// trustScore/level fields are legacy and no longer drive anything.
 import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
-         VERIFICATION_CHECKS, resolveVerification, ageGroupFromEudiClaims,
-         VERIFICATION_METHODS, computeVerification,
-         TRUST_BANDS, trustBand, HUMAN_CONFIRMED_THRESHOLD } from './roles.js';
+         ageGroupFromEudiClaims,
+         VERIFICATION_METHODS, computeVerification } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, verifyEmailCode, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail,
@@ -60,9 +57,10 @@ import { CONSENT_I18N, scopeLabel } from './consent-client.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
-  resolveRole, resolveEsco, buildRoleClaim, sanitizeCustomRole,
-  guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery, CUSTOM_ROLE_ID
+  resolveRole, searchEsco, buildRoleClaim, sanitizeCustomRole,
+  guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery
 } from './roles.taxonomy.js';
+import { renderJsonPage } from './views/json-viewer.js';
 import { issueIamhmnCard, warnIfPidTrustUnbound } from './eudi-verifier/backend-client.js';
 // AP4-47 (#228): the internal verifier assertions — ONE canonical structure per
 // endpoint, shared with the signing side in eudi-verifier/index.js.
@@ -107,6 +105,11 @@ function assertPairwiseSecretConfigured(env = process.env) {
 
 const RP_NAME  = 'iamhmn HHTTPS';
 
+// AP1-49 (#220): the wire protocol version. It used to appear as the literal
+// '0.5.0' in ~27 places (headers, discovery, every `hhttps` envelope), so a
+// bump had to be applied by hand everywhere. Single source of truth now.
+const PROTOCOL_VERSION = '0.5.0';
+
 // Token TTLs
 const ACCESS_TTL  = 3600;          // 1 hour
 const REFRESH_TTL = 7 * 86400;     // 7 days
@@ -128,6 +131,9 @@ app.set('json spaces', 2);
  * preferred), render the JSON inside a pretty syntax-highlighted HTML page
  * that matches the HHTTPS brand palette. API clients (curl, fetch, JSON.parse-
  * based libraries) get plain JSON as before.
+ *
+ * AP1-42 (#145): this function is now negotiation only — the ~230 lines of
+ * markup, CSS and copy script live in views/json-viewer.js.
  *
  * Usage:   sendJson(req, res, { ... });
  */
@@ -152,238 +158,15 @@ function sendJson(req, res, data, opts = {}) {
     return res.json(data);
   }
 
-  const title = opts.title || 'HHTTPS API';
-  const json  = JSON.stringify(data, null, 2);
-  // Server-side syntax highlight: wrap keys, strings, numbers, booleans, null
-  const highlighted = json
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/("(?:[^"\\]|\\.)*")(\s*:)/g, '<span class="k">$1</span>$2')
-    .replace(/:\s*("(?:[^"\\]|\\.)*")/g, ': <span class="s">$1</span>')
-    .replace(/\b(true|false|null)\b/g, '<span class="b">$1</span>')
-    .replace(/(:\s*)(-?\d+(?:\.\d+)?)/g, '$1<span class="n">$2</span>');
-
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title} — HHTTPS</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..600,30..100,0..1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --cream:   #F8F1E4;  --paper:    #FCFAF5;  --sand: #EDE0C8;
-    --terra:   #C97D5B;  --terra-dp: #A86246;  --apricot: #F2B894;
-    --sage:    #A8B89E;  --sage-dp:  #889982;  --lavender: #B5A8D9;
-    --ink:     #2D2823;  --ink-soft: #4A413A;  --ink-mute: #7A6F62;
-    --line:    rgba(45, 40, 35, 0.1);
-    --code-bg: #2D2823;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Inter', system-ui, sans-serif;
-    background: var(--cream);
-    color: var(--ink);
-    line-height: 1.6;
-    min-height: 100vh;
-    padding: 32px 20px 80px;
-  }
-  .wrap { max-width: 980px; margin: 0 auto; }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 16px;
-    margin-bottom: 24px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--line);
-  }
-  .logo {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    text-decoration: none;
-    color: var(--ink);
-  }
-  .logo-mark {
-    width: 32px; height: 32px;
-    border-radius: 9px;
-    background: linear-gradient(135deg, var(--terra), var(--apricot));
-    position: relative;
-  }
-  .logo-mark::after {
-    content: 'H';
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px;
-    color: var(--paper);
-  }
-  .logo-text {
-    font-family: 'Fraunces', serif;
-    font-variation-settings: "SOFT" 100, "WONK" 1;
-    font-weight: 500;
-    font-size: 20px;
-  }
-  .meta {
-    display: inline-flex; gap: 8px; flex-wrap: wrap;
-  }
-  .badge {
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 100px;
-    padding: 6px 14px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--ink-soft);
-  }
-  .badge .dot {
-    display: inline-block; width: 6px; height: 6px;
-    border-radius: 50%; background: var(--sage-dp);
-    margin-right: 6px; vertical-align: middle;
-  }
-  h1 {
-    font-family: 'Fraunces', serif;
-    font-variation-settings: "SOFT" 50, "WONK" 1;
-    font-weight: 400;
-    font-size: 36px;
-    letter-spacing: -0.02em;
-    margin-bottom: 4px;
-  }
-  h1 em {
-    font-style: italic;
-    color: var(--terra);
-    font-variation-settings: "SOFT" 100, "WONK" 1;
-  }
-  .sub {
-    color: var(--ink-mute);
-    font-size: 14px;
-    margin-bottom: 28px;
-    font-family: 'JetBrains Mono', monospace;
-  }
-  .toolbar {
-    display: flex; gap: 8px; flex-wrap: wrap;
-    margin-bottom: 16px;
-  }
-  .btn {
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 100px;
-    padding: 8px 16px;
-    font-family: 'Inter', sans-serif;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--ink-soft);
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s;
-  }
-  .btn:hover {
-    background: var(--sand);
-    color: var(--ink);
-    transform: translateY(-1px);
-  }
-  .btn.primary {
-    background: var(--ink);
-    color: var(--cream);
-    border-color: var(--ink);
-  }
-  .btn.primary:hover {
-    background: var(--terra-dp);
-    border-color: var(--terra-dp);
-    color: var(--cream);
-  }
-  pre {
-    background: var(--code-bg);
-    color: #F2E8D5;
-    border-radius: 14px;
-    padding: 24px 28px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    line-height: 1.7;
-    overflow-x: auto;
-    box-shadow: 0 4px 20px rgba(45, 40, 35, 0.08);
-    tab-size: 2;
-  }
-  .k { color: #F2B894; }     /* keys */
-  .s { color: #B8C9A8; }     /* strings */
-  .n { color: #DDB4B0; }     /* numbers */
-  .b { color: #B5A8D9; font-style: italic; } /* booleans / null */
-  footer {
-    margin-top: 40px;
-    padding-top: 20px;
-    border-top: 1px solid var(--line);
-    color: var(--ink-mute);
-    font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    display: flex;
-    gap: 18px;
-    flex-wrap: wrap;
-  }
-  footer a { color: var(--ink-soft); text-decoration: none; }
-  footer a:hover { color: var(--terra-dp); }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <a class="logo" href="/">
-      <div class="logo-mark"></div>
-      <span class="logo-text">HHTTPS</span>
-    </a>
-    <div class="meta">
-      <span class="badge"><span class="dot"></span>v0.5.0</span>
-      <span class="badge">${req.path}</span>
-    </div>
-  </header>
-
-  <h1>${title}</h1>
-  <p class="sub">${opts.subtitle || 'Open protocol — open API. JSON below, formatted for humans.'}</p>
-
-  <div class="toolbar">
-    <a class="btn primary" href="${req.path}?format=json" target="_blank">
-      <span>↓</span> Raw JSON
-    </a>
-    <button class="btn" id="copyBtn" onclick="copyJson()">
-      <span>⎘</span> <span id="copyLabel">Kopieren</span>
-    </button>
-    <a class="btn" href="/spec">Spec</a>
-    <a class="btn" href="https://iamhmn.org" target="_blank">iamhmn.org →</a>
-  </div>
-
-  <pre id="json">${highlighted}</pre>
-
-  <footer>
-    <span>iamhmn Initiative</span>
-    <a href="https://github.com/dhannus/HHTTPS">GitHub</a>
-    <a href="/.well-known/jwks.json">JWKS</a>
-    <a href="/.well-known/hhttps-configuration">Discovery</a>
-    <a href="/hhttps/info">Info</a>
-    <a href="/hhttps/roles">Roles</a>
-  </footer>
-</div>
-<script>
-async function copyJson() {
-  try {
-    const r = await fetch('${req.path}?format=json');
-    const t = await r.text();
-    await navigator.clipboard.writeText(t);
-    document.getElementById('copyLabel').textContent = 'Kopiert!';
-    setTimeout(() => { document.getElementById('copyLabel').textContent = 'Kopieren'; }, 1500);
-  } catch (e) {
-    alert('Kopieren fehlgeschlagen: ' + e.message);
-  }
-}
-</script>
-</body>
-</html>`);
+  res.send(renderJsonPage({
+    data,
+    title:       opts.title,
+    subtitle:    opts.subtitle,
+    path:        req.path,
+    originalUrl: req.originalUrl,
+    version:     PROTOCOL_VERSION
+  }));
 }
 
 app.use(express.json({ limit: '2mb' }));
@@ -394,8 +177,8 @@ app.use(express.json({ limit: '2mb' }));
 // its own Content-Type, so JSON endpoints are unaffected.
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
-// AP1-05: every HHTTPS-* header setHHTPPS() / setRoleHeaders() can emit must be
-// readable by cross-origin JavaScript. The per-method headers derive from the
+// AP1-05: every HHTTPS-* header setHHTPPS() can emit must be readable by
+// cross-origin JavaScript. The per-method headers derive from the
 // VERIFICATION_METHODS registry so a new method is exposed automatically.
 const HHTTPS_EXPOSED_HEADERS = [
   'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
@@ -404,7 +187,7 @@ const HHTTPS_EXPOSED_HEADERS = [
   'HHTTPS-Issuer','HHTTPS-Method',
   'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
   'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method',
-  // v0.5 verification surface + role assurance (roles.eaa.js setRoleHeaders)
+  // v0.5 verification surface + role assurance (roles.eaa.js buildRoleEaaClaims)
   'HHTTPS-Verified-Methods', 'HHTTPS-RAL', 'HHTTPS-Role-ISCO08',
   ...Object.values(VERIFICATION_METHODS).flatMap(m => [m.header, m.valueHeader].filter(Boolean))
 ];
@@ -440,8 +223,14 @@ app.use(helmet({
 // Rate limiters
 const rl = (max, windowMs = 60000) => rateLimit({
   max, windowMs, standardHeaders: true, legacyHeaders: false,
+  // AP1-13 (#220): `retryAfter` used to report the FULL window, so a client
+  // blocked in the last second of a 60-minute window was told to wait an hour.
+  // Report the time left in the current window, as the standard headers do.
   handler: (req, res) => res.status(429).json({
-    error: 'Rate limit exceeded.', retryAfter: Math.ceil(windowMs / 1000)
+    error: 'Rate limit exceeded.',
+    retryAfter: req.rateLimit?.resetTime
+      ? Math.max(1, Math.ceil((req.rateLimit.resetTime.getTime() - Date.now()) / 1000))
+      : Math.ceil(windowMs / 1000)
   })
 });
 
@@ -529,7 +318,7 @@ function readIdentityCookie(req) {
     const i = part.indexOf('=');
     if (i === -1) continue;
     if (part.slice(0, i).trim() === ID_COOKIE) {
-      // AP3-07 (#199): a malformed percent-escape ("%zz") makes
+      // AP3-07 (#199) / AP1-01 (#220): a malformed percent-escape ("%zz") makes
       // decodeURIComponent throw. This runs in middleware on EVERY request, so
       // one bad cookie used to turn every route into a 500 until the browser
       // dropped it. An undecodable cookie is simply not an identity.
@@ -554,6 +343,29 @@ async function isIdentityCookieRevoked(jti) {
   return true;
 }
 
+// AP1-62 (#220): the mapping "decoded identity token → setHHTPPS options" lived
+// in two places (the identity-cookie middleware and /hhttps/check) and the
+// copies had drifted: the cookie path never emitted the per-method headers,
+// although the cookie carries the same signed `verified_methods` claim. One
+// mapping, one surface.
+function headerOptsFromToken(d) {
+  const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
+  return {
+    status:     'verified',
+    human:      true,
+    actorType:  'human',
+    role:       d.role || null,
+    roleLevel:  d.roleLevel || null,
+    trustScore: d.trustScore ?? 0,
+    method:     d.method || 'webauthn-passkey',
+    verifiedMethods: methods.length ? methods : null,
+    domainValue: d.domain_name || null,
+    ageGroup:              d.age_group || null,
+    ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
+    ageVerificationMethod: d.age_verification_method || null
+  };
+}
+
 // Advertise HHTTPS on every static/landing response. If the visitor carries a
 // valid identity cookie (i.e. they logged in on hhttps.org), surface their real
 // identity in the headers; otherwise emit the issuer-level headers. We never
@@ -565,7 +377,7 @@ async function isIdentityCookieRevoked(jti) {
 // back from revocation), so a revoke takes effect immediately while a stale
 // cookie that keeps being sent costs exactly one query.
 app.use(async (req, res, next) => {
-  res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
+  res.setHeader('HHTTPS-Protocol-Version', PROTOCOL_VERSION);
 
   const cookieToken = readIdentityCookie(req);
   if (cookieToken) {
@@ -575,18 +387,7 @@ app.use(async (req, res, next) => {
         throw new Error('not an identity token');
       }
       if (await isIdentityCookieRevoked(d.jti)) throw new Error('token_revoked');
-      setHHTPPS(res, {
-        status:     'verified',
-        human:      true,
-        actorType:  'human',
-        role:       d.role,
-        roleLevel:  d.roleLevel,
-        trustScore: d.trustScore ?? 0,
-        method:     d.method || 'webauthn-passkey',
-        ageGroup:              d.age_group || null,
-        ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
-        ageVerificationMethod: d.age_verification_method || null
-      });
+      setHHTPPS(res, headerOptsFromToken(d));
       return next();
     } catch {
       // Expired/invalid/revoked/foreign cookie token → issuer headers, cookie cleared.
@@ -621,8 +422,10 @@ mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL });
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function setHHTPPS(res, opts = {}) {
+  // AP1-61 (#220): the `token` option was accepted and never used — the JWT is
+  // deliberately not a response header (see the NOTE below), so it is gone.
   const { status = 'unverified', human = false, actorType = 'unknown',
-          role = null, roleLevel = null, trustScore = 0, token = null,
+          role = null, roleLevel = null, trustScore = 0,
           method = 'none', machineOperator = null, machinePurpose = null,
           ageGroup = null, ageVerified = null, ageVerificationMethod = null,
           verifiedMethods = null, domainValue = null } = opts;
@@ -638,7 +441,7 @@ function setHHTPPS(res, opts = {}) {
     .replace(/[^\x20-\x7E]/g, '')   // drop any remaining non-ASCII / control chars
     .trim();
 
-  res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
+  res.setHeader('HHTTPS-Protocol-Version', PROTOCOL_VERSION);
   res.setHeader('HHTTPS-Status',           hdrSafe(status));
   res.setHeader('HHTTPS-Human',            String(human));
   res.setHeader('HHTTPS-Actor-Type',       hdrSafe(actorType));
@@ -657,6 +460,11 @@ function setHHTPPS(res, opts = {}) {
   if (machineOperator)   res.setHeader('HHTTPS-Machine-Operator', hdrSafe(machineOperator));
   if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  hdrSafe(machinePurpose));
   // Age group is an orthogonal, optional claim — surface it only when present.
+  // AP1-51 (#196): HHTTPS-Age-Verified had two owners. The `ageVerified` option
+  // set it (possibly to 'false'), and the verified-methods loop below then
+  // overwrote it with 'true' whenever 'age' was in the list. The age options are
+  // the SINGLE owner now: they carry the real claim (including an explicit
+  // 'false'), and the loop skips the 'age' method.
   if (ageGroup)              res.setHeader('HHTTPS-Age-Group', hdrSafe(ageGroup));
   if (ageVerified !== null)  res.setHeader('HHTTPS-Age-Verified', String(ageVerified));
   if (ageVerificationMethod) res.setHeader('HHTTPS-Age-Method', hdrSafe(ageVerificationMethod));
@@ -672,6 +480,7 @@ function setHHTPPS(res, opts = {}) {
     for (const id of verifiedMethods) {
       const m = VERIFICATION_METHODS[id];
       if (!m || !m.header) continue;
+      if (id === 'age') continue;   // AP1-51: owned by the ageVerified option above
       res.setHeader(m.header, 'true');
       // Methods that carry a value (domain → the domain name) expose it too.
       if (m.valueHeader && id === 'domain' && domainValue) {
@@ -686,10 +495,27 @@ function setHHTPPS(res, opts = {}) {
 // normalizeApexDomain / TWO_PART_TLDS moved to ./client-registration.js
 // (AP5-38): the WordPress-plugin path carried a second, shorter suffix list,
 // so the same host resolved to two different apexes depending on the door.
+// AP1-07 / AP1-18 (#220) hardened the same function there: RFC 1035 length
+// limits and a rejection of IP literals (192.168.1.10 used to normalise to the
+// nonsense apex "1.10").
 
 // Slug generator: 12-char Crockford Base32 with prefix "hp-" (HHTTPS signature).
 // Avoids 0/O/1/I confusion. Example: "hp-7K2-XQ9NMR-3F"
+// AP1-63 (#220): the signature limits used to be bare literals at the call site.
+const MAX_SIGNABLE_TEXT   = 100_000;  // chars accepted by sign-text / signatures
+const TEXT_PREVIEW_MAX    = 120;      // chars stored as signatures.text_preview
+const REVOKE_REASON_MAX   = 120;      // signatures.revoke_reason VARCHAR(120)
+const BATCH_SLUGS_MAX     = 100;      // slugs per /hhttps/signatures/batch call
+const SLUG_ATTEMPTS_MAX   = 5;        // collision retries before giving up
+
 const SLUG_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+// AP1-44 (#161): the slug validator used to be inlined four times as
+// /^hp-[A-Z0-9\-]+$/i (with a needless escape, flagged by ESLint). One
+// constant next to the generator, so validator and generator stay in step.
+// Deliberately kept permissive on length/alphabet: slugs issued by older
+// builds must keep resolving. Character class widened only syntactically
+// (the `-` moved to the end), the accepted set is unchanged.
+const SLUG_RE = /^hp-[A-Z0-9-]+$/i;
 function generateSlug() {
   const bytes = crypto.randomBytes(12);
   let out = 'hp-';
@@ -707,6 +533,88 @@ function hashTextStrict(text) {
 function hashTextLoose(text) {
   const normalized = (text || '').trim().replace(/\s+/g, ' ').toLowerCase();
   return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+}
+
+// ─── Bearer / error helpers (AP1-43, AP1-14, AP1-48) ─────────────────────────
+
+/**
+ * AP1-14 (#220): read the Authorization header as RFC 7235 requires — the
+ * scheme is case-insensitive and may be followed by any amount of whitespace.
+ * The old `replace('Bearer ', '')` accepted exactly one spelling and silently
+ * handed the whole header through for every other one.
+ */
+function bearerFrom(req) {
+  const h = req.headers?.authorization;
+  if (typeof h !== 'string') return null;
+  const m = /^bearer\s+(.+)$/i.exec(h.trim());
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * AP1-43 (#155): the three-line token lookup (HHTTPS-Token header →
+ * Authorization: Bearer → body.token) was copy-pasted into four handlers.
+ */
+function extractToken(req) {
+  const hdr = req.headers?.['hhttps-token'];
+  if (typeof hdr === 'string' && hdr) return hdr;
+  const bearer = bearerFrom(req);
+  if (bearer) return bearer;
+  const body = req.body?.token;
+  return typeof body === 'string' && body ? body : null;
+}
+
+/**
+ * AP1-43 (#155): the pseudonymous signer id of a decoded token.
+ *
+ * The old chain was `d.uid || d.userId || d.sub`. No token this server issues
+ * ever carries `uid`, and for an access token `sub` is the CONSTANT
+ * 'human-verified' — so the fallback produced a signer id shared by every user
+ * instead of an identity. Only `userId` identifies a signer; anything else
+ * yields null, and the callers answer 401.
+ */
+function signerIdOf(decoded) {
+  const id = decoded?.userId;
+  return typeof id === 'string' && id ? id : null;
+}
+
+/**
+ * AP1-48 (#184): one error shape for the token-bound endpoints. `error` keeps
+ * the human-readable text clients already log; `code` is the stable machine
+ * token to branch on.
+ */
+function apiError(res, status, code, detail, extra = {}) {
+  return res.status(status).json({ error: detail || code, code, ...extra });
+}
+
+/**
+ * AP1-48 (#184): every endpoint that runs `checkTokenValid` rejected a bad
+ * token differently — bare `{error}`, `{hhttps:{status:'invalid'},error}` or
+ * `{hhttps:{status:'invalid',human:false},error}`. One shape now; the
+ * human-readable `error` text is unchanged so existing clients keep working.
+ *
+ * AP1-29 (#220): only messages this server or jsonwebtoken produced are passed
+ * through. A DB/driver failure is not an authentication result — it answers
+ * 503 and its text stays on the server.
+ */
+const TOKEN_CHECK_MESSAGES = new Set([
+  'Token revoked', 'Token not active', 'Refresh token not active',
+  'Refresh token not accepted as bearer token'
+]);
+
+function tokenRejected(res, e, extra = {}) {
+  const jwtError = e?.name === 'JsonWebTokenError' || e?.name === 'TokenExpiredError' ||
+                   e?.name === 'NotBeforeError';
+  if (!jwtError && !TOKEN_CHECK_MESSAGES.has(e?.message)) {
+    console.error('[TOKEN] check failed:', e?.message);
+    return res.status(503).json({
+      hhttps: { status: 'invalid', ...extra },
+      error: 'token_check_failed', code: 'token_check_failed'
+    });
+  }
+  return res.status(401).json({
+    hhttps: { status: 'invalid', ...extra },
+    error: e.message, code: 'token_invalid'
+  });
 }
 
 async function issueAccessToken(payload) {
@@ -783,13 +691,19 @@ async function loadActiveRefreshToken(jti) {
 // only. Every bearer-style check refuses it unless the caller opts in.
 async function checkTokenValid(token, { allowRefresh = false } = {}) {
   const decoded = verifyToken(token);
-  if (await db.revokedTokens.has(decoded.jti)) throw new Error('Token revoked');
-  if (decoded.sub === 'refresh' || decoded.sub === 'oauth_refresh') {
-    if (!allowRefresh) throw new Error('Refresh token not accepted as bearer token');
-    await loadActiveRefreshToken(decoded.jti);
-  } else {
-    if (!await db.tokens.exists(decoded.jti)) throw new Error('Token nicht aktiv');
-  }
+  const isRefresh = decoded.sub === 'refresh' || decoded.sub === 'oauth_refresh';
+
+  // AP1-38 (#220): the revocation lookup and the liveness lookup are
+  // independent — one roundtrip instead of two sequential ones. The order the
+  // errors are reported in is unchanged.
+  const [revoked, live] = await Promise.all([
+    db.revokedTokens.has(decoded.jti),
+    isRefresh ? db.refreshTokens.get(decoded.jti) : db.tokens.exists(decoded.jti)
+  ]);
+  if (revoked) throw new Error('Token revoked');
+  if (isRefresh && !allowRefresh) throw new Error('Refresh token not accepted as bearer token');
+  // AP1-48 (#184): these two were the only German strings in the token path.
+  if (!live) throw new Error(isRefresh ? 'Refresh token not active' : 'Token not active');
   return decoded;
 }
 
@@ -817,7 +731,7 @@ app.get('/.well-known/hhttps-configuration', (req, res) => {
   sendJson(req, res, {
     issuer:                  `https://${RP_ID}`,
     hhttps_issuer:           `hhttps://${RP_ID}`,
-    protocol_version:        '0.5.0',
+    protocol_version:        PROTOCOL_VERSION,
     base_url:                BASE_URL,
     jwks_uri:                `${BASE_URL}/.well-known/jwks.json`,
     check_endpoint:          `${BASE_URL}/hhttps/check`,
@@ -836,6 +750,11 @@ app.get('/.well-known/hhttps-configuration', (req, res) => {
     roles_model:             { base_identity: ROLES.citizen.id,
                                esco_suggest: `${BASE_URL}/hhttps/esco/suggest`,
                                discovery:    `${BASE_URL}/.well-known/hhttps-role-assurance` },
+    // AP1-16 (#220): the live verification surface. `supported_verification`
+    // used to list the legacy VERIFICATION_LEVELS catalogue, which no longer
+    // describes what this issuer can confirm. Kept alongside for one release so
+    // existing clients do not break, but clearly marked as legacy.
+    supported_verification_methods: Object.keys(VERIFICATION_METHODS),
     supported_verification:  Object.keys(VERIFICATION_LEVELS)
   }, {
     title:    'Discovery',
@@ -864,6 +783,7 @@ app.get('/.well-known/hhttps-role-assurance', (req, res) => {
 const ESCO_TIMEOUT_MS   = 4000;
 const ESCO_CACHE_TTL_MS = 5 * 60_000;
 const ESCO_CACHE_MAX    = 500;
+const ESCO_SUGGEST_LIMIT = 8;   // hits returned by the typeahead proxy
 const _escoCache = new Map(); // `${lang}:${q}` → { results, until }
 app.get('/hhttps/esco/suggest', limit.esco, async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 80);
@@ -873,22 +793,21 @@ app.get('/hhttps/esco/suggest', limit.esco, async (req, res) => {
   const cached = _escoCache.get(cacheKey);
   if (cached && cached.until > Date.now()) return res.json({ results: cached.results, cached: true });
   try {
-    const url = `https://ec.europa.eu/esco/api/search?type=occupation&language=${lang}` +
-                `&text=${encodeURIComponent(q)}&full=false&limit=8`;
-    const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(ESCO_TIMEOUT_MS) });
-    if (!r.ok) return res.json({ results: [] });
-    const j = await r.json();
-    const hits = j?._embedded?.results || [];
+    // AP1-46 (#176): the ESCO URL and the `_embedded.results` unwrapping live in
+    // roles.taxonomy.js — this handler only adds the reserved-role guard, the
+    // cache and the wire shape.
+    const hits = await searchEsco(q, {
+      language: lang, limit: ESCO_SUGGEST_LIMIT, timeoutMs: ESCO_TIMEOUT_MS
+    });
     const results = hits.map(h => {
-      const label = h.title || h.preferredLabel || '';
-      const isco08 = h.code || null;
-      const g = guardReservedRole(label, isco08);
-      return { label, isco08, escoUri: h.uri || null, reserved: g.reserved, reservedKey: g.key || null };
+      const g = guardReservedRole(h.prefLabel, h.isco08);
+      return { label: h.prefLabel, isco08: h.isco08, escoUri: h.escoUri,
+               reserved: g.reserved, reservedKey: g.key || null };
     }).filter(x => x.label);
     if (_escoCache.size >= ESCO_CACHE_MAX) _escoCache.delete(_escoCache.keys().next().value);
     _escoCache.set(cacheKey, { results, until: Date.now() + ESCO_CACHE_TTL_MS });
     res.json({ results });
-  } catch (e) {
+  } catch {
     res.json({ results: [], error: 'esco_unreachable' });
   }
 });
@@ -928,7 +847,7 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
   res.setHeader('Cache-Control', `public, max-age=${INFO_CACHE_MS / 1000}`);
 
   sendJson(req, res, {
-    protocol: 'HHTTPS — Human-verified HTTPS', version: '0.5.0',
+    protocol: 'HHTTPS — Human-verified HTTPS', version: PROTOCOL_VERSION,
     initiative: 'iamhmn', contact: 'daniel.hannuschka@tweakz.de',
     github: 'github.com/dhannus/HHTTPS', demo: 'https://hhttps.org',
     features: ['webauthn', 'roles-esco-dynamic', 'email-verification', 'refresh-tokens',
@@ -974,7 +893,18 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
       'POST /hhttps/validate':                  'Validate token',
       'POST /hhttps/machine/{register,token}':  'Machine token issuance',
       'GET/POST/DELETE /hhttps/webhooks':       'Webhook management',
-      'GET  /hhttps/stats':                     'Public aggregated stats'
+      'GET  /hhttps/stats':                     'Public aggregated stats',
+      // AP1-60 (#220): the signature surface and the ESCO proxy were missing
+      // from this hand-maintained catalogue.
+      'GET  /.well-known/hhttps-role-assurance': 'Role-assurance discovery (RAL tiers, reserved registry)',
+      'GET  /hhttps/esco/suggest':              'ESCO occupation typeahead (?q=&lang=)',
+      'POST /hhttps/sign-text':                 'Bind a token to an exact text (Beta signing)',
+      'POST /hhttps/verify-text':               'Verify a text signature',
+      'POST /hhttps/signatures':                'Create a domain-bound slug signature',
+      'GET  /hhttps/s/{slug}':                  'Public signature verification (?domain=&textPreview=)',
+      'POST /hhttps/signatures/batch':          'Verify up to 100 slugs in one call',
+      'POST /hhttps/signatures/{slug}/revoke':  'Revoke a signature (signer only)',
+      'GET  /s/{slug}':                         'Short link → /hhttps/s/{slug}'
     }
   }, {
     title:    'API Info',
@@ -987,14 +917,12 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
 app.post('/hhttps/check', limit.check, async (req, res) => {
   // AP1-33: counted in-process, flushed periodically — no write before the check.
   bumpStat('check_calls');
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
+  const token = extractToken(req);
 
   if (!token) {
     setHHTPPS(res, { status: 'unverified', human: false, actorType: 'unknown' });
     return res.json({
-      hhttps: { version: '0.5.0', human: false, actorType: 'unknown',
+      hhttps: { version: PROTOCOL_VERSION, human: false, actorType: 'unknown',
                 status: 'unverified', message: 'No HHTTPS token. Please verify.' }
     });
   }
@@ -1008,7 +936,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
                        method: 'machine-token', machineOperator: d.operatorId,
                        machinePurpose: d.purpose });
       return res.json({
-        hhttps: { version: '0.5.0', human: false, actorType: 'bot',
+        hhttps: { version: PROTOCOL_VERSION, human: false, actorType: 'bot',
                   status: 'verified', trustScore: 0, method: 'machine-token' },
         machine: { operatorId: d.operatorId, operatorName: d.operatorName,
                    purpose: d.purpose, issuedAt: new Date(d.iat * 1000).toISOString() }
@@ -1017,17 +945,10 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
 
     const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
 
-    setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
-                     role: d.role || null, roleLevel: d.roleLevel || null, trustScore: d.trustScore,
-                     token, method: d.method,
-                     verifiedMethods: methods.length ? methods : null,
-                     domainValue: d.domain_name || null,
-                     ageGroup:              d.age_group || null,
-                     ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
-                     ageVerificationMethod: d.age_verification_method || null });
+    setHHTPPS(res, headerOptsFromToken(d));
 
     return res.json({
-      hhttps: { version: '0.5.0', status: 'verified', human: true, actorType: 'human',
+      hhttps: { version: PROTOCOL_VERSION, status: 'verified', human: true, actorType: 'human',
                 method: d.method, trustScore: d.trustScore,
                 verifiedMethods: methods,
                 issuedAt: new Date(d.iat * 1000).toISOString(),
@@ -1058,7 +979,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     });
   } catch (e) {
     setHHTPPS(res, { status: 'invalid', human: false, actorType: 'unknown' });
-    return res.status(401).json({ hhttps: { status: 'invalid', human: false }, error: e.message });
+    return tokenRejected(res, e, { human: false });
   }
 });
 
@@ -1070,24 +991,25 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
 // Beta signing mode for sensitive content (contracts, formal statements).
 
 app.post('/hhttps/sign-text', limit.check, async (req, res) => {
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
+  const token = extractToken(req);
   const text = req.body?.text;
 
-  if (!token) return res.status(400).json({ error: 'token required' });
+  // AP1-48 (#184): a missing bearer is an authentication failure (401), the
+  // same answer /hhttps/signatures/:slug/revoke already gave. It used to be a
+  // 400 here and a 401 there for the identical condition.
+  if (!token) return apiError(res, 401, 'token_required', 'token required');
   if (typeof text !== 'string' || text.length === 0) {
-    return res.status(400).json({ error: 'text required' });
+    return apiError(res, 400, 'text_required', 'text required');
   }
-  if (text.length > 100_000) {
-    return res.status(400).json({ error: 'text too long (max 100k chars)' });
+  if (text.length > MAX_SIGNABLE_TEXT) {
+    return apiError(res, 400, 'text_too_long', 'text too long (max 100k chars)');
   }
 
   try {
     // First, verify the token is currently valid (signature + revocation + expiry)
     const d = await checkTokenValid(token);
     if (d.sub === 'machine') {
-      return res.status(403).json({ error: 'machine tokens cannot sign text' });
+      return apiError(res, 403, 'machine_token', 'machine tokens cannot sign text');
     }
 
     // Build a deterministic content hash
@@ -1109,7 +1031,7 @@ app.post('/hhttps/sign-text', limit.check, async (req, res) => {
     });
 
     return res.json({
-      hhttps:    { version: '0.5.0', mode: 'beta-text-bound' },
+      hhttps:    { version: PROTOCOL_VERSION, mode: 'beta-text-bound' },
       signature,                       // the JWT that proves text + identity
       textHash,                        // sha256 hex of the signed text
       role: {
@@ -1122,14 +1044,14 @@ app.post('/hhttps/sign-text', limit.check, async (req, res) => {
       validUntil: new Date(d.exp * 1000).toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
 app.post('/hhttps/verify-text', limit.check, async (req, res) => {
   const { signature, text } = req.body || {};
   if (!signature || typeof text !== 'string') {
-    return res.status(400).json({ error: 'signature and text required' });
+    return apiError(res, 400, 'signature_and_text_required', 'signature and text required');
   }
 
   try {
@@ -1138,7 +1060,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
     // throw TokenExpiredError and the branch below was unreachable).
     const d = verifyToken(signature, { ignoreExpiration: true });
     if (d.sub !== 'text-signature') {
-      return res.status(400).json({ error: 'not a text signature' });
+      return apiError(res, 400, 'not_a_text_signature', 'not a text signature');
     }
 
     // Recompute the hash and compare
@@ -1172,7 +1094,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
 
     const roleDef = ROLES[d.role] || ROLES.citizen;
     return res.json({
-      hhttps: { version: '0.5.0', status: 'verified', mode: 'beta-text-bound', match: true },
+      hhttps: { version: PROTOCOL_VERSION, status: 'verified', mode: 'beta-text-bound', match: true },
       match: true,
       role: {
         id: d.role,
@@ -1185,7 +1107,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
       validUntil: new Date(d.exp * 1000).toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ hhttps: { status: 'invalid' }, error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
@@ -1200,32 +1122,37 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
 const VALID_BINDING_TYPES = new Set(['web', 'email', 'document']);
 
 app.post('/hhttps/signatures', limit.check, async (req, res) => {
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
-  const { text, mode, bindingType, domain } = req.body || {};
+  const token = extractToken(req);
+  // AP1-61 (#220): `mode` was destructured and then silently dropped. The
+  // binding type is the only mode this endpoint has, so the field is ignored
+  // on purpose — named here so the next reader does not wire it up by accident.
+  const { text, bindingType, domain } = req.body || {};
 
-  if (!token) return res.status(400).json({ error: 'token required' });
+  // AP1-48 (#184): missing bearer → 401, like every other token-bound endpoint.
+  if (!token) return apiError(res, 401, 'token_required', 'token required');
   if (typeof text !== 'string' || text.length === 0) {
-    return res.status(400).json({ error: 'text required' });
+    return apiError(res, 400, 'text_required', 'text required');
   }
-  if (text.length > 100_000) {
-    return res.status(400).json({ error: 'text too long (max 100k chars)' });
+  if (text.length > MAX_SIGNABLE_TEXT) {
+    return apiError(res, 400, 'text_too_long', 'text too long (max 100k chars)');
   }
   const bType = VALID_BINDING_TYPES.has(bindingType) ? bindingType : 'web';
   if (bType === 'web' && (!domain || typeof domain !== 'string')) {
-    return res.status(400).json({ error: 'domain required for web binding' });
+    return apiError(res, 400, 'domain_required', 'domain required for web binding');
   }
 
   try {
     const d = await checkTokenValid(token);
     if (d.sub === 'machine') {
-      return res.status(403).json({ error: 'machine tokens cannot create signatures' });
+      return apiError(res, 403, 'machine_token', 'machine tokens cannot create signatures');
     }
+    // AP1-43 (#155): only a token carrying a userId identifies a signer.
+    const signerId = signerIdOf(d);
+    if (!signerId) return apiError(res, 401, 'token_invalid', 'token carries no signer identity');
 
     const apex = bType === 'web' ? normalizeApexDomain(domain) : null;
     if (bType === 'web' && !apex) {
-      return res.status(400).json({ error: 'invalid domain format' });
+      return apiError(res, 400, 'invalid_domain', 'invalid domain format');
     }
 
     // Generate unique slug (retry if collision — extremely rare with 32^10 space)
@@ -1233,8 +1160,8 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     do {
       slug = generateSlug();
       attempts++;
-      if (attempts > 5) {
-        return res.status(500).json({ error: 'slug generation failed; please retry' });
+      if (attempts > SLUG_ATTEMPTS_MAX) {
+        return apiError(res, 500, 'slug_generation_failed', 'slug generation failed; please retry');
       }
     } while (await db.signatures.slugExists(slug) || await db.signatures.isReservedSlug(slug));
 
@@ -1246,11 +1173,12 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     const roleDef = ROLES[roleId] || ROLES.citizen;
     const vlevel  = VERIFICATION_LEVELS[d.roleLevel] || {};
 
-    const textPreview = text.length <= 120 ? text : text.slice(0, 117) + '…';
+    const textPreview = text.length <= TEXT_PREVIEW_MAX
+      ? text : text.slice(0, TEXT_PREVIEW_MAX - 3) + '…';
 
     await db.signatures.create({
       id:              slug,
-      signerId:        d.uid || d.userId || d.sub,   // pseudonymous user id
+      signerId,                                       // pseudonymous user id
       role:            roleId,
       roleLabel:       roleDef.label,
       roleIcon:        roleDef.icon,
@@ -1269,7 +1197,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     await db.stats.increment('signatures_created');
 
     return res.json({
-      hhttps: { version: '0.5.0', mode: 'slug' },
+      hhttps: { version: PROTOCOL_VERSION, mode: 'slug' },
       id:      slug,
       marker:  `#hhttps:s:${slug}`,
       url:     `${BASE_URL}/s/${slug}`,
@@ -1286,16 +1214,68 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
       createdAt: new Date().toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
 // Public verify endpoint — anyone can check a slug.
+/**
+ * AP1-45 (#168): the status of a stored signature. The single-slug endpoint and
+ * the batch endpoint each used to carry their own copy of this ladder, and the
+ * copies had already drifted (the batch one never reported a revoke reason and
+ * used flat `expected`/`observed`). Both call this now; the two endpoints only
+ * differ in how they shape the result for the wire.
+ *
+ * Order matters: revoked beats a domain mismatch, which beats a text change.
+ *
+ * @param {object} sig                   row from db.signatures
+ * @param {object} [opts]
+ * @param {string|null} [opts.reqDomain] apex domain the caller observed
+ * @param {string|null} [opts.textPreviewB64] base64 of the text as seen now
+ * @returns {{status:string, revokedAt?:string, revokeReason?:string,
+ *            expected?:string, observed?:string, warning?:string}}
+ */
+function evaluateSignature(sig, { reqDomain = null, textPreviewB64 = null } = {}) {
+  if (sig.revoked_at) {
+    return { status: 'revoked', revokedAt: sig.revoked_at, revokeReason: sig.revoke_reason };
+  }
+
+  if (sig.binding_type === 'web' && reqDomain && sig.bound_domain &&
+      reqDomain !== sig.bound_domain) {
+    return {
+      status:   'wrong-domain',
+      expected: sig.bound_domain,
+      observed: reqDomain,
+      warning:  `This signature was issued for ${sig.bound_domain} but used on ${reqDomain}. Possible theft.`
+    };
+  }
+
+  // Text-tampering check — ONLY for `document` binding (Beta mode).
+  // Alpha mode (web binding) is by design an identity stamp, not a text seal:
+  // the user signs "as themselves on this domain"; edits to the surrounding
+  // text are permitted (typo fixes, additions, etc.). Forcing a hash match
+  // here produces false positives because mail clients / forums normalize
+  // whitespace, decode entities, hard-wrap lines, and so on.
+  if (sig.binding_type === 'document' && textPreviewB64) {
+    try {
+      // Strict hash for document binding — every byte counts.
+      const preview = Buffer.from(textPreviewB64, 'base64').toString('utf8');
+      if (hashTextStrict(preview) !== sig.text_hash_strict) {
+        return { status: 'text-modified', warning: 'The text was modified after signing.' };
+      }
+    } catch {
+      // Ignore preview parse errors — an undecodable preview proves nothing.
+    }
+  }
+
+  return { status: 'verified' };
+}
+
 // Optional ?domain= and ?textPreview= for binding + tamper-detection.
 app.get('/hhttps/s/:slug', async (req, res) => {
   const slug = (req.params.slug || '').trim();
-  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
-    return res.status(400).json({ error: 'invalid slug format' });
+  if (!SLUG_RE.test(slug)) {
+    return apiError(res, 400, 'invalid_slug', 'invalid slug format');
   }
   let sig;
   try {
@@ -1329,7 +1309,7 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 
   // Build response
   const out = {
-    hhttps:    { version: '0.5.0', status: 'verified' },
+    hhttps:    { version: PROTOCOL_VERSION, status: 'verified' },
     id:        sig.id,
     role: {
       id:    sig.role,
@@ -1354,50 +1334,33 @@ app.get('/hhttps/s/:slug', async (req, res) => {
     verifyCount: sig.verify_count + 1   // include this call
   };
 
-  // Revocation check
-  if (sig.revoked_at) {
-    out.hhttps.status = 'revoked';
-    out.revokedAt     = sig.revoked_at;
-    out.revokeReason  = sig.revoke_reason;
+  // AP1-45 (#168): one shared status ladder (see evaluateSignature).
+  const verdict = evaluateSignature(sig, {
+    reqDomain,
+    textPreviewB64: req.query.textPreview || null
+  });
+  out.hhttps.status = verdict.status;
+
+  if (verdict.status === 'revoked') {
+    out.revokedAt    = verdict.revokedAt;
+    out.revokeReason = verdict.revokeReason;
     return sendJson(req, res, out, {
       title: 'Signature revoked',
       subtitle: 'This signature was revoked by the signer.'
     });
   }
 
-  // Domain binding check
-  if (sig.binding_type === 'web' && reqDomain && sig.bound_domain &&
-      reqDomain !== sig.bound_domain) {
-    out.hhttps.status      = 'wrong-domain';
-    out.hhttps.expected    = sig.bound_domain;
-    out.hhttps.observed    = reqDomain;
-    out.warning            = `This signature was issued for ${sig.bound_domain} but used on ${reqDomain}. Possible theft.`;
+  if (verdict.status === 'wrong-domain') {
+    out.hhttps.expected = verdict.expected;
+    out.hhttps.observed = verdict.observed;
+    out.warning         = verdict.warning;
     return sendJson(req, res, out, {
       title: 'Wrong domain',
       subtitle: out.warning
     });
   }
 
-  // Text-tampering check — ONLY for `document` binding (Beta mode).
-  // Alpha mode (web binding) is by design an identity stamp, not a text seal:
-  // the user signs "as themselves on this domain"; edits to the surrounding
-  // text are permitted (typo fixes, additions, etc.). Forcing a hash match
-  // here produces false positives because mail clients / forums normalize
-  // whitespace, decode entities, hard-wrap lines, and so on.
-  if (sig.binding_type === 'document' && req.query.textPreview) {
-    try {
-      const preview = Buffer.from(req.query.textPreview, 'base64').toString('utf8');
-      // Strict hash for document binding — every byte counts.
-      const expectedStrict = sig.text_hash_strict;
-      const actualStrict   = hashTextStrict(preview);
-      if (expectedStrict !== actualStrict) {
-        out.hhttps.status = 'text-modified';
-        out.warning       = 'The text was modified after signing.';
-      }
-    } catch (e) {
-      // Ignore preview parse errors
-    }
-  }
+  if (verdict.status === 'text-modified') out.warning = verdict.warning;
 
   return sendJson(req, res, out, {
     title: `Signature ${slug}`,
@@ -1406,16 +1369,18 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 });
 
 // Batch verify (Performance: 1 request for N slugs on a page)
-app.post('/hhttps/signatures/batch', async (req, res) => {
+// AP1-28 (#220): the batch endpoint fans a single request out over up to 100
+// rows — it carries the same per-endpoint budget as the other check routes.
+app.post('/hhttps/signatures/batch', limit.check, async (req, res) => {
   const { slugs, domain, textPreviews } = req.body || {};
   if (!Array.isArray(slugs) || slugs.length === 0) {
-    return res.status(400).json({ error: 'slugs array required' });
+    return apiError(res, 400, 'slugs_required', 'slugs array required');
   }
-  if (slugs.length > 100) {
-    return res.status(400).json({ error: 'too many slugs (max 100)' });
+  if (slugs.length > BATCH_SLUGS_MAX) {
+    return apiError(res, 400, 'too_many_slugs', 'too many slugs (max 100)');
   }
 
-  const cleanSlugs = slugs.filter(s => typeof s === 'string' && /^hp-[A-Z0-9\-]+$/i.test(s));
+  const cleanSlugs = slugs.filter(s => typeof s === 'string' && SLUG_RE.test(s));
   let sigs;
   try {
     sigs = await db.signatures.getMany(cleanSlugs);
@@ -1441,23 +1406,18 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
       status:      'verified'
     };
 
-    if (sig.revoked_at) {
-      entry.status = 'revoked';
-      entry.revokedAt = sig.revoked_at;
-    } else if (sig.binding_type === 'web' && reqDomain &&
-               sig.bound_domain && reqDomain !== sig.bound_domain) {
-      entry.status   = 'wrong-domain';
-      entry.expected = sig.bound_domain;
-      entry.observed = reqDomain;
-    } else if (sig.binding_type === 'document' && textPreviews && textPreviews[sig.id]) {
-      // Strict text check only for Beta/document bindings (see single-slug
-      // endpoint above for rationale).
-      try {
-        const preview = Buffer.from(textPreviews[sig.id], 'base64').toString('utf8');
-        if (hashTextStrict(preview) !== sig.text_hash_strict) {
-          entry.status = 'text-modified';
-        }
-      } catch (e) {}
+    // AP1-45 (#168): same ladder as /hhttps/s/:slug. The batch wire format keeps
+    // its flat `expected`/`observed` fields (clients parse them) — only the
+    // decision is shared.
+    const verdict = evaluateSignature(sig, {
+      reqDomain,
+      textPreviewB64: (textPreviews && textPreviews[sig.id]) || null
+    });
+    entry.status = verdict.status;
+    if (verdict.status === 'revoked') entry.revokedAt = verdict.revokedAt;
+    if (verdict.status === 'wrong-domain') {
+      entry.expected = verdict.expected;
+      entry.observed = verdict.observed;
     }
     out[sig.id] = entry;
   }
@@ -1469,44 +1429,48 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
 
   await db.stats.increment('signatures_verified', Object.keys(out).length).catch(() => {});
 
-  return res.json({ hhttps: { version: '0.5.0' }, results: out });
+  return res.json({ hhttps: { version: PROTOCOL_VERSION }, results: out });
 });
 
 // Revoke a signature (only by original signer)
-app.post('/hhttps/signatures/:slug/revoke', async (req, res) => {
+// AP1-28 (#220): a write endpoint gated only by the global limiter — it now
+// carries the same per-endpoint budget as the other signature routes.
+app.post('/hhttps/signatures/:slug/revoke', limit.revoke, async (req, res) => {
   const slug = (req.params.slug || '').trim();
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
-  const reason = req.body?.reason;
+  const token = extractToken(req);
+  // AP1-11 (#220): revoke_reason is VARCHAR(120) — an over-long or non-string
+  // reason used to reach the driver and surface as a bogus 401.
+  const reason = typeof req.body?.reason === 'string'
+    ? req.body.reason.slice(0, REVOKE_REASON_MAX) : null;
 
-  if (!token) return res.status(401).json({ error: 'token required' });
-  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
-    return res.status(400).json({ error: 'invalid slug' });
+  if (!token) return apiError(res, 401, 'token_required', 'token required');
+  if (!SLUG_RE.test(slug)) {
+    return apiError(res, 400, 'invalid_slug', 'invalid slug');
   }
 
   try {
     const d = await checkTokenValid(token);
-    const signerId = d.uid || d.userId || d.sub;
+    const signerId = signerIdOf(d);
+    if (!signerId) return apiError(res, 401, 'token_invalid', 'token carries no signer identity');
     const ok = await db.signatures.revoke(slug, signerId, reason);
     if (!ok) {
-      return res.status(403).json({ error: 'not authorized or already revoked' });
+      return apiError(res, 403, 'revoke_denied', 'not authorized or already revoked');
     }
     await db.stats.increment('signatures_revoked').catch(() => {});
     return res.json({
-      hhttps: { version: '0.5.0', status: 'revoked' },
+      hhttps: { version: PROTOCOL_VERSION, status: 'revoked' },
       id:     slug,
       revokedAt: new Date().toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
 // Short-link redirect: /s/:slug → /hhttps/s/:slug (HTML-friendly)
 app.get('/s/:slug', (req, res) => {
   const slug = (req.params.slug || '').trim();
-  if (!/^hp-[A-Z0-9-]+$/i.test(slug)) return res.status(400).send('Invalid slug');
+  if (!SLUG_RE.test(slug)) return res.status(400).send('Invalid slug');
   res.redirect(`/hhttps/s/${slug}`);
 });
 
