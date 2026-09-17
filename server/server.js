@@ -787,8 +787,10 @@ setInterval(async () => {
                   (r.deleted_sessions || 0) + (r.deleted_challenges || 0) +
                   (r.deleted_emails || 0) + (r.deleted_claims_cache || 0) +
                   (r.deleted_auth_codes || 0) +
-                  // AP1-34 / AP1-35 (phase-10 cleanup_expired): revoked jtis, delivery log
-                  (r.deleted_revoked || 0) + (r.deleted_webhook_deliveries || 0);
+                  // AP1-34 / AP1-35 / AP5-29 (phase-10 cleanup_expired): revoked
+                  // jtis, delivery log, never-confirmed platform drafts
+                  (r.deleted_revoked || 0) + (r.deleted_webhook_deliveries || 0) +
+                  (r.deleted_stale_clients || 0);
     if (total > 0) console.log(`[CLEANUP] removed ${total} expired records`);
   } catch (err) {
     console.error('[CLEANUP] failed:', err.message);
@@ -2469,9 +2471,15 @@ async function tryRefresh(identity){
     if (!r.ok) return null;
     const d = await r.json();
     if (!d.token) return null;
+    // AP3-18 (#116): /hhttps/token/refresh rotates. Without adopting the new
+    // refresh token here, the consent page would write the INVALIDATED one back
+    // into the shared localStorage['hhttps_identity'] and break the sign-in
+    // page's silent refresh too.
     const merged = Object.assign({}, identity, {
       token: d.token,
-      expiresAt: d.expiresAt || identity.expiresAt || null
+      expiresAt: d.expiresAt || identity.expiresAt || null,
+      refreshToken: d.refreshToken || identity.refreshToken,
+      refreshExpiresAt: d.refreshExpiresAt || identity.refreshExpiresAt || null
     });
     try { localStorage.setItem('hhttps_identity', JSON.stringify(merged)); } catch(e){}
     return d.token;
