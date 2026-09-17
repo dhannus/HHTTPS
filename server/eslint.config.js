@@ -8,7 +8,6 @@ export default [
       'node_modules/**',
       'keys/**',                    // runtime-generated key material, not source
       'public/**',                  // static assets with inline browser JS, not part of the lint gate
-      'privacy-pass/public/lib/**', // vendored minified voprf bundle (no-prototype-builtins etc.), kept as-is
     ],
   },
   js.configs.recommended,

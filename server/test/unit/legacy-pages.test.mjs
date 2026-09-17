@@ -1,25 +1,19 @@
-// #27: the two legacy pages that still talked to the pre-email-gate WebAuthn
-// API — the Privacy Pass wallet (privacy-pass/public/wallet.html, served under
-// /privacy-pass/) and the static landing page (../sites/hhttps.html) — must use
-// the email-first passkey flow:
+// #27: the static landing page (../sites/hhttps.html) still talked to the
+// pre-email-gate WebAuthn API and must use the email-first passkey flow
+// (the Privacy Pass wallet was removed in the 2026-09 review, Welle 0):
 //   session/start → email/send → email/confirm-code → register/start {sessionId}
 //   → register/finish {userId, response, sessionId} → auth/start {userId}
 //   → auth/finish {sessionId, response, priorSessionId}.
 // There is no DOM here: the inline scripts are inspected with regexes and
-// syntax-checked (the wallet script is an ES module, so it goes through
-// `node --check --input-type=module`; the landing page script through
-// `new Function`). The browser behaviour of the wallet is covered by
-// test/e2e/wallet.e2e.test.mjs.
+// syntax-checked (through `new Function`).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PAGES = {
-  wallet:  readFileSync(join(here, '../../privacy-pass/public/wallet.html'), 'utf8'),
   landing: readFileSync(join(here, '../../../sites/hhttps.html'), 'utf8'),
 };
 
@@ -119,59 +113,6 @@ for (const [name, html] of Object.entries(PAGES)) {
     assert.match(js, /InvalidStateError/, 'InvalidStateError from startRegistration is handled');
   });
 }
-
-// ── wallet specifics ──
-test('#27 wallet: doLogin, registerNewCredential and addCredential await the session + email helpers before register/start', () => {
-  const js = scriptText(PAGES.wallet);
-  assert.match(js, /async function ensureHhttpsSession\s*\(/, 'ensureHhttpsSession() is defined');
-  assert.match(js, /async function ensureEmailVerified\s*\(/, 'ensureEmailVerified() is defined');
-  assert.ok(js.includes("'/hhttps/email/status'"), 'ensureEmailVerified checks /hhttps/email/status');
-  for (const name of ['doLogin', 'registerNewCredential', 'addCredential']) {
-    const body = fnBody(js, name);
-    // register/start is issued either inline or through the registerStart()
-    // helper (which carries the 403 email_verification_required retry).
-    const reg = Math.max(body.indexOf('/hhttps/webauthn/register/start'), body.indexOf('registerStart()'), body.indexOf('registerPasskey()'));
-    assert.ok(reg >= 0, `${name} calls register/start (directly, via registerStart() or via registerPasskey())`);
-    const s = body.indexOf('await ensureHhttpsSession()');
-    const e = body.indexOf('await ensureEmailVerified()');
-    assert.ok(s >= 0 && s < reg, `${name} awaits ensureHhttpsSession() before register/start`);
-    assert.ok(e >= 0 && e < reg, `${name} awaits ensureEmailVerified() before register/start`);
-  }
-  const login = fnBody(js, 'doLogin');
-  const rs = fnBody(js, 'registerStart');
-  assert.match(rs, /email_verification_required/, 'registerStart() retries through ensureEmailVerified() on the 403 gate');
-  assert.match(rs, /await ensureEmailVerified\(\)/, 'registerStart() awaits ensureEmailVerified() on the gate');
-  assert.match(login, /priorSessionId\s*:\s*sessionId/, 'doLogin merges the email session on auth/finish');
-});
-
-test('#27 wallet: the auth card has the inline email dialog and the i18n keys exist in de and en', () => {
-  const html = PAGES.wallet;
-  const start = html.indexOf('id="card-auth"');
-  const end = html.indexOf('id="card-creds"', start);
-  assert.ok(start > 0 && end > start, 'auth card located');
-  const card = html.slice(start, end);
-  for (const id of ['auth-email-area', 'auth-email-input', 'btn-auth-email-send', 'auth-email-code', 'btn-auth-email-confirm']) {
-    assert.match(card, new RegExp(`\\bid="${id}"`), `#${id} is inside #card-auth`);
-  }
-  const code = card.match(/<input\b[^>]*\bid="auth-email-code"[^>]*>/)[0];
-  const ml = code.match(/\bmaxlength="(\d+)"/);
-  if (ml) assert.ok(Number(ml[1]) >= 8, '#auth-email-code accepts "482 913" (maxlength >= 8)');
-
-  for (const lang of ['de', 'en']) {
-    const m = html.match(new RegExp(`\\n\\s*${lang}:\\s*\\{([\\s\\S]*?)\\n\\s*\\}`));
-    assert.ok(m, `T.${lang} block exists`);
-    for (const key of ['js.emailFirst', 'js.emailSend', 'js.emailCode', 'js.emailConfirm', 'js.emailOk']) {
-      assert.ok(m[1].includes(`"${key}":`), `T.${lang} has "${key}"`);
-    }
-  }
-});
-
-test('#27 wallet: inline module script parses (node --check --input-type=module)', () => {
-  const mod = inlineScripts(PAGES.wallet).find((s) => /type="module"/.test(s.attrs));
-  assert.ok(mod, 'wallet has an inline module script');
-  const r = spawnSync(process.execPath, ['--check', '--input-type=module'], { input: mod.js, encoding: 'utf8' });
-  assert.equal(r.status, 0, `module script compiles:\n${r.stderr}`);
-});
 
 // ── landing page specifics ──
 test('#27 landing: email step comes first; doRegister/doAuth use the session flow', () => {

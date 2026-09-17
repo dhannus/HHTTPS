@@ -9,13 +9,65 @@
  */
 
 import crypto from 'crypto';
+import dns from 'node:dns/promises';
+import net from 'node:net';
 import { webhooks as dbWebhooks } from './db.js';
 
 const VALID_EVENTS = ['token.issued', 'token.revoked', 'role.declared', '*'];
 
+// ─── SSRF guard (AP1-21, Review 2026-09) ──────────────────────────────────────
+// Webhook targets are attacker-supplied URLs that the server POSTs to. Only
+// https (http outside production), no credentials, no loopback / private /
+// link-local / ULA / metadata addresses — checked on the resolved addresses,
+// and redirects are not followed (fetch `redirect: 'error'`).
+// WEBHOOK_ALLOW_PRIVATE=1 lifts the address check for local integration tests.
+function isPrivateAddress(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127
+      || (a === 100 && b >= 64 && b <= 127)          // CGNAT
+      || (a === 169 && b === 254)                    // link-local / cloud metadata
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || a >= 224;                                   // multicast / reserved
+  }
+  if (net.isIPv6(ip)) {
+    const v = ip.toLowerCase();
+    if (v === '::' || v === '::1') return true;
+    if (v.startsWith('::ffff:')) return isPrivateAddress(v.slice(7));
+    return v.startsWith('fc') || v.startsWith('fd')  // ULA
+      || v.startsWith('fe8') || v.startsWith('fe9') || v.startsWith('fea') || v.startsWith('feb') // link-local
+      || v.startsWith('ff');                          // multicast
+  }
+  return true;
+}
+
+export async function assertSafeWebhookUrl(url, env = process.env) {
+  let u;
+  try { u = new URL(url); } catch { throw new Error('Invalid webhook URL.'); }
+  const allowHttp = env.NODE_ENV !== 'production';
+  if (u.protocol !== 'https:' && !(allowHttp && u.protocol === 'http:'))
+    throw new Error('Webhook URL must use https.');
+  if (u.username || u.password) throw new Error('Webhook URL must not contain credentials.');
+  if (env.WEBHOOK_ALLOW_PRIVATE === '1') return u;
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal'))
+    throw new Error('Webhook URL must point to a public host.');
+  let addrs;
+  if (net.isIP(host)) addrs = [{ address: host }];
+  else {
+    try { addrs = await dns.lookup(host, { all: true }); }
+    catch { throw new Error('Webhook host does not resolve.'); }
+  }
+  if (!addrs.length || addrs.some(a => isPrivateAddress(a.address)))
+    throw new Error('Webhook URL must point to a public host.');
+  return u;
+}
+
 // ─── Register ─────────────────────────────────────────────────────────────────
-export async function registerWebhook({ url, events, secret }) {
-  try { new URL(url); } catch { throw new Error('Invalid webhook URL.'); }
+export async function registerWebhook({ url, events, secret, ownerUserId }) {
+  if (!ownerUserId) throw new Error('Webhook owner is required.');
+  await assertSafeWebhookUrl(url);
 
   const invalid = events.find(e => !VALID_EVENTS.includes(e));
   if (invalid) throw new Error(`Unbekanntes Event: ${invalid}`);
@@ -27,19 +79,20 @@ export async function registerWebhook({ url, events, secret }) {
   const id        = crypto.randomBytes(12).toString('hex');
   const secretVal = secret || crypto.randomBytes(32).toString('hex');
 
-  await dbWebhooks.create({ id, url, events: expanded, secret: secretVal });
+  await dbWebhooks.create({ id, url, events: expanded, secret: secretVal, ownerUserId });
 
+  // The secret is returned exactly once — here. list() never exposes it (AP1-22).
   return { id, url, events: expanded, secret: secretVal };
 }
 
-// ─── Deregister ───────────────────────────────────────────────────────────────
-export async function removeWebhook(id) {
-  return await dbWebhooks.delete(id);
+// ─── Deregister (own webhooks only, AP5-16) ───────────────────────────────────
+export async function removeWebhook(id, ownerUserId) {
+  return await dbWebhooks.delete(id, ownerUserId);
 }
 
-// ─── List ─────────────────────────────────────────────────────────────────────
-export async function listWebhooks() {
-  return await dbWebhooks.list();
+// ─── List (own webhooks only, without secrets) ────────────────────────────────
+export async function listWebhooks(ownerUserId) {
+  return await dbWebhooks.list(ownerUserId);
 }
 
 // ─── Fire event ───────────────────────────────────────────────────────────────
@@ -73,6 +126,7 @@ async function deliverWithRetry(wh, body, event, attempt = 1) {
         'User-Agent':           'HHTTPS-Webhook/4.1'
       },
       body,
+      redirect: 'error',                 // AP1-21: never follow to an internal target
       signal: AbortSignal.timeout(8000)
     });
 

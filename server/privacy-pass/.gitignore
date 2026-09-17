@@ -1,3 +1,0 @@
-# Never commit Privacy Pass private keys
-*.bin
-keys/

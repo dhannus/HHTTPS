@@ -48,7 +48,7 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
+import { normalizeEmail, emailAnchorHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
 import { validateAuthorizeParams, stateForErrorRedirect } from './oauth-params.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
@@ -58,9 +58,6 @@ import {
 } from './roles.taxonomy.js';
 import { issueIamhmnCard } from './eudi-verifier/backend-client.js';
 
-// Privacy Pass module (additive, RFC 9576-9578)
-import { initPrivacyPass, privacyPassRouter, privacyPassWellKnownRouter }
-  from './privacy-pass/index.js';
 import { createEudiVerifierRouter } from './eudi-verifier/index.js';
 
 // External provider verification (GitHub for now; extends to ORCID, LinkedIn)
@@ -517,10 +514,6 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(join(__dirname, 'public')));
-
-// Privacy Pass routes (additive, see privacy-pass/index.js)
-app.use(privacyPassWellKnownRouter);
-app.use('/privacy-pass', privacyPassRouter);
 
 // EUDI verification orchestrator (age + eID identity, additive, see eudi-verifier/index.js).
 // setIdentityCookie is injected so the browser-facing /eudi/*/status handlers can
@@ -2850,7 +2843,9 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
   // AK-2: case/whitespace variants of the same address are the same anchor.
   const email = normalizeEmail(rawEmail);
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  // AP3-13: strict syntax — no comments/quotes/non-ASCII that the mail
+  // transport and classifyDomain would read differently.
+  if (!isValidEmail(email))
     return res.status(400).json({ error: 'Invalid email address.' });
 
   const sentCount = await db.sessions.incrementEmailsSent(sessionId);
@@ -3886,27 +3881,41 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 
 // ─── Webhooks ────────────────────────────────────────────────────────────────
 
+// AP5-16 / AP1-21 / AP1-22 (Review 2026-09): webhooks belong to the authenticated
+// user (HHTTPS token), the list never contains the HMAC secret, delete is
+// owner-scoped, and the target URL passes the SSRF guard in webhooks.js.
 app.get('/hhttps/webhooks', limit.webhooks, async (req, res) => {
-  res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks() });
+  const u = await requireUser(req, res); if (!u) return;
+  try {
+    res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks(u.userId) });
+  } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
 });
 
 app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
-  const { url, events = ['*'], secret } = req.body;
-  if (!url) return res.status(400).json({ error: 'url is required.' });
+  const u = await requireUser(req, res); if (!u) return;
+  const { url, events = ['*'], secret } = req.body || {};
+  if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url is required.' });
+  if (!Array.isArray(events) || !events.every(e => typeof e === 'string'))
+    return res.status(400).json({ error: 'events must be an array of strings.' });
+  if (secret !== undefined && (typeof secret !== 'string' || secret.length < 16 || secret.length > 256))
+    return res.status(400).json({ error: 'secret must be a string of 16-256 characters.' });
   try {
-    const wh = await registerWebhook({ url, events, secret });
+    const wh = await registerWebhook({ url, events, secret, ownerUserId: u.userId });
     res.status(201).json({
       hhttps: { version: '0.5.0' },
       webhook: { id: wh.id, url: wh.url, events: wh.events, secret: wh.secret },
-      note: 'Speichere das Secret — Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
+      note: 'Speichere das Secret — es wird nur dieses eine Mal ausgegeben. Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
     });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.delete('/hhttps/webhooks/:id', limit.webhooks, async (req, res) => {
-  const ok = await removeWebhook(req.params.id);
-  ok ? res.json({ deleted: true, id: req.params.id })
-     : res.status(404).json({ error: 'Webhook not found.' });
+  const u = await requireUser(req, res); if (!u) return;
+  try {
+    const ok = await removeWebhook(req.params.id, u.userId);
+    ok ? res.json({ deleted: true, id: req.params.id })
+       : res.status(404).json({ error: 'Webhook not found.' });
+  } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
 });
 
 app.post('/hhttps/webhooks/verify', (req, res) => {
@@ -4143,7 +4152,7 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
         message: `Not a valid redirect URI: ${uri}` });
     }
   }
-  if (!contact_email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact_email)) {
+  if (!isValidEmail(normalizeEmail(contact_email))) {
     return res.status(400).json({ error: 'invalid_email',
       message: 'Valid contact_email required' });
   }
@@ -4330,7 +4339,7 @@ app.patch('/hhttps/developers/clients/:id', async (req, res) => {
 
   // Email change → reset verification
   if (contact_email !== undefined && contact_email !== client.contact_email) {
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact_email)) {
+    if (!isValidEmail(normalizeEmail(contact_email))) {
       return res.status(400).json({ error: 'invalid_email' });
     }
     const newMatch = emailMatchesPlatform(contact_email, client.homepage_url);
@@ -4779,9 +4788,6 @@ async function main() {
 
   // 1. Init keys
   loadOrCreateKeys();
-
-  // 1b. Init Privacy Pass module (loads VOPRF keys + runs migrations)
-  await initPrivacyPass();
 
   // 1c. Start cleanup of expired pending OAuth states (GitHub verify)
   startGithubVerifyCleanup();

@@ -66,10 +66,10 @@ const DOMAIN_RULES = {
     'bmi.bund.de','bmj.bund.de','bmbf.bund.de','bmwk.bund.de',
     'bka.bund.de','verfassungsschutz.bund.de'
   ],
+  // Exact domains (with sub-domains) of universities …
   university: [
-    '.uni-','.tu-','.lmu.de','.rwth-aachen.de','.fu-berlin.de',
-    '.hu-berlin.de','.kit.edu','.tum.de','.fau.de','.uni-',
-    '.hs-','.fh-','hochschule-'
+    'lmu.de','rwth-aachen.de','fu-berlin.de','hu-berlin.de',
+    'kit.edu','tum.de','fau.de'
   ],
   press: [
     'spiegel.de','zeit.de','sueddeutsche.de','faz.net','welt.de',
@@ -82,6 +82,16 @@ const DOMAIN_RULES = {
     'bsd-synchron.de','gema.de','vgwort.de','vds-online.de'
   ]
 };
+// … and the German naming scheme `uni-x.de`, `tu-x.de`, `hs-x.de`, `fh-x.de`,
+// `hochschule-x.de`: the prefix must start the REGISTRABLE label directly
+// under .de/.edu (AP3-02: `a.uni-b.evil.com` and `hochschule-x.evil.com` are
+// not universities).
+const UNIVERSITY_LABEL_RE = /(^|\.)(uni|tu|hs|fh|hochschule)-[a-z0-9-]+\.(de|edu)$/;
+
+/** AP3-02: `domain` is `d` itself or a sub-domain of `d` — never a longer label (`notbundestag.de`). */
+function domainMatches(domain, d) {
+  return domain === d || domain.endsWith('.' + d);
+}
 
 // Classify the user's email domain. The returned `trustBonus` is the **bonus
 // added on top** of the email-verified baseline (30), NOT an absolute score.
@@ -91,24 +101,24 @@ const DOMAIN_RULES = {
 //
 // Bonus values:
 //   generic     → +0   (free webmail like gmail, gmx)
-//   university  → +15  (.uni-*, .edu, hochschule-*)
+//   university  → +15  (uni-*.de, tu-*.de, hs-*.de, fh-*.de, hochschule-*.de, listed universities)
 //   press       → +15  (verlage, redaktionen)
 //   creative    → +15  (associations like VDS, GEMA, BFFS)
 //   official    → +40  (bund.de, bundestag.de, official authorities)
 //
 export function classifyDomain(email) {
-  const domain = email.split('@')[1]?.toLowerCase() || '';
+  const domain = String(email).split('@')[1]?.toLowerCase() || '';
 
-  if (DOMAIN_RULES.official.some(d => domain.endsWith(d))) {
+  if (DOMAIN_RULES.official.some(d => domainMatches(domain, d))) {
     return { level: 'official-email', trustBonus: 40, category: 'official', domain };
   }
-  if (DOMAIN_RULES.university.some(d => domain.includes(d))) {
+  if (UNIVERSITY_LABEL_RE.test(domain) || DOMAIN_RULES.university.some(d => domainMatches(domain, d))) {
     return { level: 'school-email', trustBonus: 15, category: 'university', domain };
   }
-  if (DOMAIN_RULES.press.some(d => domain.endsWith(d))) {
+  if (DOMAIN_RULES.press.some(d => domainMatches(domain, d))) {
     return { level: 'email-verified', trustBonus: 15, category: 'press', domain };
   }
-  if (DOMAIN_RULES.creative.some(d => domain.endsWith(d))) {
+  if (DOMAIN_RULES.creative.some(d => domainMatches(domain, d))) {
     return { level: 'email-verified', trustBonus: 15, category: 'creative', domain };
   }
   return { level: 'email-verified', trustBonus: 0, category: 'generic', domain };
@@ -815,71 +825,4 @@ function escapeHtml(s) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PRIVACY PASS: anonymous wallet email verification
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Send the Privacy Pass wallet's email verification link.
- *
- * Separate code path from sendVerificationEmail (the legacy HHTTPS role
- * declaration flow) because the verify link points to a different endpoint
- * (/privacy-pass/email/verify), the wallet has its own role concept and trust
- * model, and the body is shorter and wallet-specific.
- *
- * Hash-only: the email plaintext is NEVER stored. The caller stores only the
- * SHA-256 hash. We use the plaintext here just for sending and then discard it.
- *
- * @param {object} opts
- * @param {string} opts.to     Recipient email
- * @param {string} opts.role   Role identifier (e.g. 'journalist')
- * @param {string} opts.link   Absolute URL of the verification link
- * @returns {Promise<{sent: boolean, devMode: boolean}>}
- */
-export async function sendPrivacyPassVerification({ to, role, link }) {
-  const label = roleDisplay(role);
-
-  const bodyHtml = biHtml(
-    `<p>You requested email verification for your <strong>Privacy Pass wallet</strong>.</p>
-    <div class="info-box">
-      <div class="ib-key">Role</div>
-      <div class="ib-val">${label}</div>
-    </div>
-    <p>Click the button to confirm your email address. Afterwards you can fetch anonymous tokens in the wallet.</p>
-    <p style="color:#a0b8d8;font-size:12px;margin-top:18px">The link is valid for <strong>15 minutes</strong>.</p>`,
-    `<p>Du hast eine E-Mail-Verifikation für deine <strong>Privacy Pass Wallet</strong> angefordert.</p>
-    <p>Klicke auf den Button, um deine E-Mail-Adresse zu bestätigen. Danach kannst du anonyme Tokens in der Wallet abrufen.</p>
-    <p style="color:#a0b8d8;font-size:12px;margin-top:18px">Der Link ist <strong>15 Minuten</strong> gültig.</p>`
-  );
-
-  const html = emailShell({
-    title:    'Privacy Pass — email verification',
-    subtitle: 'HHTTPS · ANONYMOUS WALLET',
-    bodyHtml,
-    ctaUrl:   link,
-    ctaLabel: '✓ Confirm email / E-Mail bestätigen',
-    footerNote: '<strong style="color:#a0b8d8">Privacy:</strong> your email address is stored only as a hash, never in plaintext. The anonymous tokens issued later cannot be traced back to you. — <strong style="color:#a0b8d8">Datenschutz:</strong> Deine E-Mail-Adresse wird nur als Hash gespeichert, niemals im Klartext. Die später ausgestellten anonymen Tokens lassen sich nicht zu dir zurückverfolgen.'
-  });
-
-  const text = biText(
-    `HHTTPS Privacy Pass — email verification\n\nRole: ${label}\n\nConfirm your email address:\n${link}\n\nThe link is valid for 15 minutes.\n\n— HHTTPS · hhttps.org`,
-    `HHTTPS Privacy Pass — E-Mail-Verifikation\n\nRolle: ${label}\n\nBestätige deine E-Mail-Adresse:\n${link}\n\nDer Link ist 15 Minuten gültig.\n\n— HHTTPS · hhttps.org`
-  );
-
-  const transporter = createTransport();
-  if (!transporter) {
-    devLog('Privacy Pass verification', to, link, { role });
-    return { sent: false, devMode: true };
-  }
-
-  await transporter.sendMail(buildMailOptions({
-    to,
-    subject: `[HHTTPS Privacy Pass] Email verification / E-Mail-Verifikation — ${roleLabel(role,'en')}`,
-    text,
-    html,
-  }));
-
-  return { sent: true, devMode: false };
 }

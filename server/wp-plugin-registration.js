@@ -27,6 +27,7 @@
 // (contact e-mail, domain, tokens). No end-user data is involved.
 
 import crypto from 'crypto';
+import { isValidEmail, normalizeEmail } from './identity.js';
 import { Resolver } from 'dns/promises';
 
 // ── small local helpers (server.js keeps its own copies; duplicated here so
@@ -129,7 +130,7 @@ export function mountWpPluginRegistration(app, deps) {
       return res.status(400).json({ error: 'redirect_apex_mismatch',
         message: 'redirect_uri must be on the same domain as homepage_url' });
     }
-    if (!contact_email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact_email)) {
+    if (!isValidEmail(normalizeEmail(contact_email))) {
       return res.status(400).json({ error: 'invalid_email',
         message: 'Valid contact_email required' });
     }

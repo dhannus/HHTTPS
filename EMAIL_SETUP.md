@@ -106,7 +106,7 @@ POST /hhttps/email/send
   → versendet Verifikations-Mail (15 Min Gültigkeit)
 
 GET  /hhttps/email/verify?token=<raw>&session=<sid>
-  → bestätigt Token, upgradet Session, redirect auf /email-verify.html
+  → bestätigt Token, upgradet Session, redirect auf /?email_verify=…
 
 POST /hhttps/email/status
   body: { sessionId }
