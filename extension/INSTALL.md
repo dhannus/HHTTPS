@@ -11,7 +11,7 @@ Deine HHTTPS-Identität als Browser-Brieftasche. Verifiziert dich automatisch be
 | **Status-Badge** | Grüner Haken auf dem Extension-Icon in der Toolbar zeigt: du bist verifiziert |
 | **Identitäts-Tooltip** | Hover über das Icon zeigt deine Rolle + Trust-Score |
 | **Mehrere Rollen** | Wenn du dich z.B. als Bürger UND Entwickler registriert hast, kannst du im Popup zwischen ihnen wechseln |
-| **Signatur-Snippet** | Ein-Klick-Kopie deiner Identität als Textsignatur — kannst du in Kommentare einfügen |
+| **Signieren per Rechtsklick** | Kontextmenü in jedem Textfeld fügt eine domain-gebundene Signatur (`#hhttps:s:…`) ein — nie den Token selbst |
 | **Logout + Revoke** | Token wird beim Server widerrufen, aus dem Browser gelöscht |
 
 ## So funktioniert die Auto-Magie
@@ -69,7 +69,7 @@ Keine Telemetrie. Keine Analytics. Kein Tracking.
 
 - **Status anschauen**: Klick aufs Icon zeigt deine Rolle, Trust-Score, Token-Verbleib
 - **Token kopieren**: Button "⎘ Token" — für API-Tests in curl/Postman
-- **Snippet kopieren**: Button "📋 In Zwischenablage kopieren" — füge deine Identität in einen Forum-Kommentar ein. Andere mit Extension werden in einer späteren Version automatisch ein verifiziertes Siegel sehen (Phase 2).
+- **Signieren**: Rechtsklick in ein Textfeld → HHTTPS-Kontextmenü. Es wird eine kurze, domain-gebundene Signatur eingefügt, nie der Bearer-Token (der gehört nur in API-Tests, nicht in öffentliche Beiträge).
 - **Refresh manuell**: Button "↻ Refresh" — holt neuen Token vom Server
 - **Logout**: Button "↪ Logout" — Token wird beim Server widerrufen, lokal gelöscht
 
@@ -82,7 +82,7 @@ Wenn du dich als "Entwickler" eingeloggt hast und später nochmal als "Bürger" 
 | Phase | Status | Was |
 |---|---|---|
 | Phase 1 (du bist hier) | ✓ Fertig | Identitäts-Brieftasche, Auto-Capture, Auto-Refresh, Rollen-Switch |
-| Phase 2 | Geplant | Inline-Signaturen auf jeder Seite: füge dein Snippet ein, andere mit Extension sehen ein schwebendes Siegel |
+| Phase 2 | Geplant | Inline-Signaturen auf jeder Seite: signiere per Kontextmenü, andere mit Extension sehen ein schwebendes Siegel |
 | Phase 3 | Geplant | OAuth-Flow: Drittseiten können "Mit HHTTPS einloggen"-Buttons bauen |
 | Phase 4 | Geplant | Demo-Plattform `forum.hhttps.org` wo HHTTPS-Login ausprobiert werden kann |
 

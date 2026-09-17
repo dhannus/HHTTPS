@@ -1495,6 +1495,12 @@ async function doAuth() {
 }
 
 // ── Role Declaration ───────────────────────────────────────────────────────
+// Single implementation (AP8-01 / AP8-41): the former v2 override that replaced
+// this function further down is gone. Since v0.5 the server answers
+// /hhttps/role/declare with `role: null` (roles arrive via EUDI EAA only) — the
+// values the UI needs live in d.hhttps (token, trustScore, verifiedMethods) and
+// d.verification (emailVerified, methods). `d.role` is therefore only ever read
+// with optional chaining.
 async function doDeclarRole() {
   if (!selRole || !sessionId) return;
   const btn = document.getElementById('btnDeclare');
@@ -1504,10 +1510,8 @@ async function doDeclarRole() {
   // Gather vData from input if present
   const inp = document.getElementById('vfInput');
   if (inp) {
-    const key = selVMethod !== 'self-declared'
-      ? Object.values(VMETHOD_LABELS).find(v=>v?.field)?.field?.key
-      : null;
-    if (key) vData[key] = inp.value;
+    const vm = VMETHOD_LABELS[selVMethod];
+    if (vm?.field) vData[vm.field.key] = inp.value;
   }
 
   try {
@@ -1524,6 +1528,12 @@ async function doDeclarRole() {
 
     hhttpsToken = d.hhttps.token;
     const rl = ROLES_LOCAL[selRole];
+    const verifiedMethods = d.hhttps?.verifiedMethods || [];
+    const emailVerified   = d.verification?.emailVerified ?? verifiedMethods.includes('email');
+    const level           = d.role?.level ?? selVMethod;
+    const methodLabels    = (d.verification?.methods || []).map(m => m.label).filter(Boolean);
+    const levelLabel      = d.role?.levelLabel
+                         ?? (methodLabels.length ? methodLabels.join(' · ') : (VMETHOD_LABELS[level]?.l || level));
 
     // Publish identity to the browser extension + other tabs
     publishIdentity({
@@ -1532,8 +1542,8 @@ async function doDeclarRole() {
       role:             selRole,
       roleLabel:        rl?.label || selRole,
       roleIcon:         rl?.icon || '🧑',
-      roleLevel:        d.role?.level,
-      levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
+      roleLevel:        level,
+      levelLabel:       levelLabel,
       trustScore:       d.hhttps.trustScore,
       method:           'webauthn-passkey',
       expiresAt:        d.hhttps.expiresAt,
@@ -1546,13 +1556,15 @@ async function doDeclarRole() {
       `<span style="color:var(--red)">${parts[0]}</span>.` +
       `<span style="color:var(--cyan)">${parts[1]}</span>.` +
       `<span style="color:var(--green)">${parts[2]}</span>`;
-    document.getElementById('tkBadge').textContent = `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
+    document.getElementById('tkBadge').textContent = emailVerified
+      ? `✓ ${rl.icon} ${rl.label} · E-Mail ✉ verifiziert`
+      : `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
     document.getElementById('tcH').textContent = 'true ✓';
     document.getElementById('tcR').textContent = rl.icon+' '+selRole;
     document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
-    document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
+    document.getElementById('tcL').textContent = levelLabel;
 
-    updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
+    updateHeaders(true,'human','verified',selRole,level,d.hhttps.trustScore,hhttpsToken);
     document.getElementById('btnCheck').disabled = false;
     live('on',tr('live.tokenActive'));
     msg('✓ '+d.message,'s');
@@ -1831,67 +1843,6 @@ window.setStep = function(n) {
     pollInterval = setInterval(() => { if (sessionId) checkEmailStatus(); }, 5000);
   } else {
     if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-  }
-};
-
-// Override doDeclarRole to use v2 endpoint (with email support)
-const origDeclare = doDeclarRole;
-window.doDeclarRole = async function() {
-  const btn = document.getElementById('btnDeclare');
-  btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Token ausstellen…';
-  live('pend',tr('live.issuing'));
-  const inp = document.getElementById('vfInput');
-  if (inp) {
-    const vm = VMETHOD_LABELS[selVMethod];
-    if (vm?.field) vData[vm.field.key] = inp.value;
-  }
-  try {
-    const r = await fetch('/hhttps/role/declare', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ sessionId, role: selRole,
-        verificationMethod: selVMethod, verificationData: vData })
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
-    hhttpsToken = d.hhttps.token;
-    const rl = ROLES_LOCAL[selRole];
-
-    // Publish identity to the browser extension + other tabs
-    publishIdentity({
-      token:            d.hhttps.token,
-      refreshToken:     d.hhttps.refreshToken,
-      role:             selRole,
-      roleLabel:        rl?.label || selRole,
-      roleIcon:         rl?.icon || '🧑',
-      roleLevel:        d.role?.level,
-      levelLabel:       d.role?.levelLabel || VMETHOD_LABELS[d.role?.level]?.l,
-      trustScore:       d.hhttps.trustScore,
-      method:           'webauthn-passkey',
-      expiresAt:        d.hhttps.expiresAt,
-      refreshExpiresAt: d.hhttps.refreshExpiresAt
-    });
-
-    const parts = hhttpsToken.split('.');
-    document.getElementById('tkRaw').innerHTML =
-      `<span style="color:var(--red)">${parts[0]}</span>.` +
-      `<span style="color:var(--cyan)">${parts[1]}</span>.` +
-      `<span style="color:var(--green)">${parts[2]}</span>`;
-    const badge = d.role.emailVerified ? `✓ ${rl.icon} ${rl.label} · E-Mail ✉ verifiziert` : `✓ ${rl.icon} ${rl.label} · HHTTPS-Token`;
-    document.getElementById('tkBadge').textContent = badge;
-    document.getElementById('tcH').textContent = 'true ✓';
-    document.getElementById('tcR').textContent = rl.icon+' '+selRole;
-    document.getElementById('tcT').textContent = d.hhttps.trustScore+'/100';
-    document.getElementById('tcL').textContent = VMETHOD_LABELS[d.role.level]?.l || d.role.level;
-    updateHeaders(true,'human','verified',selRole,d.role.level,d.hhttps.trustScore,hhttpsToken);
-    document.getElementById('btnCheck').disabled = false;
-    live('on',tr('live.tokenActive'));
-    msg('✓ '+d.message,'s');
-    setStep(4);
-  } catch(e) {
-    msg('Fehler: '+e.message,'e');
-    btn.disabled = false;
-    btn.innerHTML = tr('btn.declare');
-    live('err',tr('live.error'));
   }
 };
 

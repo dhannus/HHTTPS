@@ -142,14 +142,12 @@ else
   ok ".env unverändert"
 fi
 
+# AP6-01: apply the whole migration chain (ledger in schema_migrations), not
+# just schema.sql — a fresh DB is otherwise missing authorization_codes & Co.
 ENV_PW=$(grep ^DB_PASSWORD "${SERVER_DIR}/.env" | cut -d= -f2)
-if PGPASSWORD="${ENV_PW}" psql -h localhost -U "${DB_USER}" -d "${DB_NAME}" \
-    -f "${SERVER_DIR}/sql/schema.sql" -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
-  ok "Schema angewendet"
-else
-  sudo -u postgres psql -d "${DB_NAME}" -f "${SERVER_DIR}/sql/schema.sql" -v ON_ERROR_STOP=1 >/dev/null
-  ok "Schema angewendet (via postgres-User)"
-fi
+(cd "${SERVER_DIR}" && \
+  DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${ENV_PW}" \
+  node scripts/migrate.js) && ok "Migrationen angewendet" || { err "Migration fehlgeschlagen"; exit 1; }
 
 cd "${SERVER_DIR}"
 npm install --production --silent 2>&1 | tail -2

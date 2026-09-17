@@ -69,17 +69,17 @@ sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_
 sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL ON SCHEMA public TO ${DB_USER};" >/dev/null
 ok "Berechtigungen erteilt"
 
-# 6. Apply schema
-SCHEMA_FILE="${INSTALL_DIR}/sql/schema.sql"
-if [[ ! -f "${SCHEMA_FILE}" ]]; then
-  err "Schema-Datei nicht gefunden: ${SCHEMA_FILE}"
+# 6. Apply the full migration chain (AP6-01: schema.sql alone leaves the DB
+#    without authorization_codes & Co. and the server refuses to boot).
+#    scripts/migrate.js keeps a ledger (schema_migrations) and is idempotent.
+if [[ ! -f "${INSTALL_DIR}/scripts/migrate.js" ]]; then
+  err "Migrationsläufer nicht gefunden: ${INSTALL_DIR}/scripts/migrate.js"
   exit 1
 fi
-
-PGPASSWORD="${DB_PASSWORD:-}" psql -h localhost -U "${DB_USER}" -d "${DB_NAME}" \
-  -f "${SCHEMA_FILE}" -v ON_ERROR_STOP=1 >/dev/null 2>&1 || \
-  sudo -u postgres psql -d "${DB_NAME}" -f "${SCHEMA_FILE}" -v ON_ERROR_STOP=1 >/dev/null
-ok "Schema angewendet (Tabellen erstellt/aktualisiert)"
+(cd "${INSTALL_DIR}" && \
+  DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${DB_PASSWORD:-}" \
+  node scripts/migrate.js) || { err "Migration fehlgeschlagen"; exit 1; }
+ok "Migrationen angewendet (schema.sql + Phasen 2.5 … 9)"
 
 # 7. Update .env (only if we set a new password)
 ENV_FILE="${INSTALL_DIR}/.env"

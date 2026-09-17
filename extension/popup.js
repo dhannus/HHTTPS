@@ -3,7 +3,13 @@
  *
  * Identity-first: show the user's verified identity prominently,
  * page state secondarily. Provides actions: refresh, copy token,
- * logout, switch role, copy signature snippet.
+ * logout, switch role, choose the signature mode.
+ *
+ * There is deliberately NO "copy signature snippet" action any more (AP8-16 /
+ * AP8-02): the old snippet pasted the raw Bearer access token into public text
+ * fields and rendered bot / v0.5 identities as "human · Trust 60/100". Portable
+ * signatures are the server-issued, domain-bound slugs (#hhttps:s:…) inserted via
+ * the context menu.
  */
 
 // ─── DOM refs ───────────────────────────────────────────────────────────────
@@ -20,8 +26,7 @@ const expiry        = el('expiry');
 const emptyState    = el('emptyState');
 const idActions     = el('idActions');
 const roleSwitch    = el('roleSwitch');
-const snippetSec    = el('snippet');
-const snippetBox    = el('snippetBox');
+const signModeSec   = el('signMode');
 const pageRow       = el('pageRow');
 const pageLabel     = el('pageLabel');
 const pageUrl       = el('pageUrl');
@@ -53,7 +58,6 @@ async function init() {
   el('refreshBtn').addEventListener('click', () => doRefresh(ident));
   el('copyTokenBtn').addEventListener('click', () => doCopyToken(ident));
   el('logoutBtn').addEventListener('click', () => doLogout(ident));
-  el('copySnippetBtn').addEventListener('click', () => doCopySnippet(ident));
 
   // Sign-mode preference: load current, persist on change
   await initSignModeSwitch();
@@ -95,8 +99,8 @@ function renderIdentity(ident) {
   // Expiry countdown
   renderExpiry(ident);
 
-  // Signature snippet
-  renderSignatureSnippet(ident);
+  // Signature-mode settings are only meaningful with an identity
+  signModeSec.classList.add('show');
 }
 
 function renderEmptyState() {
@@ -104,7 +108,7 @@ function renderEmptyState() {
   hero.classList.add('empty');
   emptyState.classList.add('show');
   idActions.classList.remove('show');
-  snippetSec.classList.remove('show');
+  signModeSec.classList.remove('show');
   roleSwitch.classList.remove('show');
 
   identityIcon.textContent  = '🔒';
@@ -161,26 +165,6 @@ async function renderRoleSwitcher(activeIdent) {
     roleSwitch.appendChild(chip);
   });
   roleSwitch.classList.add('show');
-}
-
-// ─── Signature snippet ──────────────────────────────────────────────────────
-function renderSignatureSnippet(ident) {
-  // Compact snippet that can be pasted into any text field as a portable
-  // identity claim. Phase 2 will turn this into invisible markers via
-  // zero-width characters, but for now the visible form is useful.
-  const snip = buildSnippet(ident);
-  snippetBox.textContent = snip;
-  snippetSec.classList.add('show');
-}
-
-function buildSnippet(ident) {
-  // Format: [HHTTPS verified · role · trust · jti-shortened]
-  // Plus the full token at the end (for verification)
-  const role   = ident.role || 'human';
-  const trust  = ident.trustScore || 60;
-  const icon   = ident.roleIcon || '👤';
-  const label  = ident.roleLabel || ident.role || chrome.i18n.getMessage('roleFallback');
-  return `[HHTTPS ✓ ${icon} ${label} · Trust ${trust}/100 · ${ident.token}]`;
 }
 
 // ─── Page state ─────────────────────────────────────────────────────────────
@@ -269,25 +253,6 @@ async function doCopyToken(ident) {
     setTimeout(() => {
       btn.innerHTML = `<span>⎘</span> <span>${chrome.i18n.getMessage('tokenLabel')}</span>`;
     }, 2000);
-  }
-}
-
-async function doCopySnippet(ident) {
-  if (!ident) return;
-  const btn = el('copySnippetBtn');
-  try {
-    await navigator.clipboard.writeText(buildSnippet(ident));
-    btn.textContent = chrome.i18n.getMessage('copiedCheck');
-    btn.classList.add('copied');
-    setTimeout(() => {
-      btn.textContent = chrome.i18n.getMessage('copyToClipboard');
-      btn.classList.remove('copied');
-    }, 1500);
-  } catch (e) {
-    btn.textContent = chrome.i18n.getMessage('copyBlocked');
-    setTimeout(() => {
-      btn.textContent = chrome.i18n.getMessage('copyToClipboard');
-    }, 2500);
   }
 }
 

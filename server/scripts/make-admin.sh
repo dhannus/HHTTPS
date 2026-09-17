@@ -8,7 +8,7 @@
 # Usage:
 #   ./make-admin.sh --list
 #   ./make-admin.sh --recent [N]             # user_ids with a live token (default 10)
-#   ./make-admin.sh --grant-recent           # grant to the most recent live token
+#   ./make-admin.sh --grant-recent           # grant to the most recent live token (asks for confirmation; --yes skips)
 #   ./make-admin.sh --grant  <USER_ID> [--note "Project operator"]
 #   ./make-admin.sh --revoke <USER_ID>
 #   ./make-admin.sh --whoami <USER_ID>      # is this user an admin?
@@ -104,6 +104,7 @@ while [[ $# -gt 0 ]]; do
       ACTION="recent"
       if [[ "${2:-}" =~ ^[0-9]+$ ]]; then RECENT_N="$2"; shift 2; else shift; fi ;;
     --grant-recent) ACTION="grant-recent"; shift ;;
+    --yes)          ASSUME_YES=1; shift ;;
     --grant)  ACTION="grant";  USER_ID="${2:-}"; shift 2 ;;
     --revoke) ACTION="revoke"; USER_ID="${2:-}"; shift 2 ;;
     --whoami) ACTION="whoami"; USER_ID="${2:-}"; shift 2 ;;
@@ -151,7 +152,25 @@ case "$ACTION" in
       echo "ERROR: no identity with a live token found. Sign in first, then re-run." >&2
       exit 1
     fi
+    # AP6-13 (Review 2026-09): "the most recent token" is whoever signed in
+    # last on a PUBLIC service — show who that is and require an explicit
+    # confirmation before granting admin. Prefer --grant <USER_ID> (from
+    # /hhttps/whoami) in scripts.
+    psql_run -c "SELECT user_id, method, trust_score, issued_at FROM tokens
+                 WHERE user_id = '${USER_ID//\'/\'\'}' AND expires_at > NOW()
+                 ORDER BY issued_at DESC LIMIT 3;"
     echo "Most recent live identity: ${USER_ID}"
+    if [[ "${ASSUME_YES:-0}" != "1" ]]; then
+      if [[ ! -t 0 ]]; then
+        echo "ERROR: --grant-recent needs an interactive confirmation (or --yes). Use --grant <USER_ID> instead." >&2
+        exit 1
+      fi
+      read -r -p "Grant ADMIN to ${USER_ID}? Type the first 8 characters of the id to confirm: " CONFIRM
+      if [[ "${CONFIRM}" != "${USER_ID:0:8}" ]]; then
+        echo "Aborted — confirmation did not match." >&2
+        exit 1
+      fi
+    fi
     psql_run -c "INSERT INTO admins (user_id, granted_by, note)
                  VALUES ('${USER_ID}', 'make-admin.sh', '${NOTE//\'/\'\'}')
                  ON CONFLICT (user_id) DO NOTHING;"

@@ -220,6 +220,16 @@ test('passkey: register + login with the virtual authenticator, then K-4 login a
       assert.equal(finish.status(), 200, await finish.text());
       await page.waitForSelector('#st-passkey .check', { state: 'attached' });
       assert.ok(calls.includes('/hhttps/webauthn/register/finish 200'), `registration happened: ${calls.join(', ')}`);
+      // AP3-01: the merged passkey session must still count as e-mail-verified —
+      // the very next step of the page (token issue) used to answer 403.
+      const [declare] = await Promise.all([
+        page.waitForResponse((r) => r.url().includes('/hhttps/role/declare')),
+        page.click('#issueBtn'),
+      ]);
+      assert.equal(declare.status(), 200, `role/declare after passkey: ${await declare.text()}`);
+      const declared = await declare.json();
+      assert.ok(declared.hhttps?.verifiedMethods?.includes('email') && declared.hhttps?.verifiedMethods?.includes('passkey'),
+        `token carries email + passkey: ${JSON.stringify(declared.hhttps?.verifiedMethods)}`);
       ({ credentials } = await cdp.send('WebAuthn.getCredentials', { authenticatorId }));
       assert.equal(credentials.length, 1, 'one credential on the authenticator');
       userHandle = Buffer.from(credentials[0].userHandle || '', 'base64').toString('utf8');

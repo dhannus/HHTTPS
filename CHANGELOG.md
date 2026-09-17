@@ -5,6 +5,26 @@ All notable changes to the HHTTPS protocol and reference implementation are docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Review 2026-09, Welle 1 (Kernflow)
+
+### Fixed
+- **Passkey login keeps the e-mail verification** (AP3-01): `auth/finish` now persists the merged e-mail/GitHub state on the new session (`sessions.update`) and removes the consumed e-mail session afterwards (`sessions.delete`, AP3-26). The sign-in page's token step no longer answers 403 after a passkey login; the e2e test clicks through to `role/declare`.
+- **Age upgrade issues the full token surface** (AP4-02): `pseudonym`, `*_verified` flags and `domain_name` via `tokenSurface()`; verified age claims ride in the refresh token and survive `/hhttps/token/refresh`.
+- **Developer-portal e-mail change** (AP5-02): a changed contact address always goes back to `email_pending` with `verified = FALSE`; `confirmEmail` reports whether a row changed and the confirmation page refuses to claim success otherwise.
+- **Fresh installations boot** (AP6-01): `server/scripts/migrate.js` applies the whole migration chain (ledger `schema_migrations`, `--dry-run`, `--baseline`) and is called by `install-pg.sh` / `deploy-all.sh` instead of `schema.sql` alone.
+- **Expired authorization codes are cleaned up** (AP2-23 / AP6-02) by the 5-minute cleanup job.
+- **Landing page** (AP8-01/AP8-41): `doDeclarRole` no longer throws on the v0.5 response (`role: null`); the dead duplicate implementation is gone.
+
+### Security
+- **Refresh tokens are not bearer credentials** (AP5-01, AP4-01): `checkTokenValid` refuses `sub: refresh` / `oauth_refresh` unless the caller opts in; `/hhttps/validate` and `/hhttps/protected` reflect the real actor (`human:false`, `actorType:'bot'` for machine tokens; `/protected` answers 403 for non-humans).
+- **Revocation reaches the refresh chain**: `/hhttps/revoke` ends every HHTTPS refresh token of the holder (AP4-03); `/hhttps/oauth/revoke` ends the platform's OAuth refresh chain and the refresh grant refuses a disconnected platform (AP2-01; `refresh_tokens.client_id`, boot DDL).
+- **`currentToken` is bound to the session holder** in `/hhttps/age/upgrade` and `/hhttps/eid/upgrade` (AP4-20): a foreign or revoked token cannot transplant `eudi_verified` / age claims.
+- **`documentProvided` never unlocks a protected profession** (AP4-21): reserved roles need a qualified attestation (RAL2); a self-uploaded "document" is labelled `self-asserted-document`, RAL0, never `verified`.
+- **Plugin registration rate limit** keys on `req.ip` via `express-rate-limit` (AP5-17); the client-controlled `X-Forwarded-For` map is gone.
+- **`make-admin.sh --grant-recent`** shows the identity and requires an interactive confirmation (`--yes` to skip) (AP6-13).
+- **PID issuer trust binding prepared** (AP4-18): `buildDcqlQuery` / `buildPidDcqlQuery` attach `trusted_authorities` when `EUDI_PID_TRUST_LIST` is set (existing EUDIPLO configs are PATCHed); without it the server logs a loud warning at boot. Activation is an operator step after the EUDIPLO update.
+- **Browser extension** (AP8-16, AP8-02, AP8-23, AP8-24): the "signature snippet" that copied the full bearer token is removed; the same-origin iframe poller uses backoff and no `innerHTML` serialisation; frames with their own content-script instance are not scanned twice.
+
 ## [Unreleased] — Review 2026-09, Welle 0
 
 ### Removed
