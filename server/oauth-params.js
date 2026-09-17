@@ -15,6 +15,7 @@ export const NONCE_MAX_LENGTH          = 2048;
 export const CODE_CHALLENGE_MIN_LENGTH = 43;
 export const CODE_CHALLENGE_MAX_LENGTH = 128;
 export const CODE_CHALLENGE_METHODS    = Object.freeze(['S256', 'plain']);
+export const SCOPE_MAX_LENGTH          = 1024;
 
 const CODE_CHALLENGE_RE = /^[A-Za-z0-9._~-]+$/;
 
@@ -30,8 +31,11 @@ function checkOpaque(name, value, max) {
 /**
  * @returns {{ok:true} | {ok:false, error:'invalid_request', description:string}}
  */
-export function validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method } = {}) {
-  const e = checkOpaque('state', state, STATE_MAX_LENGTH) || checkOpaque('nonce', nonce, NONCE_MAX_LENGTH);
+export function validateAuthorizeParams({ state, nonce, scope, code_challenge, code_challenge_method } = {}) {
+  // AP2-04 (#77): `scope[]=…` arrives as an array from the query/body parser
+  // and used to blow up in `.split()` — a client error, not a TypeError.
+  const e = checkOpaque('state', state, STATE_MAX_LENGTH) || checkOpaque('nonce', nonce, NONCE_MAX_LENGTH) ||
+            checkOpaque('scope', scope, SCOPE_MAX_LENGTH);
   if (e) return e;
 
   if (code_challenge !== undefined && code_challenge !== null && code_challenge !== '') {
@@ -55,4 +59,25 @@ export function validateAuthorizeParams({ state, nonce, code_challenge, code_cha
 export function stateForErrorRedirect(state) {
   if (typeof state !== 'string' || !state) return '';
   return state.length > STATE_MAX_LENGTH ? state.slice(0, STATE_MAX_LENGTH) : state;
+}
+
+/** Body parameters of POST /hhttps/oauth/token that must be strings when present. */
+export const TOKEN_STRING_PARAMS = Object.freeze([
+  'grant_type', 'code', 'redirect_uri', 'client_id', 'client_secret', 'code_verifier', 'refresh_token'
+]);
+
+/**
+ * AP2-04 (#77): the token endpoint hashes `client_secret` / `code_verifier`
+ * and compares `code` / `redirect_uri` / `refresh_token` — an array, object
+ * or number in any of them threw an unhandled TypeError (request hung, code
+ * consumed). Every present value must be a plain string.
+ * @returns {{ok:true} | {ok:false, error:'invalid_request', description:string}}
+ */
+export function validateTokenParams(body = {}) {
+  for (const name of TOKEN_STRING_PARAMS) {
+    const value = body[name];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== 'string') return fail(`${name} must be a single string value.`);
+  }
+  return { ok: true };
 }

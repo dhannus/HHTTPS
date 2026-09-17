@@ -40,6 +40,7 @@ export const MIGRATION_ORDER = [
   'migration-phase-4b-machine-key-jkt.sql',
   'migration-phase-3a1-authcodes-text.sql',
   'migration-phase-9-review-welle-0.sql',
+  'migration-phase-10-review-welle-2.sql',
 ];
 
 export async function migrate({ client, mode = 'apply', log = console } = {}) {

@@ -81,24 +81,50 @@ export const RESERVED_REGISTRY = {
              sourceHint: 'Pflegekammer / care chamber' },
   lawyer:  { label: 'Attorney', iscoPrefixes: ['2611'],
              sourceHint: 'Rechtsanwaltskammer / bar association' },
-  notary:  { label: 'Notary', iscoPrefixes: ['2619', '261'],
+  // AP1-06: concrete 4-digit codes only — a 3-digit prefix like '261' (all legal
+  // professionals) or '335' (all regulatory associate professionals) swallowed
+  // judges, tax inspectors and customs officers into the wrong registry key.
+  notary:  { label: 'Notary', iscoPrefixes: ['2619'],
              sourceHint: 'Notarkammer / notary chamber' },
-  police:  { label: 'Police / law enforcement', iscoPrefixes: ['5412', '335'],
+  police:  { label: 'Police / law enforcement', iscoPrefixes: ['5412', '3355'],
              sourceHint: 'state police authority' },
   judge:   { label: 'Judge / prosecutor', iscoPrefixes: ['2612'],
              sourceHint: 'state judicial authority' }
 };
 
-export const RESERVED_STEMS = [
-  'arzt', 'aerztin', 'dr. med', 'dr.med', 'drmed', 'physician', 'doctor',
-  'mediziner', 'chirurg', 'psychiater', 'approbation',
-  'anwalt', 'anwaelt', 'attorney', 'lawyer', 'advokat',
-  'notar', 'notary',
-  'polizei', 'polizist', 'police', 'kriminalbeamt', 'staatsanwalt', 'prosecutor',
-  'pfleger', 'pflegerin', 'pflegekraft', 'krankenpfleg', 'krankenschwester',
-  'nurse', 'altenpfleg',
-  'richter', 'judge'
-];
+// AP1-06: stem → registry key, in ONE place (no second regex table that can
+// drift). German compound stems match as substrings ("Fachärztin",
+// "Rechtsanwältin", "Krankenpfleger"); English words match on word boundaries
+// only ("nursery teacher" is not a nurse, "doctoral student" not a doctor).
+// When several stems match, the LONGEST wins: "Staatsanwältin" → judge, not
+// lawyer; "Notarzt" → medical, not notary.
+const STEM_KEYS = {
+  // medical
+  arzt: 'medical', aerzt: 'medical', notarzt: 'medical', 'dr. med': 'medical', 'dr.med': 'medical',
+  drmed: 'medical', mediziner: 'medical', chirurg: 'medical', psychiater: 'medical', approbation: 'medical',
+  // lawyer
+  anwalt: 'lawyer', anwaelt: 'lawyer', advokat: 'lawyer',
+  // notary
+  notar: 'notary',
+  // police
+  polizei: 'police', polizist: 'police', kriminalbeamt: 'police',
+  // prosecutor — the registry key that covers it is "Judge / prosecutor"
+  staatsanwalt: 'judge', staatsanwaelt: 'judge',
+  // nursing
+  pfleger: 'nursing', pflegerin: 'nursing', pflegekraft: 'nursing', krankenpfleg: 'nursing',
+  krankenschwester: 'nursing', altenpfleg: 'nursing',
+  // judge
+  richter: 'judge'
+};
+const WORD_STEM_KEYS = {
+  physician: 'medical', doctor: 'medical', attorney: 'lawyer', lawyer: 'lawyer', notary: 'notary',
+  police: 'police', prosecutor: 'judge', nurse: 'nursing', judge: 'judge'
+};
+// Compounds that CONTAIN a reserved stem but are not reserved professions.
+// They are blanked out before matching (whole word).
+const NOT_RESERVED = ['tierpfleg', 'einrichter'];
+
+export const RESERVED_STEMS = [...Object.keys(STEM_KEYS), ...Object.keys(WORD_STEM_KEYS)];
 
 function normalize(s) {
   return String(s || '').toLowerCase()
@@ -106,35 +132,45 @@ function normalize(s) {
     .replace(/\s+/g, ' ').trim();
 }
 
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Longest reserved stem in a normalized label, or null. */
+function matchStem(n) {
+  let best = null;
+  const consider = (stem, key) => { if (!best || stem.length > best.stem.length) best = { stem, key }; };
+  for (const [stem, key] of Object.entries(STEM_KEYS)) {
+    if (n.includes(stem)) consider(stem, key);
+  }
+  for (const [stem, key] of Object.entries(WORD_STEM_KEYS)) {
+    if (new RegExp(`(^|[^a-z])${escapeRe(stem)}([^a-z]|$)`).test(n)) consider(stem, key);
+  }
+  return best;
+}
+
 /**
  * Is this free-text label / ISCO code a reserved profession?
  * @returns {{ reserved:boolean, matched:string|null, key:string|null }}
  */
 export function guardReservedRole(freeText, isco08 = null) {
-  const n = normalize(freeText);
+  let n = normalize(freeText);
   if (n) {
-    for (const stem of RESERVED_STEMS) {
-      if (n.includes(stem)) return { reserved: true, matched: stem, key: stemToKey(stem) };
-    }
+    for (const ex of NOT_RESERVED) n = n.replace(new RegExp(`(^|[^a-z])${ex}[a-z]*`, 'g'), '$1');
+    const hit = matchStem(n);
+    if (hit) return { reserved: true, matched: hit.stem, key: hit.key };
   }
   if (isco08) {
+    // Longest registry prefix wins ('2212' over '221'); a code never matches a
+    // prefix of another registry entry by accident because prefixes are concrete.
+    const code = String(isco08);
+    let best = null;
     for (const [key, def] of Object.entries(RESERVED_REGISTRY)) {
-      if (def.iscoPrefixes.some(p => String(isco08).startsWith(p))) {
-        return { reserved: true, matched: isco08, key };
+      for (const p of def.iscoPrefixes) {
+        if (code.startsWith(p) && (!best || p.length > best.p.length)) best = { key, p };
       }
     }
+    if (best) return { reserved: true, matched: isco08, key: best.key };
   }
   return { reserved: false, matched: null, key: null };
-}
-
-function stemToKey(stem) {
-  if (/arzt|aerzt|med|physician|doctor|chirurg|psychiater|approbation/.test(stem)) return 'medical';
-  if (/anwalt|anwaelt|attorney|lawyer|advokat/.test(stem)) return 'lawyer';
-  if (/notar/.test(stem)) return 'notary';
-  if (/polizei|polizist|police|kriminal|staatsanwalt|prosecutor/.test(stem)) return 'police';
-  if (/pfleg|kranken|nurse/.test(stem)) return 'nursing';
-  if (/richter|judge/.test(stem)) return 'judge';
-  return null;
 }
 
 // ─── Custom (free-text) role sanitation ───────────────────────────────────────

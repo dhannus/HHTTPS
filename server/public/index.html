@@ -288,6 +288,9 @@ a{color:inherit}
     <div class="panel hidden" id="panel-github">
       <div class="hint" data-i18n="github.hint"></div>
       <div class="row"><button class="go" id="githubGo" onclick="githubRun()" style="flex:1" data-i18n="github.go"></button></div>
+      <!-- AP8-07 (#98): the GitHub poller needs somewhere to report a terminal
+           state (failed / expired / HTTP error); it had no hint element at all. -->
+      <div class="hint" id="githubHint"></div>
     </div>
 
     <button class="m-btn" id="m-machine" onclick="pick('machine')">
@@ -438,7 +441,8 @@ const T={
    'role.ral0':'Selbst angegeben (RAL 0) · von keiner Stelle geprüft',
    'role.ral1':'Mit Nachweis (RAL 1) · im Pilot Selbstangabe, live gegen Register geprüft',
    'foot.about':'Über iamhmn','foot.proto':'Protokoll',
-   'progress.one':'1 Weg bestätigt','progress.more':' Wege bestätigt','codeSent':'Code gesendet — prüfe dein Postfach.','email.hintAuto':'E-Mail übernommen — Code wird gesendet …','err':'Hat nicht geklappt — bitte erneut versuchen.'},
+   'progress.one':'1 Weg bestätigt','progress.more':' Wege bestätigt','codeSent':'Code gesendet — prüfe dein Postfach.','email.hintAuto':'E-Mail übernommen — Code wird gesendet …','err':'Hat nicht geklappt — bitte erneut versuchen.',
+   'poll.failed':'Bestätigung fehlgeschlagen — bitte erneut starten.','poll.expired':'Anfrage abgelaufen — bitte erneut starten.','poll.timeout':'Keine Bestätigung erhalten — bitte erneut starten.'},
  en:{'hero.a':'Prove you are a','hero.em':'human','hero.b':' or AI bot.',
    'hero.p':'Equal rights for everyone — pseudonymously verified, your person stays anonymous. Humans and AIs declare their role just as openly and accountably.',
    'm.email':'Continue with email','m.email.sub':'Code by email · worldwide',
@@ -481,7 +485,8 @@ const T={
    'role.ral0':'Self-declared (RAL 0) · not checked by any authority',
    'role.ral1':'With proof (RAL 1) · pilot: self-asserted, verified against registers in production',
    'foot.about':'About iamhmn','foot.proto':'Protocol',
-   'progress.one':'1 way confirmed','progress.more':' ways confirmed','codeSent':'Code sent — check your inbox.','email.hintAuto':'Email taken over — sending code …','err':'That did not work — please try again.'}
+   'progress.one':'1 way confirmed','progress.more':' ways confirmed','codeSent':'Code sent — check your inbox.','email.hintAuto':'Email taken over — sending code …','err':'That did not work — please try again.',
+   'poll.failed':'Confirmation failed — please start again.','poll.expired':'Request expired — please start again.','poll.timeout':'No confirmation received — please start again.'}
 };
 function tr(k){return (T[LANG]&&T[LANG][k])||k}
 function applyLang(){
@@ -638,11 +643,38 @@ async function eudiRun(){
     pollEudi(d.requestId);
   }catch(e){hint.textContent=tr('err')}
 }
+/* AP8-07 (#98): one poller for EUDI / age / GitHub.
+   - terminal states end the loop: verified, the e-mail gate
+     (status:error + email_verification_required), failed, expired, HTTP >= 400
+   - the interval grows 2.5 s -> 10 s (x1.5), max 80 polls, then a timeout hint
+   - a new run for the same method cancels the previous one (generation counter)
+   - hidden tabs pause the requests (they do not count against the budget) */
+const POLL_GEN={};
+function pollCancel(kind){return (POLL_GEN[kind]=(POLL_GEN[kind]||0)+1);}
+async function pollStatus(kind,hintId,fetchOnce,isVerified,onVerified){
+  const gen=pollCancel(kind);
+  const hint=document.getElementById(hintId);
+  let delay=2500;
+  for(let n=0;n<80;){
+    await new Promise(r=>setTimeout(r,delay));
+    if(POLL_GEN[kind]!==gen)return;
+    if(document.hidden)continue;
+    n++;
+    let r=null,d=null;
+    try{r=await fetchOnce();d=await r.json();}catch(e){d=null;}
+    if(POLL_GEN[kind]!==gen)return;
+    if(d&&isVerified(d)){onVerified(d);return}
+    if(d&&d.status==='error'&&d.error==='email_verification_required'){if(hint)hint.textContent=tr('email.first');return}
+    if(d&&(d.status==='failed'||d.status==='expired')){if(hint)hint.textContent=tr(d.status==='expired'?'poll.expired':'poll.failed');return}
+    if(r&&r.status>=400){if(hint)hint.textContent=tr('poll.failed');return}
+    delay=Math.min(Math.round(delay*1.5),10000);
+  }
+  if(hint)hint.textContent=tr('poll.timeout');
+}
 async function pollEudi(requestId){
-  for(let i=0;i<80;i++){await new Promise(r=>setTimeout(r,2500));
-    try{const r=await fetch(API+'/eudi/eid/status/'+encodeURIComponent(requestId));
-      const d=await r.json(); if(d.status==='verified'){markConfirmed('eudi');return}
-      if(d.status==='error'&&d.error==='email_verification_required'){document.getElementById('eudiHint').textContent=tr('email.first');return}}catch(e){}}
+  return pollStatus('eudi','eudiHint',
+    ()=>fetch(API+'/eudi/eid/status/'+encodeURIComponent(requestId)),
+    d=>d.status==='verified', ()=>markConfirmed('eudi'));
 }
 
 /* AGE — equal 6th entry. Some users only want to prove their age. EUDI Wallet
@@ -664,10 +696,9 @@ async function ageRun(minAge){
   }catch(e){hint.textContent=tr('err')}
 }
 async function pollAge(requestId,minAge){
-  for(let i=0;i<80;i++){await new Promise(r=>setTimeout(r,2500));
-    try{const r=await fetch(API+'/eudi/age/status/'+encodeURIComponent(requestId));
-      const d=await r.json(); if(d.status==='verified'){ageConfirmed(minAge);return}
-      if(d.status==='error'&&d.error==='email_verification_required'){document.getElementById('ageHint').textContent=tr('email.first');return}}catch(e){}}
+  return pollStatus('age','ageHint',
+    ()=>fetch(API+'/eudi/age/status/'+encodeURIComponent(requestId)),
+    d=>d.status==='verified', ()=>ageConfirmed(minAge));
 }
 function ageConfirmed(minAge){
   confirmed.age=true;
@@ -685,9 +716,9 @@ async function githubRun(){
   }catch(e){}
 }
 async function pollGithub(){
-  for(let i=0;i<80;i++){await new Promise(r=>setTimeout(r,2500));
-    try{const r=await fetch(API+'/hhttps/verify/github/status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})});
-      const d=await r.json(); if(d.verified){markConfirmed('github');return}}catch(e){}}
+  return pollStatus('github','githubHint',
+    ()=>fetch(API+'/hhttps/verify/github/status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})}),
+    d=>d.verified===true, ()=>markConfirmed('github'));
 }
 
 /* MACHINE — honest bot declaration -> machine apiKey (NOT a human token) */
@@ -718,12 +749,21 @@ async function machineRun(){
     return;
   }
 
-  /* Step B: confirm the code, then register + issue the machine token. */
-  const code=(document.getElementById('machineCode').value||'').trim().replace(/[\s-]/g,'');
-  try{
-    const rc=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
-    if(!rc.ok){hint.textContent=tr('machine.codeErr');return;}
-  }catch(e){hint.textContent=tr('err');return;}
+  /* Step B: confirm the code ONCE (the server consumes it), then register +
+     issue the machine token. AP8-06 (#90): after a successful confirm-code the
+     step advances to 'confirmed', so a failing register/token call can simply
+     be retried without re-sending the consumed code; the server's error
+     detail is shown instead of the generic text. */
+  if(MACHINE_STEP==='code'){
+    const code=(document.getElementById('machineCode').value||'').trim().replace(/[\s-]/g,'');
+    try{
+      const rc=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
+      if(!rc.ok){hint.textContent=tr('machine.codeErr');return;}
+    }catch(e){hint.textContent=tr('err');return;}
+    MACHINE_STEP='confirmed';
+    var mcr0=document.getElementById('machineCodeRow'); if(mcr0) mcr0.classList.add('hidden');
+  }
+  const machineErr=(d,r)=>{const det=(d&&(d.detail||d.error))||'';hint.textContent=tr('err')+(det?' ('+det+(r&&r.status===429?' · 429':'')+')':'');};
   try{
     /* WIMSE preparation, in the background: generate a P-256 keypair and send
        the PUBLIC JWK with the registration. The server binds it in a later
@@ -737,12 +777,12 @@ async function machineRun(){
     }catch(e){}
 
     const r=await fetch(API+'/hhttps/machine/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorName:role||'AI agent',purpose:role||'AI/bot identity declaration',role:role||undefined,contactEmail:email,sessionId,publicKeyJwk:pubJwk||undefined})});
-    const d=await r.json(); if(!r.ok)throw 0;
+    const d=await r.json().catch(()=>({})); if(!r.ok){machineErr(d,r);return;}
 
     /* The machine path is SELF-CONTAINED: issue the machine token right away —
        it never goes through the human role/declare flow. */
     const r2=await fetch(API+'/hhttps/machine/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorId:d.operatorId,apiKey:d.apiKey})});
-    const td=await r2.json(); if(!r2.ok||!td.token)throw 0;
+    const td=await r2.json().catch(()=>({})); if(!r2.ok||!td.token){machineErr(td,r2);return;}
 
     confirmed.machine=true; MACHINE_IDENTITY=true;
     document.getElementById('m-machine').classList.add('done');
@@ -783,12 +823,33 @@ async function machineRun(){
    After a token is issued we therefore (1) publish the identity in exactly the
    format the consent page and the browser extension expect, and (2) send the
    user back where they came from. */
+/* AP8-20 (#173): the refresh token stays client-held by design (zero-PII,
+   no server-side session). Two hardenings that cost no UX:
+   (1) it is only ever persisted on the ISSUER's own origin. A mirror, a
+       staging host or a local copy of this page gets the short-lived access
+       token only — the long-lived credential never lands in a foreign
+       origin's localStorage.
+   (2) a refresh token whose refreshExpiresAt has passed is dropped instead of
+       lingering in storage; it cannot buy a new token any more anyway. */
+const ISSUER_HOSTS=['hhttps.org','www.hhttps.org'];
+function isIssuerOrigin(){
+  try{
+    const h=window.location.hostname;
+    return ISSUER_HOSTS.indexOf(h)>=0||h==='localhost'||h==='127.0.0.1';
+  }catch(e){return false}
+}
+function storableRefreshToken(tok,refreshExpiresAt){
+  if(!tok)return null;
+  if(!isIssuerOrigin())return null;
+  if(refreshExpiresAt&&new Date(refreshExpiresAt).getTime()<=Date.now())return null;
+  return tok;
+}
 function publishIdentity(d){
   const h=(d&&d.hhttps)||{};
   if(!h.token)return;
   const identity={
     token:            h.token,
-    refreshToken:     h.refreshToken||null,
+    refreshToken:     storableRefreshToken(h.refreshToken,h.refreshExpiresAt),
     role:             (d.role&&(d.role.id||d.role.role))||h.role||null,
     roleLabel:        (d.role&&d.role.label)||null,
     roleIcon:         (d.role&&d.role.icon)||null,
@@ -808,22 +869,32 @@ function publishIdentity(d){
   try{window.postMessage({source:'hhttps-org',type:'identity-issued',payload:identity},window.location.origin);}catch(e){}
 }
 
+/* AP8-17 (#151): returnTo is only honoured when it stays on THIS origin —
+   the OAuth consent page lives here, so a relative path or an absolute URL
+   of the same origin is all we ever need. Other hosts, protocol-relative
+   URLs (//evil), javascript:, data: … resolve to null and are ignored. */
+function resolveReturnTo(raw,origin){
+  if(!raw||typeof raw!=='string')return null;
+  let t;
+  try{t=new URL(raw,origin);}catch(e){return null;}
+  if(t.protocol!=='https:'&&t.protocol!=='http:')return null;
+  if(t.origin!==origin)return null;
+  return t;
+}
 /* Return to the OAuth consent page (or whoever sent us here). */
 function maybeReturnTo(){
   let returnTo=null;
   try{returnTo=new URL(window.location.href).searchParams.get('returnTo');}catch(e){return;}
   if(!returnTo)return;
-  let target;
-  try{target=new URL(returnTo);}catch(e){return;}
-  const ok=target.protocol==='https:'||(target.protocol==='http:'&&target.hostname==='localhost');
-  if(!ok)return;
+  const target=resolveReturnTo(returnTo,window.location.origin);
+  if(!target)return;
   const t=document.createElement('div');
   t.textContent=(LANG==='de'?'Angemeldet \u2713 \u2014 zur\u00fcck zu ':'Signed in \u2713 \u2014 returning to ')+target.host+' \u2026';
   t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;'
     +'background:#111;color:#fff;padding:12px 20px;border-radius:10px;font-weight:600;'
     +'font-family:inherit;box-shadow:0 8px 30px rgba(0,0,0,.25);';
   document.body.appendChild(t);
-  setTimeout(function(){window.location.href=returnTo;},1200);
+  setTimeout(function(){window.location.href=target.href;},1200);
 }
 
 /* ISSUE TOKEN — role/declare {sessionId} once >=1 human method confirmed */
@@ -979,6 +1050,15 @@ async function restoreIdentity(){
           if(d.token){
             identity.token=d.token;
             identity.expiresAt=d.expiresAt||identity.expiresAt||null;
+            /* AP3-18 (#116): /hhttps/token/refresh ROTATES the refresh token —
+               every call returns a new one and invalidates the old one, and
+               re-using an invalidated token trips the reuse detection. Storing
+               only the new access token made the silent refresh work exactly
+               once; the second attempt logged the user out. */
+            if(d.refreshToken){
+              identity.refreshToken=storableRefreshToken(d.refreshToken,d.refreshExpiresAt||identity.refreshExpiresAt);
+              identity.refreshExpiresAt=d.refreshExpiresAt||identity.refreshExpiresAt||null;
+            }
             try{ localStorage.setItem('hhttps_identity',JSON.stringify(identity)); }catch(e){}
           } else { canRefresh=false; }
         } else { canRefresh=false; }

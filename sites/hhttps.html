@@ -1229,13 +1229,29 @@ document.addEventListener('DOMContentLoaded', () => {
   showOAuthReturnBanner();
 });
 
+// AP8-17 (#151): `?returnTo=` used to be taken at face value — `new URL()`
+// was only a parse check, so `javascript:alert(1)` passed it and ANY https
+// host was accepted (open redirect). A returnTo is only ever needed to get
+// back to the OAuth consent page, which lives on THIS origin, so nothing but
+// a same-origin target is honoured: a relative path resolves against the
+// current origin, every other host, `//evil.example`, `javascript:` and
+// `data:` resolve to null and are ignored.
+function resolveReturnTo(raw, origin) {
+  if (!raw || typeof raw !== 'string') return null;
+  let t;
+  try { t = new URL(raw, origin); } catch (e) { return null; }
+  if (t.protocol !== 'https:' && t.protocol !== 'http:') return null;
+  if (t.origin !== origin) return null;
+  return t;
+}
+
 function showOAuthReturnBanner() {
   try {
     const params = new URLSearchParams(window.location.search);
     const returnTo = params.get('returnTo');
     if (!returnTo) return;
-    let target;
-    try { target = new URL(returnTo); } catch (e) { return; }
+    const target = resolveReturnTo(returnTo, window.location.origin);
+    if (!target) return;
 
     // If user is already logged in (has identity in localStorage), redirect immediately
     try {
@@ -1244,7 +1260,7 @@ function showOAuthReturnBanner() {
         const ident = JSON.parse(raw);
         if (ident && ident.token) {
           // Already logged in — redirect right back
-          window.location.href = returnTo;
+          window.location.href = target.href;
           return;
         }
       }
@@ -1517,14 +1533,24 @@ async function doDeclarRole() {
   try {
     const r = await fetch('/hhttps/role/declare', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        sessionId, role: selRole,
-        verificationMethod: selVMethod,
-        verificationData: vData
-      })
+      // AP8-09 (#117): `role` / `verificationMethod` are NOT sent any more.
+      // Since v0.5 the server explicitly ignores a role from the request
+      // ("we do not take a role from the request") and answers `role: null`;
+      // sending the page's own v0.4 catalogue only pretended it had an effect.
+      // `verificationData` stays — the server still reads `pseudonym` from it.
+      body: JSON.stringify({ sessionId, verificationData: vData })
     });
     const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
+    // AP8-08 (#108): the same 403 handling doRegister() already has — send the
+    // user back to the email step instead of leaving a dead-end error text.
+    if (r.status === 403 && d.error === 'email_verification_required') {
+      msg(tr('msg.emailFirst'),'e');
+      btn.disabled = false; btn.innerHTML = tr('btn.declare');
+      live('err',tr('live.error'));
+      setStep(0);
+      return;
+    }
+    if (!r.ok) throw new Error(d.detail || d.error);
 
     hhttpsToken = d.hhttps.token;
     const rl = ROLES_LOCAL[selRole];
@@ -1535,14 +1561,17 @@ async function doDeclarRole() {
     const levelLabel      = d.role?.levelLabel
                          ?? (methodLabels.length ? methodLabels.join(' · ') : (VMETHOD_LABELS[level]?.l || level));
 
-    // Publish identity to the browser extension + other tabs
+    // Publish identity to the browser extension + other tabs.
+    // AP8-09 (#117): ONLY server-answered values go into the published
+    // identity — the locally picked `selRole` is a UI choice the server never
+    // confirmed, and publishing it made the extension show an unearned role.
     publishIdentity({
       token:            d.hhttps.token,
       refreshToken:     d.hhttps.refreshToken,
-      role:             selRole,
-      roleLabel:        rl?.label || selRole,
-      roleIcon:         rl?.icon || '🧑',
-      roleLevel:        level,
+      role:             d.role?.id ?? d.role?.role ?? null,
+      roleLabel:        d.role?.label ?? null,
+      roleIcon:         d.role?.icon ?? null,
+      roleLevel:        d.role?.level ?? null,
       levelLabel:       levelLabel,
       trustScore:       d.hhttps.trustScore,
       method:           'webauthn-passkey',
@@ -1582,11 +1611,32 @@ async function doDeclarRole() {
 // can automatically pick it up — making this page the "identity provider"
 // for the user's whole browser. Other tabs / sites with the extension installed
 // will see the identity without the user having to re-login.
+/* AP8-20 (#173): the refresh token stays client-held by design (zero-PII,
+   no server-side session). Two hardenings that cost no UX:
+   (1) it is only ever persisted on the ISSUER's own origin. A mirror, a
+       staging host or a local copy of this page gets the short-lived access
+       token only — the long-lived credential never lands in a foreign
+       origin's localStorage.
+   (2) a refresh token whose refreshExpiresAt has passed is dropped instead of
+       lingering in storage; it cannot buy a new token any more anyway. */
+const ISSUER_HOSTS=['hhttps.org','www.hhttps.org'];
+function isIssuerOrigin(){
+  try{
+    const h=window.location.hostname;
+    return ISSUER_HOSTS.indexOf(h)>=0||h==='localhost'||h==='127.0.0.1';
+  }catch(e){return false}
+}
+function storableRefreshToken(tok,refreshExpiresAt){
+  if(!tok)return null;
+  if(!isIssuerOrigin())return null;
+  if(refreshExpiresAt&&new Date(refreshExpiresAt).getTime()<=Date.now())return null;
+  return tok;
+}
 function publishIdentity(data) {
   if (!data || !data.token) return;
   const identity = {
     token:           data.token,
-    refreshToken:    data.refreshToken || null,
+    refreshToken:    storableRefreshToken(data.refreshToken, data.refreshExpiresAt),
     role:            data.role || null,
     roleLabel:       data.roleLabel || null,
     roleIcon:        data.roleIcon || null,
@@ -1623,22 +1673,18 @@ function publishIdentity(data) {
     const url = new URL(window.location.href);
     const returnTo = url.searchParams.get('returnTo');
     if (returnTo) {
-      // Security: only redirect to URLs we trust. Allowed:
-      //   - Same origin (hhttps.org → hhttps.org)
-      //   - Subdomains of registered platform homepages
-      // For Phase 3a we trust any HTTPS URL — Phase 3b will tighten this
-      // against the verified oauth_clients table.
-      try {
-        const target = new URL(returnTo);
-        if (target.protocol === 'https:' || target.protocol === 'http:' && target.hostname === 'localhost') {
-          // Show a brief confirmation
-          showReturnToToast(target.host);
-          setTimeout(() => {
-            window.location.href = returnTo;
-          }, 1500);
-        }
-      } catch (e) {
-        console.warn('[HHTTPS] Invalid returnTo URL:', returnTo);
+      // AP8-17 (#151): same-origin only — see resolveReturnTo(). The consent
+      // page is served from this origin, so nothing else is ever a legitimate
+      // return target.
+      const target = resolveReturnTo(returnTo, window.location.origin);
+      if (target) {
+        // Show a brief confirmation
+        showReturnToToast(target.host);
+        setTimeout(() => {
+          window.location.href = target.href;
+        }, 1500);
+      } else {
+        console.warn('[HHTTPS] returnTo rejected (not same-origin):', returnTo);
       }
     }
   } catch (e) {}
@@ -1794,6 +1840,8 @@ async function checkEmailStatus() {
   });
   const d = await r.json();
   if (d.emailVerified) {
+    // AP8-29 (#211): the answer will not change any more — stop polling.
+    if (typeof stopEmailPoll === 'function') stopEmailPoll();
     document.getElementById('emailVerifiedBadge').style.display = 'block';
     document.getElementById('emailVerifiedBadge').textContent =
       `✓ ${d.emailDomain} ${tr('msg.verified')} · ${d.emailLevel} · Trust Score: ${d.trustBonus}/100`;
@@ -1835,14 +1883,23 @@ window.addEventListener('load', () => {
 
 // Poll for email verification every 5 seconds when on step 3
 let pollInterval = null;
+// AP8-29 (#211): stopEmailPoll() is the single place that clears the handle.
+// setStep(3) can be reached more than once (doAuth, the verified_session
+// return), and every call used to create ANOTHER interval while leaking the
+// previous handle — the old timer then polled /hhttps/email/status forever.
+function stopEmailPoll() {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
 const origSetStep = setStep;
 // Wrap setStep to start/stop polling
 window.setStep = function(n) {
   origSetStep(n);
+  stopEmailPoll();                       // never leave a previous interval running
   if (n === 3) {
-    pollInterval = setInterval(() => { if (sessionId) checkEmailStatus(); }, 5000);
-  } else {
-    if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    pollInterval = setInterval(() => {
+      if (sessionId) checkEmailStatus();
+      else stopEmailPoll();
+    }, 5000);
   }
 };
 
@@ -1853,8 +1910,12 @@ if (!window.PublicKeyCredential) {
   document.getElementById('btnReg').disabled = true;
 }
 if (userId) {
+  // AP8-08 (#108): a cached `hhttps_uid` used to jump straight to the passkey
+  // login (step 2). The session created there is NOT email-verified — there is
+  // no prior session to merge — so /hhttps/role/declare answered 403
+  // `email_verification_required` with no way back. The cache is now only a
+  // hint; the email step stays mandatory and the user can skip ahead manually.
   msg(tr('msg.passkeyFound'),'i');
-  setTimeout(() => setStep(2), 300);
 }
 
 // ── OAuth example tab switcher (independent from API demo above) ───────────

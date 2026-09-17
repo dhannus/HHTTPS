@@ -231,7 +231,8 @@ test('AP6-01: a fresh database migrated by scripts/migrate.js has everything the
   try {
     await client.connect();
     const first = await migrate({ client, log: { log() {} } });
-    assert.equal(first.applied.length, 14, 'all 14 files applied on a fresh DB');
+    // 15 since Welle 2 added migration-phase-10-review-welle-2.sql (AP6).
+    assert.equal(first.applied.length, 15, 'all 15 files applied on a fresh DB');
     const again = await migrate({ client, log: { log() {} } });
     assert.equal(again.applied.length, 0, 'idempotent: nothing applied the second time');
     const cols = async (t, c) => (await client.query(

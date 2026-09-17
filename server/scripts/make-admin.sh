@@ -120,6 +120,19 @@ if [[ "$ACTION" != "list" && "$ACTION" != "recent" && "$ACTION" != "grant-recent
   exit 1
 fi
 
+# AP6-14 (#103): USER_ID is never interpolated into SQL. It is validated
+# against the id alphabet and then bound as a psql variable (:'uid' quotes it
+# as a literal). NOTE is bound the same way. `-c` does not expand psql
+# variables, hence the here-documents on stdin.
+USER_ID_RE='^[A-Za-z0-9_:-]{1,64}$'
+check_user_id() {
+  if [[ ! "$1" =~ $USER_ID_RE ]]; then
+    printf 'ERROR: invalid USER_ID (expected 1-64 chars of [A-Za-z0-9_:-]): %q\n' "$1" >&2
+    exit 1
+  fi
+}
+if [[ -n "$USER_ID" ]]; then check_user_id "$USER_ID"; fi
+
 case "$ACTION" in
   list)
     echo "Admins in ${DB_NAME}:"
@@ -156,9 +169,12 @@ case "$ACTION" in
     # last on a PUBLIC service — show who that is and require an explicit
     # confirmation before granting admin. Prefer --grant <USER_ID> (from
     # /hhttps/whoami) in scripts.
-    psql_run -c "SELECT user_id, method, trust_score, issued_at FROM tokens
-                 WHERE user_id = '${USER_ID//\'/\'\'}' AND expires_at > NOW()
-                 ORDER BY issued_at DESC LIMIT 3;"
+    check_user_id "$USER_ID"
+    psql_run -v uid="$USER_ID" <<'SQL'
+SELECT user_id, method, trust_score, issued_at FROM tokens
+ WHERE user_id = :'uid' AND expires_at > NOW()
+ ORDER BY issued_at DESC LIMIT 3;
+SQL
     echo "Most recent live identity: ${USER_ID}"
     if [[ "${ASSUME_YES:-0}" != "1" ]]; then
       if [[ ! -t 0 ]]; then
@@ -171,9 +187,11 @@ case "$ACTION" in
         exit 1
       fi
     fi
-    psql_run -c "INSERT INTO admins (user_id, granted_by, note)
-                 VALUES ('${USER_ID}', 'make-admin.sh', '${NOTE//\'/\'\'}')
-                 ON CONFLICT (user_id) DO NOTHING;"
+    psql_run -q -v uid="$USER_ID" -v note="$NOTE" <<'SQL'
+INSERT INTO admins (user_id, granted_by, note)
+VALUES (:'uid', 'make-admin.sh', :'note')
+ON CONFLICT (user_id) DO NOTHING;
+SQL
     echo "✓ ${USER_ID} is now an admin."
     echo ""
     echo "  IMPORTANT: if you signed in with e-mail only, this id dies with the"
@@ -182,20 +200,27 @@ case "$ACTION" in
     ;;
 
   grant)
-    psql_run -c "INSERT INTO admins (user_id, granted_by, note)
-                 VALUES ('${USER_ID}', 'make-admin.sh', '${NOTE//\'/\'\'}')
-                 ON CONFLICT (user_id) DO NOTHING;"
+    psql_run -q -v uid="$USER_ID" -v note="$NOTE" <<'SQL'
+INSERT INTO admins (user_id, granted_by, note)
+VALUES (:'uid', 'make-admin.sh', :'note')
+ON CONFLICT (user_id) DO NOTHING;
+SQL
     echo "✓ ${USER_ID} is now an admin."
     echo "  Verify in the browser: hard-reload /developers/ — the badge should show '· admin'."
     ;;
 
   revoke)
-    psql_run -c "DELETE FROM admins WHERE user_id = '${USER_ID}';"
+    psql_run -q -v uid="$USER_ID" <<'SQL'
+DELETE FROM admins WHERE user_id = :'uid';
+SQL
     echo "✓ Admin privileges revoked for ${USER_ID} (no-op if they weren't an admin)."
     ;;
 
   whoami)
-    RESULT="$(psql_run -tAc "SELECT 1 FROM admins WHERE user_id = '${USER_ID}' LIMIT 1;")"
+    RESULT="$(psql_run -tA -v uid="$USER_ID" <<'SQL'
+SELECT 1 FROM admins WHERE user_id = :'uid' LIMIT 1;
+SQL
+)"
     if [[ "$RESULT" == "1" ]]; then
       echo "yes — ${USER_ID} is an admin"
     else

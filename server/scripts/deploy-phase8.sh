@@ -20,6 +20,12 @@
 #   bash .../deploy-phase8.sh --skip-operator                    # ohne Schritt 6
 #   bash .../deploy-phase8.sh --link                             # einmalig:
 #        INSTALL_DIR durch Symlink auf REPO_DIR/server ersetzen (siehe Runbook)
+#   bash .../deploy-phase8.sh --rollback <sha>                   # Rollback:
+#        BRANCH auf <sha> zuruecksetzen (kein git pull), Build/Sync/Restart
+#        wie beim Deploy, Operator-Schritt uebersprungen. <sha> steht in
+#        <BACKUP>/repo-head-before.txt. Schema-Aenderungen sind additiv und
+#        bleiben; der naechste normale Deploy holt BRANCH per --ff-only wieder
+#        auf den aktuellen Stand.
 #
 # Variablen (per Umgebung überschreibbar):
 #   REPO_DIR=/root/HHTTPS  INSTALL_DIR=/var/www/hhttps  PM2_APP=hhttps-v4
@@ -37,14 +43,22 @@ PORT="${PORT:-3000}"
 MIGRATION="sql/migration-phase-8-email-anchored-identity.sql"
 OPERATOR_MARKER="-- >>> BOOT-DDL END"
 
-DRY_RUN=0; SKIP_OPERATOR=0; DO_LINK=0
-for a in "$@"; do
-  case "$a" in
-    --dry-run)       DRY_RUN=1 ;;
-    --skip-operator) SKIP_OPERATOR=1 ;;
-    --link)          DO_LINK=1 ;;
-    -h|--help)       sed -n '2,30p' "$0"; exit 0 ;;
-    *) echo "Unbekannte Option: $a"; exit 2 ;;
+DRY_RUN=0; SKIP_OPERATOR=0; DO_LINK=0; ROLLBACK_SHA=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)       DRY_RUN=1; shift ;;
+    --skip-operator) SKIP_OPERATOR=1; shift ;;
+    --link)          DO_LINK=1; shift ;;
+    # AP6-09 (#89): Rollback ist ein eigener Modus. Der alte Rat
+    # (`git checkout <sha> && bash $0 --skip-operator`) scheiterte am
+    # Branch-Preflight ("Repo steht auf 'HEAD'"), und `git pull` haette den
+    # neuen Stand ohnehin wieder geholt.
+    --rollback)
+      ROLLBACK_SHA="${2:-}"
+      [[ -n "$ROLLBACK_SHA" ]] || { echo "--rollback braucht einen Commit (siehe <BACKUP>/repo-head-before.txt)"; exit 2; }
+      SKIP_OPERATOR=1; shift 2 ;;
+    -h|--help)       sed -n '2,36p' "$0"; exit 0 ;;
+    *) echo "Unbekannte Option: $1"; exit 2 ;;
   esac
 done
 
@@ -123,7 +137,16 @@ step "1/7 Preflight"
 cd "$REPO_DIR"
 git fetch -q origin "$BRANCH" || fail "git fetch fehlgeschlagen"
 CUR="$(git rev-parse --abbrev-ref HEAD)"
-[[ "$CUR" == "$BRANCH" ]] || fail "Repo steht auf '$CUR', erwartet '$BRANCH' (git checkout $BRANCH)"
+if [[ -n "$ROLLBACK_SHA" ]]; then
+  # Rollback: der Commit muss lokal existieren; ein losgeloester HEAD (von
+  # einem frueheren manuellen `git checkout <sha>`) ist in Ordnung — BRANCH
+  # wird unten auf das Ziel gesetzt.
+  ROLLBACK_SHA="$(git rev-parse --verify --quiet "${ROLLBACK_SHA}^{commit}")" \
+    || fail "Rollback-Commit nicht gefunden: ${ROLLBACK_SHA}"
+  ok "Rollback-Ziel: $(git rev-parse --short "$ROLLBACK_SHA") (aktuell: $(git rev-parse --short HEAD) auf '$CUR')"
+else
+  [[ "$CUR" == "$BRANCH" ]] || fail "Repo steht auf '$CUR', erwartet '$BRANCH' (git checkout $BRANCH)"
+fi
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || fail "Repo hat lokale Änderungen — erst committen/stashen"
 # Untracked Dateien, die auf origin/BRANCH getrackt sind, würden `git pull` blockieren
 CONFLICTS="$(comm -12 <(git ls-files --others --exclude-standard | sort) <(git ls-tree -r --name-only "origin/$BRANCH" | sort) || true)"
@@ -186,8 +209,16 @@ ok "Backup: .env, keys/, eudi-keys/, Repo-Head $(git rev-parse --short HEAD)"
 
 # ─── 3. Build ─────────────────────────────────────────────────────────────────
 step "3/7 Build"
-git pull -q --ff-only origin "$BRANCH" || fail "git pull --ff-only fehlgeschlagen"
-ok "Repo auf $(git rev-parse --short HEAD)"
+if [[ -n "$ROLLBACK_SHA" ]]; then
+  # Auf BRANCH bleiben (damit der naechste normale Deploy wieder
+  # fast-forwarden kann) und ihn auf den Rollback-Commit setzen. Kein pull —
+  # der wuerde den gerade zurueckgenommenen Stand wieder holen.
+  git checkout -q -B "$BRANCH" "$ROLLBACK_SHA" || fail "git checkout -B $BRANCH $ROLLBACK_SHA fehlgeschlagen"
+  ok "Rollback: $BRANCH steht auf $(git rev-parse --short HEAD) (kein git pull)"
+else
+  git pull -q --ff-only origin "$BRANCH" || fail "git pull --ff-only fehlgeschlagen"
+  ok "Repo auf $(git rev-parse --short HEAD)"
+fi
 cd "$SRC_DIR"
 npm ci --omit=dev --no-audit --no-fund >/dev/null || fail "npm ci fehlgeschlagen"
 ok "npm ci --omit=dev"
@@ -264,5 +295,5 @@ RP="$(envval RP_ID "$ENV_FILE")"
 
 echo
 echo "  ${G}Deploy abgeschlossen.${N} Repo $(cd "$REPO_DIR" && git rev-parse --short HEAD) · Backup $BK"
-echo "  Rollback: git -C $REPO_DIR checkout \$(cat $BK/repo-head-before.txt) && bash $0 --skip-operator"
+echo "  Rollback: bash $0 --rollback \$(cat $BK/repo-head-before.txt)"
 echo "  (Schema-Änderungen sind additiv und bleiben; .env/keys aus $BK bei Bedarf zurückkopieren)"

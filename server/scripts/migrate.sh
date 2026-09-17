@@ -73,13 +73,17 @@ ok "Dependencies aktualisiert"
 bash "${INSTALL_DIR}/scripts/install-pg.sh" "${INSTALL_DIR}"
 
 # ─── 8. Restart ───────────────────────────────────────────────────────────────
+# AP6-17 (#118): the .env is NOT sourced here. server.js loads it itself via
+# dotenv; sourcing would export every secret into the pm2 process environment
+# and into ~/.pm2/dump.pm2 — and unquoted values containing spaces or `$(…)`
+# would be executed by the shell (see the same reasoning in make-admin.sh).
 cd "${INSTALL_DIR}"
-set -a; source .env; set +a
 
 if pm2 list 2>/dev/null | grep -q "${PM2_APP}"; then
   pm2 restart "${PM2_APP}" --update-env >/dev/null
 else
-  pm2 start server.js --name "${PM2_APP}" >/dev/null
+  # --cwd so dotenv finds the .env even when pm2 resurrects the process later.
+  pm2 start server.js --name "${PM2_APP}" --cwd "${INSTALL_DIR}" >/dev/null
 fi
 pm2 save >/dev/null 2>&1
 ok "Server gestartet"

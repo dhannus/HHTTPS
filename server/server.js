@@ -49,7 +49,7 @@ import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webho
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
 import { normalizeEmail, emailAnchorHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
-import { validateAuthorizeParams, stateForErrorRedirect } from './oauth-params.js';
+import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect } from './oauth-params.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -73,6 +73,15 @@ const PORT     = process.env.PORT    || 3000;
 const RP_ID    = process.env.RP_ID   || 'hhttps.org';
 const ORIGIN   = process.env.ORIGIN  || `https://${RP_ID}`;
 const BASE_URL = process.env.BASE_URL || ORIGIN;
+// AP2-15 (#114): key for the pairwise `sub` HMAC. The deterministic fallback
+// is for development only — in production the boot refuses without it (see
+// assertPairwiseSecretConfigured, analogous to assertPepperConfigured).
+const PAIRWISE_SECRET = process.env.PAIRWISE_SECRET || ('hhttps-pairwise-' + RP_ID);
+function assertPairwiseSecretConfigured(env = process.env) {
+  if (env.NODE_ENV === 'production' && !env.PAIRWISE_SECRET) {
+    throw new Error('PAIRWISE_SECRET must be set in production (pairwise OAuth subject identifiers depend on it).');
+  }
+}
 
 // ── WIMSE: RFC 7638 JWK thumbprint for an EC P-256 public JWK ───────────────
 // Zero-PII: only the thumbprint is ever stored, never the key material.
@@ -373,24 +382,35 @@ app.use(express.json({ limit: '2mb' }));
 // its own Content-Type, so JSON endpoints are unaffected.
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
-app.use(cors({
-  exposedHeaders: [
-    'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
-    'HHTTPS-Actor-Type','HHTTPS-Role','HHTTPS-Role-Label',
-    'HHTTPS-Role-Level','HHTTPS-Trust-Score',
-    'HHTTPS-Issuer','HHTTPS-Method',
-    'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
-    'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method'
-  ]
-}));
+// AP1-05: every HHTTPS-* header setHHTPPS() / setRoleHeaders() can emit must be
+// readable by cross-origin JavaScript. The per-method headers derive from the
+// VERIFICATION_METHODS registry so a new method is exposed automatically.
+const HHTTPS_EXPOSED_HEADERS = [
+  'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
+  'HHTTPS-Actor-Type','HHTTPS-Role','HHTTPS-Role-Label',
+  'HHTTPS-Role-Level','HHTTPS-Trust-Score',
+  'HHTTPS-Issuer','HHTTPS-Method',
+  'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
+  'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method',
+  // v0.5 verification surface + role assurance (roles.eaa.js setRoleHeaders)
+  'HHTTPS-Verified-Methods', 'HHTTPS-RAL', 'HHTTPS-Role-ISCO08',
+  ...Object.values(VERIFICATION_METHODS).flatMap(m => [m.header, m.valueHeader].filter(Boolean))
+];
+app.use(cors({ exposedHeaders: [...new Set(HHTTPS_EXPOSED_HEADERS)] }));
 
 // CRITICAL: scriptSrcAttr must allow 'unsafe-inline' so the existing onclick=
 // handlers in index.html keep working. Without this, all buttons silently fail.
+// AP1-25 (partial): third-party scripts are pinned to the two exact bundles
+// public/index.html loads instead of the whole of unpkg.com. Dropping
+// 'unsafe-inline' needs the inline handlers in public/*.html replaced first.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", "'unsafe-inline'", 'unpkg.com', 'fonts.googleapis.com'],
+      scriptSrc:  ["'self'", "'unsafe-inline'",
+                   'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js',
+                   'https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js',
+                   'fonts.googleapis.com'],
       scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc:   ["'self'", "'unsafe-inline'", 'fonts.googleapis.com'],
       fontSrc:    ["'self'", 'fonts.gstatic.com'],
@@ -425,13 +445,41 @@ const limit = {
   email:    rl(30, 60 * 60_000),
   revoke:   rl(30),
   webhooks: rl(20, 60 * 60_000),
-  machine:  rl(60)
+  machine:  rl(60),
+  // AP1-32: /hhttps/info used to be exempt from every limiter while running six
+  // COUNT(*) per call — now it has its own budget (plus a 30 s counter cache).
+  info:     rl(60),
+  // AP1-08: the ESCO proxy talks to an external API per call — own budget.
+  esco:     rl(60)
 };
 
 app.use((req, res, next) => {
-  if (req.path === '/' || req.path === '/hhttps/info') return next();
+  if (req.path === '/') return next();
   limit.global(req, res, next);
 });
+
+// ─── AP1-33: in-process stats accumulator ────────────────────────────────────
+// Hot counters (check_calls, machine_checks) are no longer written to the
+// single `stats` row on every request; they accumulate here and are flushed
+// with one UPDATE per metric every STATS_FLUSH_MS (default 10 s).
+const STATS_FLUSH_MS = Math.max(200, parseInt(process.env.STATS_FLUSH_MS || '10000', 10) || 10000);
+const _pendingStats = new Map();
+function bumpStat(metric, by = 1) {
+  _pendingStats.set(metric, (_pendingStats.get(metric) || 0) + by);
+}
+async function flushStats() {
+  if (!_pendingStats.size) return;
+  const batch = [..._pendingStats.entries()];
+  _pendingStats.clear();
+  for (const [metric, by] of batch) {
+    try { await db.stats.increment(metric, by); }
+    catch (e) {
+      _pendingStats.set(metric, (_pendingStats.get(metric) || 0) + by); // retry next tick
+      console.error('[STATS] flush failed:', e.message);
+    }
+  }
+}
+setInterval(flushStats, STATS_FLUSH_MS).unref();
 
 // ─── HHTTPS identity cookie (additive convenience feature) ────────────────────
 //
@@ -475,34 +523,56 @@ function readIdentityCookie(req) {
   return null;
 }
 
+// AP3-08 (#65): revoked jtis seen by the identity-cookie middleware. A jti
+// never comes back from revocation, so remembering it is safe; the negative
+// case is NOT cached, otherwise a revoke would take effect only after the TTL.
+const revokedCookieJtis = new Set();
+
+async function isIdentityCookieRevoked(jti) {
+  if (!jti) return false;
+  if (revokedCookieJtis.has(jti)) return true;
+  if (!await db.revokedTokens.has(jti)) return false;
+  if (revokedCookieJtis.size > 10_000) revokedCookieJtis.clear();  // bounded
+  revokedCookieJtis.add(jti);
+  return true;
+}
+
 // Advertise HHTTPS on every static/landing response. If the visitor carries a
 // valid identity cookie (i.e. they logged in on hhttps.org), surface their real
 // identity in the headers; otherwise emit the issuer-level headers. We never
 // invent identity — headers reflect a verified token or nothing.
-app.use((req, res, next) => {
+// AP1-17 / AP3-08 (#81, #65): the cookie is checked like any other bearer —
+// positive list (sub === 'human-verified' with a jti; text signatures, OAuth
+// access tokens, machine and refresh tokens are NOT identities) plus the
+// revocation list. Only the POSITIVE result is remembered (a jti never comes
+// back from revocation), so a revoke takes effect immediately while a stale
+// cookie that keeps being sent costs exactly one query.
+app.use(async (req, res, next) => {
   res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
 
   const cookieToken = readIdentityCookie(req);
   if (cookieToken) {
     try {
       const d = verifyToken(cookieToken);
-      if (d.sub !== 'refresh' && !(d.actorType === 'bot')) {
-        setHHTPPS(res, {
-          status:     'verified',
-          human:      true,
-          actorType:  'human',
-          role:       d.role,
-          roleLevel:  d.roleLevel,
-          trustScore: d.trustScore ?? 0,
-          method:     d.method || 'webauthn-passkey',
-          ageGroup:              d.age_group || null,
-          ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
-          ageVerificationMethod: d.age_verification_method || null
-        });
-        return next();
+      if (d.sub !== 'human-verified' || typeof d.jti !== 'string' || !d.jti) {
+        throw new Error('not an identity token');
       }
+      if (await isIdentityCookieRevoked(d.jti)) throw new Error('token_revoked');
+      setHHTPPS(res, {
+        status:     'verified',
+        human:      true,
+        actorType:  'human',
+        role:       d.role,
+        roleLevel:  d.roleLevel,
+        trustScore: d.trustScore ?? 0,
+        method:     d.method || 'webauthn-passkey',
+        ageGroup:              d.age_group || null,
+        ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
+        ageVerificationMethod: d.age_verification_method || null
+      });
+      return next();
     } catch {
-      // Expired/invalid cookie token → fall through to issuer headers and clear it.
+      // Expired/invalid/revoked/foreign cookie token → issuer headers, cookie cleared.
       clearIdentityCookie(res);
     }
   }
@@ -716,7 +786,11 @@ setInterval(async () => {
     const total = (r.deleted_tokens || 0) + (r.deleted_refresh || 0) +
                   (r.deleted_sessions || 0) + (r.deleted_challenges || 0) +
                   (r.deleted_emails || 0) + (r.deleted_claims_cache || 0) +
-                  (r.deleted_auth_codes || 0);
+                  (r.deleted_auth_codes || 0) +
+                  // AP1-34 / AP1-35 / AP5-29 (phase-10 cleanup_expired): revoked
+                  // jtis, delivery log, never-confirmed platform drafts
+                  (r.deleted_revoked || 0) + (r.deleted_webhook_deliveries || 0) +
+                  (r.deleted_stale_clients || 0);
     if (total > 0) console.log(`[CLEANUP] removed ${total} expired records`);
   } catch (err) {
     console.error('[CLEANUP] failed:', err.message);
@@ -771,14 +845,23 @@ app.get('/.well-known/hhttps-role-assurance', (req, res) => {
 
 // ESCO occupation typeahead (server-side proxy → avoids CORS, keeps the browser
 // dependency-free). Returns up to 8 { label, isco08, escoUri, reserved } hits.
-app.get('/hhttps/esco/suggest', async (req, res) => {
-  const q = String(req.query.q || '').trim();
+// AP1-08: own rate limit, a hard timeout on the upstream call and a small TTL
+// cache per lang:q so a typeahead burst does not become an ESCO burst.
+const ESCO_TIMEOUT_MS   = 4000;
+const ESCO_CACHE_TTL_MS = 5 * 60_000;
+const ESCO_CACHE_MAX    = 500;
+const _escoCache = new Map(); // `${lang}:${q}` → { results, until }
+app.get('/hhttps/esco/suggest', limit.esco, async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 80);
   const lang = (String(req.query.lang || 'de') === 'en') ? 'en' : 'de';
   if (q.length < 2) return res.json({ results: [] });
+  const cacheKey = `${lang}:${q.toLowerCase()}`;
+  const cached = _escoCache.get(cacheKey);
+  if (cached && cached.until > Date.now()) return res.json({ results: cached.results, cached: true });
   try {
     const url = `https://ec.europa.eu/esco/api/search?type=occupation&language=${lang}` +
                 `&text=${encodeURIComponent(q)}&full=false&limit=8`;
-    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(ESCO_TIMEOUT_MS) });
     if (!r.ok) return res.json({ results: [] });
     const j = await r.json();
     const hits = j?._embedded?.results || [];
@@ -788,6 +871,8 @@ app.get('/hhttps/esco/suggest', async (req, res) => {
       const g = guardReservedRole(label, isco08);
       return { label, isco08, escoUri: h.uri || null, reserved: g.reserved, reservedKey: g.key || null };
     }).filter(x => x.label);
+    if (_escoCache.size >= ESCO_CACHE_MAX) _escoCache.delete(_escoCache.keys().next().value);
+    _escoCache.set(cacheKey, { results, until: Date.now() + ESCO_CACHE_TTL_MS });
     res.json({ results });
   } catch (e) {
     res.json({ results: [], error: 'esco_unreachable' });
@@ -796,13 +881,37 @@ app.get('/hhttps/esco/suggest', async (req, res) => {
 
 // ─── Info ─────────────────────────────────────────────────────────────────────
 
-app.get('/hhttps/info', async (req, res) => {
-  setHHTPPS(res, { status: 'info', actorType: 'api' });
-
+// AP1-32: the six COUNT(*) behind the stats block are cached for 30 s
+// (in-process) and the response carries a matching Cache-Control.
+const INFO_CACHE_MS = 30_000;
+let _infoCounts = null; // { counts, until }
+async function infoCounts() {
+  if (_infoCounts && _infoCounts.until > Date.now()) return _infoCounts.counts;
   const counts = await Promise.all([
     db.credentials.count(), db.tokens.count(), db.refreshTokens.count(),
     db.sessions.count(), db.revokedTokens.count(), db.machineOperators.count()
   ]);
+  _infoCounts = { counts, until: Date.now() + INFO_CACHE_MS };
+  return counts;
+}
+
+app.get('/hhttps/info', limit.info, async (req, res) => {
+  setHHTPPS(res, { status: 'info', actorType: 'api' });
+
+  let counts;
+  try {
+    counts = await infoCounts();
+  } catch (e) {
+    // AP1-02: a DB error must answer, not hang the request.
+    console.error('[INFO] stats unavailable:', e.message);
+    return res.status(500).json({ error: 'server_error', message: 'stats unavailable' });
+  }
+  // sendJson negotiates HTML vs JSON on Accept/User-Agent, so a shared cache
+  // must key on them — otherwise `public` would hand the viewer HTML to an API
+  // client (and vice versa).
+  res.vary('Accept');
+  res.vary('User-Agent');
+  res.setHeader('Cache-Control', `public, max-age=${INFO_CACHE_MS / 1000}`);
 
   sendJson(req, res, {
     protocol: 'HHTTPS — Human-verified HTTPS', version: '0.5.0',
@@ -863,7 +972,8 @@ app.get('/hhttps/info', async (req, res) => {
 // ─── Core Check ──────────────────────────────────────────────────────────────
 
 app.post('/hhttps/check', limit.check, async (req, res) => {
-  await db.stats.increment('check_calls');
+  // AP1-33: counted in-process, flushed periodically — no write before the check.
+  bumpStat('check_calls');
   const token = req.headers['hhttps-token'] ||
                 req.headers['authorization']?.replace('Bearer ', '') ||
                 req.body?.token;
@@ -880,7 +990,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     const d = await checkTokenValid(token);
 
     if (d.sub === 'machine') {
-      await db.stats.increment('machine_checks');
+      bumpStat('machine_checks');
       setHHTPPS(res, { status: 'verified', human: false, actorType: 'bot',
                        method: 'machine-token', machineOperator: d.operatorId,
                        machinePurpose: d.purpose });
@@ -1010,7 +1120,10 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
   }
 
   try {
-    const d = verifyToken(signature);
+    // AP1-03: verify the signature itself with expiry ignored, then report an
+    // expired-but-authentic signature as `expired` (jwt.verify would otherwise
+    // throw TokenExpiredError and the branch below was unreachable).
+    const d = verifyToken(signature, { ignoreExpiration: true });
     if (d.sub !== 'text-signature') {
       return res.status(400).json({ error: 'not a text signature' });
     }
@@ -1036,7 +1149,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
         message: 'Signature was revoked.'
       });
     }
-    if (d.exp * 1000 < Date.now()) {
+    if (typeof d.exp !== 'number' || d.exp * 1000 < Date.now()) {
       return res.json({
         hhttps: { status: 'expired', match: true },
         match:  true,
@@ -1112,7 +1225,12 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
       }
     } while (await db.signatures.slugExists(slug) || await db.signatures.isReservedSlug(slug));
 
-    const roleDef = ROLES[d.role] || ROLES.citizen;
+    // AP1-09: since v0.5 an access token carries NO role unless an EUDI (Q)EAA
+    // supplied one, but signatures.role is NOT NULL — every signature by an
+    // ordinary signed-in human failed with a DB error (reported as a bogus 401).
+    // The role snapshot falls back to the same default `roleDef` already used.
+    const roleId  = d.role || 'citizen';
+    const roleDef = ROLES[roleId] || ROLES.citizen;
     const vlevel  = VERIFICATION_LEVELS[d.roleLevel] || {};
 
     const textPreview = text.length <= 120 ? text : text.slice(0, 117) + '…';
@@ -1120,7 +1238,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     await db.signatures.create({
       id:              slug,
       signerId:        d.uid || d.userId || d.sub,   // pseudonymous user id
-      role:            d.role,
+      role:            roleId,
       roleLabel:       roleDef.label,
       roleIcon:        roleDef.icon,
       trustScore:      d.trustScore,
@@ -1143,7 +1261,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
       marker:  `#hhttps:s:${slug}`,
       url:     `${BASE_URL}/s/${slug}`,
       role: {
-        id:    d.role,
+        id:    roleId,
         label: roleDef.label,
         icon:  roleDef.icon,
         trustScore: d.trustScore
@@ -1166,7 +1284,14 @@ app.get('/hhttps/s/:slug', async (req, res) => {
   if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
     return res.status(400).json({ error: 'invalid slug format' });
   }
-  const sig = await db.signatures.get(slug);
+  let sig;
+  try {
+    sig = await db.signatures.get(slug);
+  } catch (e) {
+    // AP1-02: a DB error answers 500 instead of leaving the request hanging.
+    console.error('[SIGNATURES] lookup failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
   if (!sig) {
     return res.status(404).json({
       hhttps: { status: 'unknown' },
@@ -1179,8 +1304,13 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 
   const reqDomain = req.query.domain ? normalizeApexDomain(req.query.domain) : null;
 
-  // First-seen-lock: only record on first valid verification with a domain
-  if (!sig.first_seen_at && reqDomain) {
+  // First-seen-lock (AP1-26): the endpoint is public and ?domain= is
+  // caller-supplied, so the lock is only recorded when the observed domain IS
+  // the bound domain. Any other caller (wrong domain, unbound e-mail/document
+  // signatures) leaves firstSeen unset rather than letting an anonymous
+  // stranger stamp an arbitrary domain onto someone else's signature.
+  if (!sig.first_seen_at && reqDomain && sig.binding_type === 'web' &&
+      sig.bound_domain && reqDomain === sig.bound_domain) {
     await db.signatures.setFirstSeen(slug, reqDomain).catch(() => {});
   }
 
@@ -1272,8 +1402,15 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
     return res.status(400).json({ error: 'too many slugs (max 100)' });
   }
 
-  const cleanSlugs = slugs.filter(s => /^hp-[A-Z0-9\-]+$/i.test(s));
-  const sigs = await db.signatures.getMany(cleanSlugs);
+  const cleanSlugs = slugs.filter(s => typeof s === 'string' && /^hp-[A-Z0-9\-]+$/i.test(s));
+  let sigs;
+  try {
+    sigs = await db.signatures.getMany(cleanSlugs);
+  } catch (e) {
+    // AP1-02: a DB error answers 500 instead of leaving the request hanging.
+    console.error('[SIGNATURES] batch lookup failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
   const reqDomain = domain ? normalizeApexDomain(domain) : null;
 
   const out = {};
@@ -1409,8 +1546,7 @@ function pairwiseSubjectId(userId, clientId, subjectType) {
     return crypto.createHash('sha256').update(`public:${userId}`).digest('hex').slice(0, 32);
   }
   // pairwise (default): HMAC(userId + clientId, server-secret)
-  const secret = process.env.PAIRWISE_SECRET || 'hhttps-pairwise-' + RP_ID;
-  return crypto.createHmac('sha256', secret)
+  return crypto.createHmac('sha256', PAIRWISE_SECRET)
     .update(`${userId}|${clientId}`)
     .digest('hex')
     .slice(0, 32);
@@ -1463,7 +1599,7 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
 
   // #31: bounded state/nonce, well-formed PKCE (RFC 7636 §4.2). An over-long
   // state is NOT echoed back at full length in the error redirect.
-  const v = validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method });
+  const v = validateAuthorizeParams({ state, nonce, scope, code_challenge, code_challenge_method });
   if (!v.ok) {
     return redirectWithError(res, redirect_uri, stateForErrorRedirect(state), v.error, v.description);
   }
@@ -1535,7 +1671,7 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
 
   // #31: validate before touching the DB — an over-long state/nonce or a
   // malformed code_challenge is a client error, not a 401/500.
-  const v = validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method });
+  const v = validateAuthorizeParams({ state, nonce, scope, code_challenge, code_challenge_method });
   if (!v.ok) return res.status(400).json({ error: v.error, error_description: v.description });
 
   // Token errors (revoked / not active / jwt) stay 401 — everything after
@@ -1638,7 +1774,22 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
 });
 
 // Token endpoint: exchange code for access_token + id_token
+// AP2-04 (#77): the handler is async under Express 4 — a thrown error would
+// leave the request hanging forever. Everything runs inside handleTokenRequest
+// and any unexpected failure becomes 500 server_error (RFC 6749 §5.2).
 app.post('/hhttps/oauth/token', async (req, res) => {
+  try {
+    await handleTokenRequest(req, res);
+  } catch (err) {
+    console.error('[OAUTH] token endpoint failed:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'server_error' });
+  }
+});
+
+async function handleTokenRequest(req, res) {
+  const tv = validateTokenParams(req.body || {});
+  if (!tv.ok) return res.status(400).json({ error: tv.error, error_description: tv.description });
+
   const {
     grant_type,
     code,
@@ -1669,26 +1820,29 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
       return res.status(400).json({ error: 'invalid_grant' });
     }
-    const active = await db.refreshTokens.get(rd.jti);
-    if (!active) {
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
-    }
-    // AP2-01: "disconnect platform" (/hhttps/oauth/revoke) must end the chain.
-    if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
-      await db.refreshTokens.delete(rd.jti);
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
-    }
-
-    // Rotation: erst die neue jti anlegen, dann die alte entwerten — und
-    // jeden Persistenzfehler sauber beantworten statt den Request hängen zu
-    // lassen.
+    // AP2-03 (#68): rotation is ONE atomic claim — the old jti is deleted with
+    // a conditional DELETE … RETURNING, so of N parallel refreshes with the
+    // same token exactly one wins; the rest get invalid_grant (RFC 6749
+    // §10.4). Only the winner mints the successor. (Inline SQL — db.js belongs
+    // to another package in this review wave; a refreshTokens.claim() helper
+    // is the follow-up.)
     const newJti = uuid();
     try {
+      const claimed = await db.q(
+        `DELETE FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW() RETURNING jti`, [rd.jti]
+      );
+      if (claimed.rowCount !== 1) {
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
+      }
+      // AP2-01: "disconnect platform" must end the chain. The claim above has
+      // already removed the row, so a disconnected platform simply stops here.
+      if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
+      }
       await db.refreshTokens.create({
         jti: newJti, userId: rd.ouid, credentialId: null,
         role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
       });
-      await db.refreshTokens.delete(rd.jti);
     } catch (err) {
       console.error('[OAUTH] refresh rotation failed:', err.message);
       return res.status(500).json({ error: 'server_error' });
@@ -1700,7 +1854,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes: rScopes
     });
     const newRefresh = signToken({
-      sub: 'oauth_refresh', jti: newJti, client_id,
+      sub: 'oauth_refresh', token_use: 'refresh', jti: newJti, client_id,
       ouid: rd.ouid, scope: rd.scope || 'openid',
       role: rd.role || null, trust_score: rd.trust_score ?? 0,
       verification_method: rd.verification_method || null,
@@ -1717,6 +1871,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       hhttps_iss: `hhttps://${RP_ID}`,
       sub:        rPairwise,
       aud:        client_id,
+      token_use:  'access',
       client_id,
       scope:      rScopes.join(' '),
       role:       rd.role || null,
@@ -1789,8 +1944,10 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   // Generate pairwise subject ID
   const pairwiseId = pairwiseSubjectId(claimed.user_id, client_id, client.subject_type);
 
-  // Record the connection (for "my logins" UI later)
-  await db.connectedPlatforms.record({
+  // Record the connection (for "my logins" UI later). AP2-24 (#131): started
+  // here, awaited right before the response — it runs while the tokens are
+  // signed and the refresh row is written instead of serialising everything.
+  const connectionRecorded = db.connectedPlatforms.record({
     userId:             claimed.user_id,
     clientId:           client_id,
     pairwiseSubjectId:  pairwiseId,
@@ -1816,6 +1973,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     hhttps_iss: `hhttps://${RP_ID}`,
     sub:        pairwiseId,
     aud:        client_id,
+    token_use:  'access',
     client_id,
     scope:      claimed.scopes.join(' '),
     role:       claimed.role,
@@ -1862,20 +2020,17 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   Object.assign(idTokenClaims, identityClaims);
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
 
-  await db.stats.increment('oauth_tokens_issued');
-  await db.stats.increment('oauth_logins');
-
-  // Phase 3b: per-client privacy-preserving daily stats
-  // (no user IDs, just role/trust buckets)
-  try {
-    await db.clientStats.recordLogin(
-      client_id,
-      idTokenClaims.role || 'unknown',
-      idTokenClaims.trust_score || 0
-    );
-  } catch (err) {
-    console.warn('[STATS] recordLogin failed:', err.message);
-  }
+  // AP2-24 (#131): statistics are decoupled from the response path. The two
+  // global counters (`stats` hot rows, INSERT … ON CONFLICT) and the per-client
+  // daily bucket run in parallel and are never awaited — a failure is logged,
+  // never surfaced to the client.
+  Promise.all([
+    db.stats.increment('oauth_tokens_issued'),
+    db.stats.increment('oauth_logins'),
+    // Phase 3b: per-client privacy-preserving daily stats
+    // (no user IDs, just role/trust buckets)
+    db.clientStats.recordLogin(client_id, idTokenClaims.role || 'unknown', idTokenClaims.trust_score || 0)
+  ]).catch(err => console.warn('[STATS] oauth token stats failed:', err.message));
 
   // Refresh-Token für die stille Erneuerung (RFC 6749 §6), rotierend.
   // Die Persistenz darf den Login NIE brechen: schlägt sie fehl, antworten
@@ -1883,14 +2038,18 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   // trägt einen FK auf credentials; die OAuth-Bindung steckt signiert im
   // Refresh-JWT selbst (client_id-Claim).
   let oauthRefreshToken = null;
-  try {
-    const refreshJti = uuid();
-    await db.refreshTokens.create({
-      jti: refreshJti, userId: claimed.user_id, credentialId: null,
-      role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
-    });
+  const refreshJti = uuid();
+  const refreshRowWritten = db.refreshTokens.create({
+    jti: refreshJti, userId: claimed.user_id, credentialId: null,
+    role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
+  }).then(() => true, (err) => {
+    console.error('[OAUTH] refresh issuance failed:', err.message);
+    return false;
+  });
+  await connectionRecorded;
+  if (await refreshRowWritten) {
     oauthRefreshToken = signToken({
-      sub: 'oauth_refresh', jti: refreshJti, client_id,
+      sub: 'oauth_refresh', token_use: 'refresh', jti: refreshJti, client_id,
       ouid: claimed.user_id, scope: claimed.scopes.join(' '),
       role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
       verification_method: claimed.verification_method || null,
@@ -1899,8 +2058,6 @@ app.post('/hhttps/oauth/token', async (req, res) => {
         age_verification_method: claimed.age_verification_method || 'self-declared' } : {}),
       ...identityClaims
     }, { expiresIn: OAUTH_REFRESH_TTL });
-  } catch (err) {
-    console.error('[OAUTH] refresh issuance failed:', err.message);
   }
 
   return res.json({
@@ -1911,7 +2068,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     ...(oauthRefreshToken ? { refresh_token: oauthRefreshToken } : {}),
     scope:         claimed.scopes.join(' ')
   });
-});
+}
 
 // UserInfo endpoint: returns claims for the bearer token
 app.get('/hhttps/oauth/userinfo', async (req, res) => {
@@ -1919,11 +2076,22 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'unauthorized' });
 
+  let d;
   try {
-    const d = verifyToken(token);
-    if (!d.client_id) {
-      return res.status(403).json({ error: 'not an oauth access token' });
-    }
+    d = verifyToken(token);
+  } catch (e) {
+    return userinfoInvalidToken(res, 'access token invalid or expired');
+  }
+  // AP2-10 (#105): only an OAuth ACCESS token is accepted — positively marked
+  // token_use:'access', audience = client, pairwise/public subject. The
+  // refresh JWT (sub 'oauth_refresh', token_use 'refresh') carries the same
+  // identity claims and lives 30 days, so it must never pass here; neither
+  // does any other server-signed JWT (session, refresh, machine).
+  if (d.token_use !== 'access' || !d.client_id || d.aud !== d.client_id ||
+      !d.sub || d.sub === 'oauth_refresh') {
+    return userinfoInvalidToken(res, 'not an oauth access token');
+  }
+  try {
     const scopes = (d.scope || '').split(/\s+/).filter(Boolean);
     const out = {
       sub: d.sub,
@@ -1947,26 +2115,116 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
     }
     return res.json(out);
   } catch (e) {
-    return res.status(401).json({ error: 'invalid_token' });
+    console.error('[OAUTH] userinfo failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
   }
 });
 
-// Revoke endpoint: user disconnects a platform
-app.post('/hhttps/oauth/revoke', async (req, res) => {
-  const { token, client_id } = req.body || {};
-  if (!token || !client_id) return res.status(400).json({ error: 'token + client_id required' });
+// RFC 6750 §3: 401 + WWW-Authenticate for a rejected bearer token.
+function userinfoInvalidToken(res, description) {
+  res.setHeader('WWW-Authenticate',
+    `Bearer realm="hhttps", error="invalid_token", error_description="${description}"`);
+  return res.status(401).json({ error: 'invalid_token', error_description: description });
+}
 
+// AP2-02 (#59): client authentication for /revoke (same rule as /token) —
+// confidential clients (client_secret_hash set) must present their secret,
+// public clients authenticate by client_id alone. Returns the client row or
+// null (→ 401 invalid_client).
+async function authenticateOAuthClient(client_id, client_secret) {
+  if (!client_id) return null;
+  const client = await db.oauthClients.get(client_id);
+  if (!client) return null;
+  if (client.client_secret_hash) {
+    if (!client_secret) return null;
+    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
+    if (expected !== client.client_secret_hash) return null;
+  }
+  return client;
+}
+
+// AP2-02 (#59): the user-facing disconnect — the USER (with their HHTTPS
+// token) severs the connection to a platform. This is the historical
+// behaviour of POST /hhttps/oauth/revoke and stays reachable there; the
+// dedicated path is /hhttps/oauth/disconnect. AP2-02: the user_id is derived
+// exactly as in /approve, so machine actors ('machine:<operatorId>') hit
+// their own row instead of a non-existent 'machine' row.
+async function disconnectPlatform(res, decoded, client_id) {
   try {
-    const d = await checkTokenValid(token);
-    const uid = d.uid || d.userId || d.sub;
+    const uid = decoded.sub === 'machine'
+      ? 'machine:' + (decoded.operatorId || 'unknown')
+      : (decoded.uid || decoded.userId || decoded.sub);
     await db.connectedPlatforms.revoke(uid, client_id);
     // AP2-01: the platform's OAuth refresh chain ends with the connection.
     const ended = await db.refreshTokens.deleteByUser(uid, client_id);
     for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'platform-disconnected');
     return res.json({ status: 'revoked', client_id, refresh_tokens_revoked: ended.length });
   } catch (e) {
+    console.error('[OAUTH] disconnect failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
+}
+
+// Revocation endpoint (RFC 7009) — the `revocation_endpoint` from discovery.
+// AP2-02 (#59): it used to be a user-disconnect route that never revoked
+// anything for a platform. It now serves both callers, dispatched by the kind
+// of token presented:
+//   1. a valid HHTTPS bearer token (human or machine) → user disconnect,
+//      unchanged semantics (see /hhttps/oauth/disconnect);
+//   2. anything else → RFC 7009: the PLATFORM authenticates with its own
+//      client credentials and a refresh token bound to it is deleted (the
+//      next refresh grant fails with invalid_grant). Access tokens are
+//      stateless and short-lived, so there is nothing to persist. Per RFC
+//      7009 §2.2 an invalid or foreign token still yields 200 — the endpoint
+//      never tells a client whether a token existed.
+app.post('/hhttps/oauth/revoke', async (req, res) => {
+  const { token, token_type_hint, client_id, client_secret } = req.body || {};
+  const tv = validateTokenParams({ client_id, client_secret });
+  if (!tv.ok || (token_type_hint !== undefined && typeof token_type_hint !== 'string')) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  if (!token || typeof token !== 'string' || !client_id) {
+    return res.status(400).json({ error: 'invalid_request', error_description: 'token + client_id required' });
+  }
+
+  // (1) user disconnect — checkTokenValid rejects refresh JWTs and OAuth
+  // access tokens (no jti in `tokens`), so platform tokens fall through.
+  let userToken = null;
+  try { userToken = await checkTokenValid(token); } catch { userToken = null; }
+  if (userToken) return disconnectPlatform(res, userToken, client_id);
+
+  // (2) RFC 7009
+  try {
+    const client = await authenticateOAuthClient(client_id, client_secret);
+    if (!client) return res.status(401).json({ error: 'invalid_client' });
+
+    let d = null;
+    try { d = verifyToken(token); } catch { d = null; }
+    if (d && d.sub === 'oauth_refresh' && d.client_id === client_id && d.jti) {
+      await db.refreshTokens.delete(d.jti);
+    }
+    return res.status(200).json({});
+  } catch (e) {
+    console.error('[OAUTH] revoke failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Disconnect endpoint: the user-facing half of /revoke under its own name —
+// only an HHTTPS bearer token is accepted here, so a wrong token is a clean
+// 401 instead of an RFC 7009 no-op 200.
+app.post('/hhttps/oauth/disconnect', async (req, res) => {
+  const { token, client_id } = req.body || {};
+  if (!token || !client_id || typeof token !== 'string' || typeof client_id !== 'string') {
+    return res.status(400).json({ error: 'token + client_id required' });
+  }
+  let d;
+  try {
+    d = await checkTokenValid(token);
+  } catch (e) {
     return res.status(401).json({ error: e.message });
   }
+  return disconnectPlatform(res, d, client_id);
 });
 
 // ─── OAuth helper rendering ──────────────────────────────────────────────────
@@ -1993,7 +2251,7 @@ h1{font-family:'Fraunces',serif;color:#C97D5B;margin-bottom:16px}
 p{line-height:1.6;color:#4A413A}
 a{color:#A86246;text-decoration:none}
 </style></head><body><div class="box"><h1>OAuth error ${status}</h1><p>${message}</p>
-<p><a href="https://hhttps.org">← back to hhttps.org</a></p></div></body></html>`;
+<p><a href="${escapeHtml(BASE_URL)}">← back to ${escapeHtml(RP_ID)}</a></p></div></body></html>`;
 }
 
 function renderConsentPage({ client, scopes, params }) {
@@ -2121,7 +2379,7 @@ function renderConsentPage({ client, scopes, params }) {
 </style></head><body>
 <div class="wrap">
   <div class="top">
-    <a class="brand" href="https://hhttps.org">
+    <a class="brand" href="${escapeHtml(BASE_URL)}">
       <span class="dot"></span><span>HHTTPS</span>
     </a>
     <div class="lang-toggle" role="group" aria-label="Language">
@@ -2152,10 +2410,12 @@ function renderConsentPage({ client, scopes, params }) {
       <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
       <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">Erlauben</button>
     </div>
-    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="https://hhttps.org">hhttps.org</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
+    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="${escapeHtml(BASE_URL)}">${escapeHtml(RP_ID)}</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
   </div>
 </div>
 <script>
+// AP2-07 (#87): the server's own base URL (BASE_URL) — never a hard-coded host.
+const HHTTPS_BASE = ${JSON.stringify(BASE_URL)};
 const params = new URLSearchParams(${JSON.stringify(params)});
 
 document.getElementById('denyBtn').addEventListener('click', () => {
@@ -2185,7 +2445,7 @@ function clearIdentity(){ try { localStorage.removeItem('hhttps_identity'); } ca
 // auto-send the code (AK-31); returnTo brings the user back here.
 function relogin(){
   clearIdentity();
-  let url = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
+  let url = HHTTPS_BASE + '/?returnTo=' + encodeURIComponent(window.location.href);
   const loginHint = params.get('login_hint');
   const pseudonym = params.get('pseudonym');
   if (loginHint) url += '&login_hint=' + encodeURIComponent(loginHint);
@@ -2204,16 +2464,22 @@ async function tryRefresh(identity){
   if (!identity || !identity.refreshToken) return null;
   if (identity.refreshExpiresAt && new Date(identity.refreshExpiresAt).getTime() <= Date.now()) return null;
   try {
-    const r = await fetch('https://hhttps.org/hhttps/token/refresh', {
+    const r = await fetch(HHTTPS_BASE + '/hhttps/token/refresh', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken: identity.refreshToken })
     });
     if (!r.ok) return null;
     const d = await r.json();
     if (!d.token) return null;
+    // AP3-18 (#116): /hhttps/token/refresh rotates. Without adopting the new
+    // refresh token here, the consent page would write the INVALIDATED one back
+    // into the shared localStorage['hhttps_identity'] and break the sign-in
+    // page's silent refresh too.
     const merged = Object.assign({}, identity, {
       token: d.token,
-      expiresAt: d.expiresAt || identity.expiresAt || null
+      expiresAt: d.expiresAt || identity.expiresAt || null,
+      refreshToken: d.refreshToken || identity.refreshToken,
+      refreshExpiresAt: d.refreshExpiresAt || identity.refreshExpiresAt || null
     });
     try { localStorage.setItem('hhttps_identity', JSON.stringify(merged)); } catch(e){}
     return d.token;
@@ -2471,15 +2737,18 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
   // challenge lookup so a rejected call never touches the challenge.
   const { userId, response, sessionId } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  const session = await db.sessions.get(sessionId);
-  if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
-  if (!requireEmailVerified(session, res)) return;
-  if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
 
-  const stored = await db.challenges.get(userId);
-  if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
-
+  // AP3-03 (#46): every await lives inside the try — a DB error must answer,
+  // not turn into an unhandled rejection with no response at all.
   try {
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    if (!requireEmailVerified(session, res)) return;
+    if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
+
+    const stored = await db.challenges.get(userId);
+    if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
+
     const v = await verifyRegistrationResponse({
       response, expectedChallenge: stored.challenge,
       expectedOrigin: ORIGIN, expectedRPID: RP_ID,
@@ -2540,14 +2809,21 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
   // is merged into the new passkey session. Email-flow continues uninterrupted,
   // and the final session carries BOTH the passkey credential and the email
   // verification info, so /role/declare sees the full picture.
-  const { sessionId, response, emailSessionId, priorSessionId } = req.body;
-  const stored = await db.challenges.get(sessionId);
-  if (!stored) return res.status(400).json({ error: 'Session expired.' });
-
-  const cred = await db.credentials.get(response.id);
-  if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
+  // AP3-03 (#46): validate BEFORE any await. `response.id` used to be read
+  // outside the try — a body without `response` produced an unhandled rejection
+  // and the request never got an answer at all. Both DB lookups now live inside
+  // the try, so a DB error answers 400 instead of hanging.
+  const { sessionId, response, emailSessionId, priorSessionId } = req.body || {};
+  if (typeof sessionId !== 'string' || !sessionId || typeof response?.id !== 'string' || !response.id)
+    return res.status(400).json({ error: 'sessionId and response.id required' });
 
   try {
+    const stored = await db.challenges.get(sessionId);
+    if (!stored) return res.status(400).json({ error: 'Session expired.' });
+
+    const cred = await db.credentials.get(response.id);
+    if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
+
     const v = await verifyAuthenticationResponse({
       response, expectedChallenge: stored.challenge,
       expectedOrigin: ORIGIN, expectedRPID: RP_ID,
@@ -2618,14 +2894,28 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
 
 // ─── Token Refresh ────────────────────────────────────────────────────────────
 
-app.post('/hhttps/token/refresh', async (req, res) => {
-  const { refreshToken } = req.body;
-  if (!refreshToken) return res.status(400).json({ error: 'refreshToken required' });
+// AP3-18 (#116): `limit.revoke` (30/min per IP) also guards the refresh route —
+// it used to run under the global limiter only, so a stolen 7-day token could
+// be probed as fast as the process answered.
+app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
+  const { refreshToken } = req.body || {};
+  if (typeof refreshToken !== 'string' || !refreshToken)
+    return res.status(400).json({ error: 'refreshToken required' });
 
   try {
     const d = verifyToken(refreshToken);
     if (d.sub !== 'refresh')              throw new Error('Kein Refresh-Token');
-    if (await db.revokedTokens.has(d.jti)) throw new Error('Refresh token revoked');
+
+    // AP3-18 (#116), RFC 6819 §5.2.2.3: refresh tokens rotate, so a token that
+    // is presented a SECOND time is either a replay or a stolen copy racing the
+    // legitimate client. We cannot tell which — so the whole family dies and
+    // both parties have to authenticate again.
+    if (await db.revokedTokens.has(d.jti)) {
+      const ended = await db.refreshTokens.deleteByUser(d.userId, null);
+      for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'refresh-reuse-detected');
+      console.warn('[token/refresh] reuse detected — refresh family revoked for user', d.userId);
+      return res.status(401).json({ error: 'refresh_token_reuse_detected' });
+    }
 
     const stored = await db.refreshTokens.get(d.jti);
     if (!stored) throw new Error('Refresh-Token nicht aktiv');
@@ -2655,6 +2945,18 @@ app.post('/hhttps/token/refresh', async (req, res) => {
       ...ageCarry
     });
 
+    // AP3-18 (#116): ROTATION. The presented token is retired (row deleted and
+    // jti blacklisted, so the branch above catches a later reuse) and the client
+    // gets a fresh one. The 7-day window no longer belongs to whoever copied the
+    // token once — only to whoever holds the newest one.
+    const newRefresh = await issueRefreshToken(stored.user_id, stored.credential_id, stored.role, {
+      verifiedMethods: methods, trustScore, emailDomain: domainVal, pseudonym,
+      ...(d.age_group ? { ageGroup: d.age_group, ageVerified: d.age_verified === true,
+                          ageVerificationMethod: d.age_verification_method || null } : {})
+    });
+    await db.refreshTokens.delete(d.jti);
+    await db.revokedTokens.add(d.jti, stored.role, 'refresh-rotated');
+
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
                      role: null, trustScore, token: newAccess,
                      method: 'verification-methods',
@@ -2664,7 +2966,8 @@ app.post('/hhttps/token/refresh', async (req, res) => {
     res.json({
       hhttps:    { version: '0.5.0', status: 'refreshed', human: true, actorType: 'human',
                    trustScore, verifiedMethods: methods },
-      token:     newAccess,
+      token:        newAccess,
+      refreshToken: newRefresh,   // AP3-18: rotated — the old one is dead
       expiresAt: new Date(Date.now() + ACCESS_TTL * 1000).toISOString(),
       role:      null,
       message:   '✓ New access token issued — no re-authentication needed.'
@@ -2786,6 +3089,35 @@ async function readEmailContext(sessionId) {
   try { return JSON.parse(row.challenge); } catch { return null; }
 }
 
+// ─── AP3-19 (#122): failed-attempt counter per session ──────────────────────
+// The counter lives in the existing `challenges` table (same primitive as the
+// parked e-mail context): one row per session, value = number of wrong codes,
+// TTL = the validity of the code it protects. No schema change, and the row
+// disappears with the code it guards.
+const MAX_EMAIL_CODE_ATTEMPTS = 5;
+const emailAttemptsId = (sessionId) => `email-attempts:${sessionId}`;
+
+async function readEmailAttempts(sessionId) {
+  const row = await db.challenges.get(emailAttemptsId(sessionId));
+  const n = row ? parseInt(row.challenge, 10) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+async function bumpEmailAttempts(sessionId, userId, value) {
+  await db.challenges.create(
+    emailAttemptsId(sessionId), String(value), userId, 'email-attempts', EMAIL_CONTEXT_TTL_MS
+  );
+}
+
+/** Too many wrong codes: burn the pending verification AND the parked context. */
+async function burnEmailVerification(sessionId, userId, value) {
+  await bumpEmailAttempts(sessionId, userId, value);
+  await Promise.all([
+    db.emailVerifications.invalidateForSession(sessionId),
+    db.challenges.delete(emailContextId(sessionId)),
+  ]);
+}
+
 // F-1 (K-1/S-1): the consumed email_verifications row stores sha256(lower(email)).
 // The parked context must describe the SAME address, otherwise a code/token for
 // address A would bind the session to whatever address the context holds now.
@@ -2864,9 +3196,7 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
 }
 
 app.post('/hhttps/email/send', limit.email, async (req, res) => {
-  const { sessionId, email: rawEmail, role, pseudonym } = req.body;
-  const session = await db.sessions.get(sessionId);
-  if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+  const { sessionId, email: rawEmail, role, pseudonym } = req.body || {};
   // AK-2: case/whitespace variants of the same address are the same anchor.
   const email = normalizeEmail(rawEmail);
   // AP3-13: strict syntax — no comments/quotes/non-ASCII that the mail
@@ -2874,31 +3204,47 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   if (!isValidEmail(email))
     return res.status(400).json({ error: 'Invalid email address.' });
 
-  const sentCount = await db.sessions.incrementEmailsSent(sessionId);
-  if (sentCount > 3)
-    return res.status(429).json({ error: 'Zu viele E-Mail-Anfragen pro Session.' });
-
-  const classification = classifyDomain(email);
-
+  // AP3-03 (#46): every await below is inside the try — a DB error answers 500
+  // instead of leaving the request without any response.
   try {
+    const session = await db.sessions.get(sessionId);
+    if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+
+    // AP3-05 (#61): the code, the parked e-mail context and the SESSION must
+    // not outlive each other. The session TTL runs from session start, the mail
+    // TTL from send time — so a late send gets the session's remaining lifetime,
+    // and a session with almost nothing left is refused instead of producing a
+    // code that is dead on arrival.
+    const remainingMs = Math.max(0, (session.expires || 0) - Date.now());
+    if (remainingMs < 60_000)
+      return res.status(410).json({ error: 'session_expired', detail: 'Start a new session before requesting a code.' });
+    // W-5: code row, magic-link token and the parked context share ONE value.
+    const mailTtlMs = Math.min(EMAIL_CONTEXT_TTL_MS, remainingMs);
+
+    const sentCount = await db.sessions.incrementEmailsSent(sessionId);
+    if (sentCount > 3)
+      return res.status(429).json({ error: 'Zu viele E-Mail-Anfragen pro Session.' });
+
+    const classification = classifyDomain(email);
+
     // v0.5: the sign-in page no longer declares a role here — fall back to the
     // base identity so the mail does not read: role "undefined".
     // F-1: only the LAST send of a session stays valid (context and row agree).
     await db.emailVerifications.invalidateForSession(sessionId);
     // F-5 (S-7): whitelist the role — an arbitrary string must never reach the mail.
     const safeRole = ROLES[role] ? role : 'citizen';
-    const result = await sendVerificationEmail({ email, role: safeRole, sessionId, baseUrl: BASE_URL });
+    const result = await sendVerificationEmail({ email, role: safeRole, sessionId, baseUrl: BASE_URL, ttlMs: mailTtlMs });
     // T4: park plaintext email + pseudonym wish until the code/link is confirmed.
     await db.challenges.create(
       emailContextId(sessionId),
       JSON.stringify({ email, pseudonym: sanitizePseudonym(pseudonym) }),
-      session.userId, 'email-pending', EMAIL_CONTEXT_TTL_MS
+      session.userId, 'email-pending', mailTtlMs   // AP3-05: = code TTL = session remainder
     );
     const resp   = {
       sent: result.sent || result.devMode, devMode: result.devMode || false,
       domain: classification.domain, expectedLevel: classification.level,
       expectedTrustScore: classification.trustBonus, category: classification.category,
-      expiresIn: '15 Minuten'
+      expiresIn: `${Math.max(1, Math.round(mailTtlMs / 60_000))} Minuten`
     };
     if (result.devMode) {
       // In dev mode (no SMTP), surface the code so the page can show it.
@@ -2915,37 +3261,47 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
 });
 
 app.get('/hhttps/email/verify', async (req, res) => {
+  // AP3-04 (#54): query parameters are attacker-controlled in SHAPE too —
+  // `?token=a&token=b` yields an array, `?token[x]=a` an object. Both used to
+  // reach createHash() inside verifyEmailToken and threw outside any try, so
+  // the browser got no redirect and no response at all.
   const { token, session: sessionId } = req.query;
-  if (!token || !sessionId) return res.redirect('/?email_verify=error&reason=missing_params');
+  if (typeof token !== 'string' || !token || typeof sessionId !== 'string' || !sessionId)
+    return res.redirect('/?email_verify=error&reason=missing_params');
 
-  const result = await verifyEmailToken(token);
-  if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
-  // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
-  if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
-
-  const session = await db.sessions.get(sessionId);
-  if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
-
-  const ctx = await readEmailContext(sessionId);
-  if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
-  if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
-
-  let bound;
   try {
-    bound = await bindSessionToEmailAnchor({
-      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
-    });
-  } catch (e) {
-    if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
-    console.error('[email/verify] anchor bind failed:', e.message);
-    return res.redirect('/?email_verify=error&reason=anchor_failed');
-  }
+    const result = await verifyEmailToken(token);
+    if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
+    // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
+    if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
 
-  res.redirect(
-    `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
-    `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}` +
-    `&pseudonym=${encodeURIComponent(bound.pseudonym)}`
-  );
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
+
+    const ctx = await readEmailContext(sessionId);
+    if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
+    if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
+
+    let bound;
+    try {
+      bound = await bindSessionToEmailAnchor({
+        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+      });
+    } catch (e) {
+      if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
+      console.error('[email/verify] anchor bind failed:', e.message);
+      return res.redirect('/?email_verify=error&reason=anchor_failed');
+    }
+
+    res.redirect(
+      `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
+      `&score=${result.trustBonus}&domain=${encodeURIComponent(result.domain)}&session=${sessionId}` +
+      `&pseudonym=${encodeURIComponent(bound.pseudonym)}`
+    );
+  } catch (e) {
+    console.error('[email/verify] failed:', e.message);
+    res.redirect('/?email_verify=error&reason=internal');
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2960,62 +3316,99 @@ app.get('/hhttps/email/verify', async (req, res) => {
 //
 app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   const { sessionId, code } = req.body || {};
-  if (!sessionId || !code) return res.status(400).json({ error: 'sessionId and code required.' });
+  if (typeof sessionId !== 'string' || !sessionId || typeof code !== 'string' || !code)
+    return res.status(400).json({ error: 'sessionId and code required.' });
 
-  // #22: load the session BEFORE consuming the code. verifyEmailCode() marks
-  // the verification row `used`; with an unknown/expired session that would
-  // burn a code the user can still legitimately confirm on the real session.
-  const session = await db.sessions.get(sessionId);
-  if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
-
-  const result = await verifyEmailCode(code, sessionId);
-  if (!result.valid) return res.status(400).json({ error: result.error });
-
-  // T4: the plaintext email was parked by /email/send in the same session.
-  const ctx = await readEmailContext(sessionId);
-  if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
-  // F-1 (K-1/S-1): the code must belong to the address the context describes.
-  if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
-
-  // Bind the session to the stable identity anchor (AK-1/AK-2), store the
-  // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
-  // surface reported here is what the user has RIGHT NOW (before adding more
-  // methods), so the UI can immediately show the confirmed method badges. Trust
-  // is internal/API-only; the UI renders `methods`, never the number.
-  let bound;
+  // AP3-03 (#46): all awaits inside the try — no unanswered request on a DB error.
   try {
-    bound = await bindSessionToEmailAnchor({
-      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+    // #22: load the session BEFORE consuming the code. verifyEmailCode() marks
+    // the verification row `used`; with an unknown/expired session that would
+    // burn a code the user can still legitimately confirm on the real session.
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+
+    // AP3-19 (#122): a 6-digit code has 10^6 values, and the only brake used to
+    // be the IP rate limit. Wrong guesses are counted PER SESSION; after
+    // MAX_EMAIL_CODE_ATTEMPTS the pending verification is burned and the parked
+    // context dropped, so a further guess cannot hit anything — the user has to
+    // request a new mail.
+    const attempts = await readEmailAttempts(sessionId);
+    if (attempts >= MAX_EMAIL_CODE_ATTEMPTS)
+      return res.status(429).json({ error: 'too_many_attempts' });
+
+    const result = await verifyEmailCode(code, sessionId);
+    if (!result.valid) {
+      const used = attempts + 1;
+      if (used >= MAX_EMAIL_CODE_ATTEMPTS) {
+        await burnEmailVerification(sessionId, session.userId, used);
+        return res.status(429).json({ error: 'too_many_attempts' });
+      }
+      await bumpEmailAttempts(sessionId, session.userId, used);
+      return res.status(400).json({ error: result.error, attemptsLeft: MAX_EMAIL_CODE_ATTEMPTS - used });
+    }
+
+    // T4: the plaintext email was parked by /email/send in the same session.
+    const ctx = await readEmailContext(sessionId);
+    if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
+    // F-1 (K-1/S-1): the code must belong to the address the context describes.
+    if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
+
+    // The code was right — the guess counter has done its job.
+    await db.challenges.delete(emailAttemptsId(sessionId));
+
+    // Bind the session to the stable identity anchor (AK-1/AK-2), store the
+    // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
+    // surface reported here is what the user has RIGHT NOW (before adding more
+    // methods), so the UI can immediately show the confirmed method badges. Trust
+    // is internal/API-only; the UI renders `methods`, never the number.
+    let bound;
+    try {
+      bound = await bindSessionToEmailAnchor({
+        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
+      });
+    } catch (e) {
+      if (e.status === 409) return res.status(409).json({ error: e.code });
+      console.error('[email/confirm-code] anchor bind failed:', e.message);
+      return res.status(500).json({ error: 'anchor_bind_failed' });
+    }
+
+    res.json({
+      verified:      true,
+      level:         result.level,
+      domain:        result.domain,
+      trustBonus:    result.trustBonus,
+      category:      result.category,
+      methods:       bound.methods,   // confirmed verification methods (UI shows these)
+      accountTrust:  bound.trust,     // API only — the UI must not render this number
+      userId:        bound.userId,    // stable identity (AK-1/AK-2)
+      pseudonym:     bound.pseudonym, // account pseudonym (AK-6..AK-8)
+      anchorCreated: bound.created,
     });
   } catch (e) {
-    if (e.status === 409) return res.status(409).json({ error: e.code });
-    console.error('[email/confirm-code] anchor bind failed:', e.message);
-    return res.status(500).json({ error: 'anchor_bind_failed' });
+    console.error('[email/confirm-code] failed:', e.message);
+    res.status(500).json({ error: 'internal_error' });
   }
-
-  res.json({
-    verified:      true,
-    level:         result.level,
-    domain:        result.domain,
-    trustBonus:    result.trustBonus,
-    category:      result.category,
-    methods:       bound.methods,   // confirmed verification methods (UI shows these)
-    accountTrust:  bound.trust,     // API only — the UI must not render this number
-    userId:        bound.userId,    // stable identity (AK-1/AK-2)
-    pseudonym:     bound.pseudonym, // account pseudonym (AK-6..AK-8)
-    anchorCreated: bound.created,
-  });
 });
 
 app.post('/hhttps/email/status', async (req, res) => {
-  const session = await db.sessions.get(req.body.sessionId);
-  if (!session) return res.status(404).json({ error: 'Session not found.' });
-  res.json({
-    emailVerified: session.emailVerified || false,
-    emailLevel:    session.emailLevel    || null,
-    emailDomain:   session.emailDomain   || null,
-    trustBonus:    session.emailTrustBonus || null
-  });
+  // AP3-03 (#46): the session lookup is inside the try (and the body may be
+  // anything at all — an object sessionId used to reach the query builder).
+  const sessionId = req.body?.sessionId;
+  if (typeof sessionId !== 'string' || !sessionId)
+    return res.status(400).json({ error: 'sessionId required' });
+  try {
+    const session = await db.sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found.' });
+    res.json({
+      emailVerified: session.emailVerified || false,
+      emailLevel:    session.emailLevel    || null,
+      emailDomain:   session.emailDomain   || null,
+      trustBonus:    session.emailTrustBonus || null
+    });
+  } catch (e) {
+    console.error('[email/status] failed:', e.message);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // ─── GitHub Verification (for `developer` role) ───────────────────────────────
@@ -3052,8 +3445,7 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
   if (!code || !state) return res.redirect('/?github_verify=error&reason=missing_params');
 
   try {
-    const result = await handleGithubCallback({ code, state, redirectBase: BASE_URL });
-    const warn = result.alreadyOwnedBy ? ' (warning: anchor collision)' : '';
+    await handleGithubCallback({ code, state, redirectBase: BASE_URL });
     // Render a self-closing landing page instead of redirecting the popup back
     // to the SPA. The original tab is already polling /hhttps/verify/github/status
     // and will pick up the verification on its own — we just need this tab to
@@ -3061,9 +3453,19 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
     res.send(renderGithubReturnPage({
       ok: true,
       title: 'GitHub verified',
-      message: 'You can close this tab and return to hhttps.org.' + warn
+      message: 'You can close this tab and return to hhttps.org.'
     }));
   } catch (e) {
+    // AP3-09 (#76): the anchor collision is a hard failure now — the session
+    // was NOT verified and the anchor still belongs to the first account.
+    if (e.code === 'github_already_bound') {
+      return res.send(renderGithubReturnPage({
+        ok: false,
+        title: 'GitHub account already linked',
+        message: 'This GitHub account is already linked to another iamhmn identity. ' +
+                 'Sign in with that identity or use a different GitHub account.'
+      }));
+    }
     res.send(renderGithubReturnPage({
       ok: false,
       title: 'GitHub verification failed',
@@ -3108,15 +3510,32 @@ function renderGithubReturnPage({ ok, title, message }) {
 }
 
 app.post('/hhttps/verify/github/status', async (req, res) => {
-  const { sessionId } = req.body;
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
-  res.json(await getGithubStatus(sessionId));
+  const { sessionId } = req.body || {};
+  if (typeof sessionId !== 'string' || !sessionId) return res.status(400).json({ error: 'sessionId required' });
+  // AP3-03 (#46): a DB error here used to leave the polling tab without any answer.
+  try {
+    res.json(await getGithubStatus(sessionId));
+  } catch (e) {
+    console.error('[verify/github/status] failed:', e.message);
+    res.status(500).json({ error: 'internal_error' });
+  }
 });
 
 // ─── Role Declaration ─────────────────────────────────────────────────────────
 
+// AP4-05 (#64): the handler body runs under try/catch — a thrown error must
+// answer 500 instead of leaving the request hanging (no error middleware here).
 app.post('/hhttps/role/declare', async (req, res) => {
-  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body;
+  try {
+    await roleDeclare(req, res);
+  } catch (e) {
+    console.error('[ROLE-DECLARE] error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Role declaration failed.' });
+  }
+});
+
+async function roleDeclare(req, res) {
+  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body || {};
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
   // AK-13 / D4: email is the mandatory method — passkey/GitHub/EUDI alone no longer suffice.
@@ -3141,10 +3560,13 @@ app.post('/hhttps/role/declare', async (req, res) => {
   // honestly labelled, low trust, age_verified:false. Phase 3 will set this
   // from an EUDI Wallet PID presentation (age_over_NN) with method 'eudi-wallet'.
   let ageClaims = null;
-  if (ageGroup) {
-    const ag = AGE_GROUPS[ageGroup];
+  if (ageGroup !== undefined && ageGroup !== null && ageGroup !== '') {
+    // AP4-31 (#203): AGE_GROUPS is a plain object — an own-property check, not a
+    // property lookup ('constructor' & co. used to pass and crash after issuance).
+    const ag = (typeof ageGroup === 'string' && Object.hasOwn(AGE_GROUPS, ageGroup))
+      ? AGE_GROUPS[ageGroup] : null;
     if (!ag) return res.status(400).json({
-      error: `Unknown age group: ${ageGroup}`, available: Object.keys(AGE_GROUPS)
+      error: `Unknown age group: ${String(ageGroup).slice(0, 64)}`, available: Object.keys(AGE_GROUPS)
     });
     const ageMethod = AGE_VERIFICATION_METHODS['self-declared'];
     ageClaims = {
@@ -3250,7 +3672,58 @@ app.post('/hhttps/role/declare', async (req, res) => {
     } : null,
     message: `✓ Human verified · ${badges.length} method(s) · Access (1h) + Refresh (7d)`
   });
-});
+}
+
+// ─── AP4-27 (#182): internal verifier endpoints — loopback + nonce + iat ─────
+//
+// /hhttps/age/upgrade, /hhttps/age/direct and /hhttps/eid/upgrade are called
+// ONLY by the in-process eudi-verifier over http://127.0.0.1. nginx proxies
+// `location /` as a whole, so the "127.0.0.1 only" comment used to be wishful:
+// the HMAC was the single line of defence. Now, fail-closed:
+//   1. the TCP peer must be a loopback address (req.socket.remoteAddress — NOT
+//      req.ip, which is the forwarded client address behind `trust proxy`);
+//   2. `iat` is mandatory and must be within the 5-minute window;
+//   3. `nonce` is mandatory and single-use within that window.
+function isLoopbackAddress(addr) {
+  const a = String(addr || '');
+  return a === '::1' || a === '::ffff:127.0.0.1' || a.startsWith('127.') || a.startsWith('::ffff:127.');
+}
+// A loopback peer alone is NOT enough behind a reverse proxy: nginx runs on
+// the same host, so an external request proxied to :3000 also arrives from
+// 127.0.0.1. nginx always appends `X-Forwarded-For`
+// (proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for), the in-process
+// verifier's direct fetch to http://127.0.0.1:3000 never sets it. Both
+// conditions together identify a genuinely internal call. The deploy also
+// blocks these three paths in nginx (`deny all`) — this is the second line.
+function requireInternalCaller(req, res, tag) {
+  const peer = req.socket?.remoteAddress;
+  const forwarded = req.headers['x-forwarded-for'];
+  if (!isLoopbackAddress(peer) || forwarded) {
+    console.warn(`[${tag}] refused: caller ${peer}${forwarded ? ` via proxy (xff=${String(forwarded).slice(0, 64)})` : ''}`);
+    res.status(403).json({ error: 'internal_endpoint' });
+    return false;
+  }
+  return true;
+}
+const INTERNAL_ASSERTION_WINDOW_MS = 300_000;
+const seenAssertionNonces = new Map();   // nonce → expiry (ms)
+function purgeAssertionNonces(now) {
+  for (const [n, exp] of seenAssertionNonces) if (exp <= now) seenAssertionNonces.delete(n);
+}
+// Validates freshness + single use of an ALREADY signature-checked assertion.
+// Returns null when fine, otherwise the error string for a 401.
+function checkAssertionFreshness(nonce, iat) {
+  const now = Date.now();
+  const ageMs = now - Number(iat);
+  if (iat === undefined || iat === null || iat === '' || !Number.isFinite(ageMs)) return 'Assertion iat required.';
+  if (ageMs < -60_000 || ageMs > INTERNAL_ASSERTION_WINDOW_MS) return 'Assertion expired or clock skew too large.';
+  if (typeof nonce !== 'string' || !nonce || nonce.length > 128) return 'Assertion nonce required.';
+  if (seenAssertionNonces.size > 10_000) purgeAssertionNonces(now);
+  if (seenAssertionNonces.has(nonce) && seenAssertionNonces.get(nonce) > now) return 'Assertion replayed.';
+  seenAssertionNonces.set(nonce, now + INTERNAL_ASSERTION_WINDOW_MS + 60_000);
+  return null;
+}
+setInterval(() => purgeAssertionNonces(Date.now()), 60_000).unref?.();
 
 // ─── EUDI age upgrade (Phase 3) ───────────────────────────────────────────────
 //
@@ -3274,6 +3747,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
 // }
 app.post('/hhttps/age/upgrade', async (req, res) => {
   try {
+    if (!requireInternalCaller(req, res, 'AGE-UPGRADE')) return;   // AP4-27
     const { sessionId, ageOver, assertion, nonce, iat, currentToken } = req.body || {};
 
     if (!sessionId || typeof ageOver !== 'object' || ageOver === null || !assertion) {
@@ -3307,13 +3781,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       return res.status(401).json({ error: 'Invalid verifier assertion.' });
     }
 
-    // Reject stale assertions (replay window: 5 min) when iat is provided.
-    if (iat) {
-      const ageMs = Date.now() - Number(iat);
-      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
-        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
-      }
-    }
+    // AP4-27: iat mandatory, 5-min window, nonce single-use.
+    const stale = checkAssertionFreshness(nonce, iat);
+    if (stale) return res.status(401).json({ error: stale });
 
     // Session must exist and be a verified human session.
     const session = await db.sessions.get(sessionId);
@@ -3436,6 +3906,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
 //   assertion = HMAC-SHA256 over canonical { direct:true, ageOver, nonce, iat }
 app.post('/hhttps/age/direct', async (req, res) => {
   try {
+    if (!requireInternalCaller(req, res, 'AGE-DIRECT')) return;   // AP4-27
     const { ageOver, assertion, nonce, iat } = req.body || {};
 
     if (typeof ageOver !== 'object' || ageOver === null || !assertion) {
@@ -3469,13 +3940,9 @@ app.post('/hhttps/age/direct', async (req, res) => {
       return res.status(401).json({ error: 'Invalid verifier assertion.' });
     }
 
-    // Reject stale assertions (replay window: 5 min) when iat is provided.
-    if (iat) {
-      const ageMs = Date.now() - Number(iat);
-      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
-        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
-      }
-    }
+    // AP4-27: iat mandatory, 5-min window, nonce single-use.
+    const stale = checkAssertionFreshness(nonce, iat);
+    if (stale) return res.status(401).json({ error: stale });
 
     // AK-28: no session-less age bootstrap. The assertion was valid, but an age
     // proof requires a session with a verified email → /hhttps/age/upgrade.
@@ -3504,6 +3971,7 @@ app.post('/hhttps/age/direct', async (req, res) => {
 //   assertion = HMAC-SHA256 over canonical { sessionId, eidVerified:true, nonce, iat }
 app.post('/hhttps/eid/upgrade', async (req, res) => {
   try {
+    if (!requireInternalCaller(req, res, 'EID-UPGRADE')) return;   // AP4-27
     const { sessionId, currentToken, nonce, iat, assertion } = req.body || {};
     if (!sessionId || !assertion) {
       return res.status(400).json({ error: 'sessionId and assertion are required.' });
@@ -3526,12 +3994,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       return res.status(401).json({ error: 'Invalid verifier assertion.' });
     }
 
-    if (iat) {
-      const ageMs = Date.now() - Number(iat);
-      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
-        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
-      }
-    }
+    // AP4-27: iat mandatory, 5-min window, nonce single-use.
+    const stale = checkAssertionFreshness(nonce, iat);
+    if (stale) return res.status(401).json({ error: stale });
 
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) {
@@ -3630,14 +4095,26 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
 // Body: { sessionId, esco?:{label,isco08,escoUri}, customRole?, documentProvided?, locale? }
 app.post('/hhttps/role/card', async (req, res) => {
   try {
-    const { sessionId, esco = null, customRole = null, documentProvided = false } = req.body || {};
+    const { sessionId, esco = null, customRole = null } = req.body || {};
+    // AP4-07 (#78): a strict boolean — "false", "0" or {} used to count as a document.
+    const documentProvided = req.body?.documentProvided === true;
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
-    // Method-neutral human gate (v0.5): any one genuinely verified method qualifies,
-    // not email specifically (consistent with /hhttps/role/declare).
-    const hasMethod = !!(session.emailVerified || session.hasPasskey || session.credentialId
-                         || session.githubVerified || session.eudiVerified);
-    if (!hasMethod) return res.status(403).json({ error: 'At least one verified method is required first.' });
+    // AP4-06 (#71) / AK-13: the confirmed e-mail is the mandatory method — the
+    // same gate as /hhttps/role/declare (the old ||-chain also read session
+    // fields that sessions._normalize never sets).
+    if (!requireEmailVerified(session, res)) return;
+    // Human = at least one genuinely verified method on the session (the same
+    // surface the sign-in gate in role/declare uses), not "has a passkey".
+    const v = computeVerification({
+      email:       !!session.emailVerified,
+      passkey:     !!session.credentialId,
+      domain:      !!session.emailDomain,
+      domainTrust: session.emailTrustBonus || 0,
+      domainValue: session.emailDomain || null,
+      github:      !!session.githubVerified
+    });
+    const humanVerified = v.methods.filter(m => m !== 'age').length > 0;
 
     let roleInput = null, custom = false, customLabel = null, reservedKey = null;
     if (customRole) {
@@ -3671,12 +4148,13 @@ app.post('/hhttps/role/card', async (req, res) => {
     // self-assertion — labelled as such, RAL0, never `verified`.
     const method = documentProvided ? 'self-asserted-document' : 'self-declared';
     const verificationStatus = 'self-declared';
-    const humanVerified = !!(session.hasPasskey || session.credentialId);
 
     const built = buildRoleClaim({ roleInput, custom, customLabel, verificationStatus, method, humanVerified });
 
+    // AP4-29 (#195): NO userId on the card — it is the stable account key
+    // (sessions, tokens, anchors). The card carries the role + RAL only; the
+    // holder binding is the wallet's job (zero-PII, no linkable identifier).
     const cardClaims = {
-      userId:     session.userId,
       role:       built.role.id,
       roleLabel:  built.role.label,
       ral:        built.ral,
@@ -3712,15 +4190,59 @@ app.post('/hhttps/role/card', async (req, res) => {
 
 // ─── Token Revocation ─────────────────────────────────────────────────────────
 
+// AP4-40 (#225): revoked_tokens used to be a permanent list. A revocation only
+// matters while the token could still verify, i.e. until its `exp`; the longest
+// TTL of any token we sign is OAUTH_REFRESH_TTL (30 d). Rows older than that
+// are purged opportunistically on every revoke (cheap: indexed on revoked_at).
+const REVOKED_RETENTION_DAYS = 31;
+async function purgeStaleRevocations() {
+  try {
+    await db.q(`DELETE FROM revoked_tokens WHERE revoked_at < NOW() - ($1 || ' days')::interval`,
+               [String(REVOKED_RETENTION_DAYS)]);
+  } catch (e) { console.error('[REVOKE] purge failed:', e.message); }
+}
+// Every jti we sign is a UUID (issueAccessToken / issueRefreshToken / OAuth / machine).
+const REVOKABLE_JTI_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Payload of a token whose SIGNATURE has already been verified (see below) —
+// jsonwebtoken raises TokenExpiredError only after the signature check passed.
+function jwtDecode(token) {
+  try { return JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8')); }
+  catch { return null; }
+}
+
+// AP4-04 (#57) / AP4-25 (#174): the token is trusted ONLY after its signature
+// verified. An expired token is still revocable (its jti is deleted from the
+// active tables; nothing is written to revoked_tokens because it cannot verify
+// any more — AP4-40), but a token with a broken signature or without a jti is
+// refused without any database write.
 app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'token required' });
+  const { token } = req.body || {};
+  if (!token || typeof token !== 'string') return res.status(400).json({ error: 'token required' });
+
+  let decoded = null, expired = false;
+  try {
+    decoded = verifyToken(token);
+  } catch (e) {
+    if (e?.name !== 'TokenExpiredError') {
+      return res.status(401).json({ error: e.message });
+    }
+    // jsonwebtoken checks the signature BEFORE exp — an expired token has a
+    // valid signature, so its payload can be trusted.
+    expired = true;
+    decoded = jwtDecode(token) || {};
+  }
+
+  const jti = decoded.jti;
+  if (typeof jti !== 'string' || !REVOKABLE_JTI_RE.test(jti)) {
+    return res.status(400).json({ error: 'Token carries no revocable jti.' });
+  }
 
   try {
-    const decoded = verifyToken(token);
-    await db.revokedTokens.add(decoded.jti, decoded.role, 'user-requested');
-    await db.tokens.delete(decoded.jti);
-    await db.refreshTokens.delete(decoded.jti);
+    // AP4-40: an EXPIRED token can no longer verify, so a ban-list row for it
+    // would only be storage — the active-table rows still go.
+    if (!expired) await db.revokedTokens.add(jti, decoded.role, 'user-requested');
+    await db.tokens.delete(jti);
+    await db.refreshTokens.delete(jti);
     // AP4-03: "revoked" means the whole HHTTPS sign-in — every refresh token of
     // the holder goes too, otherwise a stolen refresh token re-issues access.
     const uid = decoded.userId || decoded.uid || null;
@@ -3729,33 +4251,32 @@ app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
       for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'user-requested');
     }
     await db.stats.increment('tokens_revoked');
+    await purgeStaleRevocations();
 
-    console.log(`[REVOKE] jti=${decoded.jti.slice(0, 8)}... role=${decoded.role}`);
+    console.log(`[REVOKE] jti=${jti.slice(0, 8)}... role=${decoded.role}${expired ? ' (expired)' : ''}`);
     fireEvent('token.revoked', { role: decoded.role });
 
     setHHTPPS(res, { status: 'revoked', human: false, actorType: 'unknown' });
     clearIdentityCookie(res);  // drop the hhttps.org-scoped convenience cookie
-    res.json({ hhttps: { status: 'revoked' }, revoked: true, jti: decoded.jti });
+    res.json({ hhttps: { status: 'revoked' }, revoked: true, jti, ...(expired ? { expired: true } : {}) });
   } catch (e) {
-    // Allow revoking expired tokens by extracting jti from payload
-    try {
-      const raw = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
-      if (raw.jti) {
-        await db.revokedTokens.add(raw.jti, raw.role, 'user-requested-expired');
-        await db.tokens.delete(raw.jti);
-        await db.refreshTokens.delete(raw.jti);
-      }
-    } catch {}
-    res.status(401).json({ error: e.message });
+    console.error('[REVOKE] error:', e.message);
+    res.status(500).json({ error: 'Revocation failed.' });
   }
 });
 
 app.get('/hhttps/revoke/status', async (req, res) => {
-  const { jti } = req.query;
+  // AP4-05 (#64): `?jti=a&jti=b` arrives as an array — normalise to one string.
+  const jti = typeof req.query.jti === 'string' ? req.query.jti : null;
   if (!jti) return res.status(400).json({ error: 'jti required' });
-  const revoked = await db.revokedTokens.has(jti);
-  const active  = await db.tokens.exists(jti);
-  res.json({ jti, revoked, active: active && !revoked });
+  try {
+    const revoked = await db.revokedTokens.has(jti);
+    const active  = await db.tokens.exists(jti);
+    res.json({ jti, revoked, active: active && !revoked });
+  } catch (e) {
+    console.error('[REVOKE-STATUS] error:', e.message);
+    res.status(500).json({ error: 'Lookup failed.' });
+  }
 });
 
 // ─── Token Validate ──────────────────────────────────────────────────────────
@@ -3866,7 +4387,13 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     const apiKey     = 'mk-' + crypto.randomBytes(24).toString('hex');
     const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
 
+    // AP5-11: a supplied key that is not an EC P-256 public JWK used to be
+    // dropped silently — the operator then got tokens without cnf.jkt and
+    // `token_not_bound` at /pop/challenge, with no way to fix the key.
     const keyJkt = jwkThumbprint(publicKeyJwk);
+    if (publicKeyJwk !== undefined && publicKeyJwk !== null && !keyJkt)
+      return res.status(400).json({ error: 'invalid_public_key_jwk',
+        detail: 'publicKeyJwk must be an EC P-256 public JWK ({ kty:"EC", crv:"P-256", x, y }).' });
     await db.machineOperators.create({
       operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash,
       role: normalizedRole, roleLabel, roleIcon, keyJkt,
@@ -3875,6 +4402,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     res.status(201).json({
       hhttps: { version: '0.5.0' },
       operatorId, apiKey,
+      keyJkt: keyJkt || null,
       role: normalizedRole,
       roleLabel,
       warning: 'Store the API key securely — it is shown only once.',
@@ -3942,14 +4470,14 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 // AP5-16 / AP1-21 / AP1-22 (Review 2026-09): webhooks belong to the authenticated
 // user (HHTTPS token), the list never contains the HMAC secret, delete is
 // owner-scoped, and the target URL passes the SSRF guard in webhooks.js.
-app.get('/hhttps/webhooks', limit.webhooks, async (req, res) => {
+app.get('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   try {
     res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks(u.userId) });
   } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
-});
+}));
 
-app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
+app.post('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   const { url, events = ['*'], secret } = req.body || {};
   if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url is required.' });
@@ -3965,16 +4493,16 @@ app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
       note: 'Speichere das Secret — es wird nur dieses eine Mal ausgegeben. Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
     });
   } catch (e) { res.status(400).json({ error: e.message }); }
-});
+}));
 
-app.delete('/hhttps/webhooks/:id', limit.webhooks, async (req, res) => {
+app.delete('/hhttps/webhooks/:id', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   try {
     const ok = await removeWebhook(req.params.id, u.userId);
     ok ? res.json({ deleted: true, id: req.params.id })
        : res.status(404).json({ error: 'Webhook not found.' });
   } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
-});
+}));
 
 app.post('/hhttps/webhooks/verify', (req, res) => {
   const { payload, signature, secret } = req.body;
@@ -3990,12 +4518,17 @@ app.post('/hhttps/webhooks/verify', (req, res) => {
 // without manual admin intervention, and for admins (operator of this
 // HHTTPS issuer) to verify, reject, and suspend platforms.
 //
-// State machine for oauth_clients.verification_status:
-//   draft → email_pending → unverified → pending_review → verified
-//                                                       ↘ rejected
-//                              ↑
-//                              └── (after email change, drops back)
+// State machine for oauth_clients.verification_status (AP5-08: the start
+// state is `email_pending` — createDraft writes it directly, there is no
+// `draft` row any more; the transitions are enforced server-side in
+// assertTransition() below, the UI only mirrors them):
+//   email_pending → unverified → pending_review → verified
+//                                               ↘ rejected
+//        ↑
+//        └── (after email change, drops back)
 // Plus: verified/unverified/pending_review → suspended (admin action)
+// Plus: verified → unverified when the owner edits a security-relevant field
+//       (AP5-20: redirect_uris, name, logo_url, impressum_url).
 //
 // Hard requirements for `verified`:
 //   1. email_verified_at IS NOT NULL    (user clicked confirmation link)
@@ -4032,6 +4565,33 @@ function randomToken(bytes = 24) {
   return crypto.randomBytes(bytes).toString('base64url');
 }
 
+// AP5-09: Express 4 does not catch a rejected async handler — the request
+// hung until the client gave up. wrap() forwards the rejection to the
+// central error handler (installed in main(), after every route).
+// (function declaration, not a const: it is hoisted, so routes registered
+// ABOVE this line — the webhook block — can use it too.)
+function wrap(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+/** Central error handler (AP5-09). Never echoes the error to the client. */
+function centralErrorHandler(err, req, res, next) {
+  if (res.headersSent) return next(err);
+  const status = Number(err?.status || err?.statusCode) || 500;
+  if (status >= 500) console.error(`[ERROR] ${req.method} ${req.path}:`, err);
+  res.status(status).json(status >= 500
+    ? { error: 'internal' }
+    : { error: err?.type || 'bad_request' });
+}
+
+/** AP5-21: a machine token (sub:'machine', actorType:'bot') is a valid HHTTPS
+ *  token but never a USER — it carries no user id, so every operator would
+ *  collapse onto the literal userId 'machine'. Rejected wherever a user
+ *  context is required (portal, admin, whoami, webhooks). */
+function isMachineClaims(d) {
+  return d?.sub === 'machine' || d?.actorType === 'bot';
+}
+
 /** Resolve current user from request (Authorization header). Returns null
  *  if no token, throws if token invalid/expired. */
 async function authenticatedUser(req) {
@@ -4039,6 +4599,11 @@ async function authenticatedUser(req) {
                 req.headers['authorization']?.replace('Bearer ', '');
   if (!token) return null;
   const d = await checkTokenValid(token);  // throws on invalid/revoked
+  if (isMachineClaims(d)) {
+    const e = new Error('A machine token cannot act as a user.');
+    e.code = 'machine_token_not_allowed';
+    throw e;
+  }
   return {
     userId:     d.uid || d.userId || d.sub,
     role:       d.role,
@@ -4058,6 +4623,10 @@ async function requireUser(req, res) {
     }
     return u;
   } catch (err) {
+    if (err.code === 'machine_token_not_allowed') {
+      res.status(403).json({ error: 'machine_token_not_allowed', message: err.message });
+      return null;
+    }
     res.status(401).json({ error: 'invalid_token', message: err.message });
     return null;
   }
@@ -4123,6 +4692,47 @@ function isValidRedirectUri(uri) {
   }
 }
 
+// AP5-23: logo_url / impressum_url are rendered by the dashboard (href / img
+// src) and impressum_url is a hard requirement for `verified` — both were
+// stored unchecked. Impressum: https only (http://localhost for dev), ≤ 2048
+// chars. Logo: the same, or an inline `data:image/*` up to 64 KiB.
+const MAX_URL_LENGTH       = 2048;
+const MAX_LOGO_DATA_LENGTH = 64 * 1024;
+
+function isValidHttpsUrl(value) {
+  if (typeof value !== 'string' || value.length > MAX_URL_LENGTH) return false;
+  let u;
+  try { u = new URL(value); } catch { return false; }
+  if (u.username || u.password) return false;
+  if (u.protocol === 'https:') return true;
+  return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+}
+function isValidImpressumUrl(value) { return isValidHttpsUrl(value); }
+function isValidLogoUrl(value) {
+  if (typeof value !== 'string') return false;
+  if (/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,[a-z0-9+/=]+$/i.test(value))
+    return value.length <= MAX_LOGO_DATA_LENGTH;
+  return isValidHttpsUrl(value);
+}
+
+// AP5-08: the verification state machine, enforced server-side. `null` means
+// "any state" (the transition is always allowed).
+const ALLOWED_TRANSITIONS = Object.freeze({
+  approve: ['pending_review'],
+  reject:  ['pending_review'],
+  suspend: ['verified', 'unverified', 'pending_review'],
+});
+/** 409 wrong_state unless the client is in a state the action may leave. */
+function assertTransition(res, client, action) {
+  const allowed = ALLOWED_TRANSITIONS[action];
+  if (allowed.includes(client.verification_status)) return true;
+  res.status(409).json({ error: 'wrong_state',
+    message: `Cannot ${action} a client in state '${client.verification_status}'. ` +
+             `Allowed: ${allowed.join(', ')}.`,
+    current: client.verification_status, allowed });
+  return false;
+}
+
 /** Slug-ify a platform name for client_id generation.
  *  Returns something like "my-platform-x4z7". */
 function generateClientId(name) {
@@ -4144,7 +4754,7 @@ function generateClientId(name) {
 // email-only sign-in mints a fresh uuid every time, so admin rights granted to
 // such an id evaporate with the session. This endpoint makes that visible
 // instead of leaving the operator guessing why their admin access vanished.
-app.get('/hhttps/whoami', async (req, res) => {
+app.get('/hhttps/whoami', wrap(async (req, res) => {
   const u = await requireUser(req, res);
   if (!u) return;
 
@@ -4181,10 +4791,10 @@ app.get('/hhttps/whoami', async (req, res) => {
     grant_admin_command:
       `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
   });
-});
+}));
 
 // ─── POST /hhttps/developers/clients — Register a new platform ─────────────
-app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
+app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4214,9 +4824,20 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
     return res.status(400).json({ error: 'invalid_email',
       message: 'Valid contact_email required' });
   }
-  if (description && description.length > 2000) {
+  if (description !== undefined && description !== null &&
+      (typeof description !== 'string' || description.length > 2000)) {
     return res.status(400).json({ error: 'description_too_long',
       message: 'Description must be ≤ 2000 chars' });
+  }
+  // AP5-23: optional URLs are validated server-side (https, length, data:image for the logo)
+  if (impressum_url !== undefined && impressum_url !== null && impressum_url !== '' &&
+      !isValidImpressumUrl(impressum_url)) {
+    return res.status(400).json({ error: 'invalid_impressum_url',
+      message: 'impressum_url must be an https:// URL (≤ 2048 chars)' });
+  }
+  if (logo_url !== undefined && logo_url !== null && logo_url !== '' && !isValidLogoUrl(logo_url)) {
+    return res.status(400).json({ error: 'invalid_logo_url',
+      message: 'logo_url must be an https:// URL (≤ 2048 chars) or a data:image/* URI (≤ 64 KiB)' });
   }
 
   // Rate limit: max 3 new clients per user per 24h
@@ -4239,8 +4860,8 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
       name, description, homepageUrl: homepage_url,
       redirectUris: redirect_uris,
       contactEmail: contact_email,
-      impressumUrl: impressum_url,
-      logoUrl: logo_url,
+      impressumUrl: impressum_url || null,
+      logoUrl: logo_url || null,
       ownerUserId: u.userId,
       domainEmailMatch: domainMatch,
       emailToken, emailTokenExpiresAt: emailExpires,
@@ -4299,11 +4920,11 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
       'Submit for review once email confirmed, domain matches, and DNS verified.'
     ]
   });
-});
+}));
 
 // ─── GET /hhttps/developers/confirm-email?token=... ────────────────────────
 // User clicks this link in their email. Returns HTML for visual feedback.
-app.get('/hhttps/developers/confirm-email', async (req, res) => {
+app.get('/hhttps/developers/confirm-email', wrap(async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(400).send('Missing token');
 
@@ -4350,10 +4971,10 @@ app.get('/hhttps/developers/confirm-email', async (req, res) => {
         `Du kannst dich jetzt einloggen unter <a href="${BASE_URL}/developers">developers</a> und ` +
         `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.</span>`
   ));
-});
+}));
 
 // ─── GET /hhttps/developers/clients — List my platforms ────────────────────
-app.get('/hhttps/developers/clients', async (req, res) => {
+app.get('/hhttps/developers/clients', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const clients = await db.oauthClients.listAllByOwner(u.userId);
@@ -4361,10 +4982,10 @@ app.get('/hhttps/developers/clients', async (req, res) => {
     success: true,
     clients: clients.map(serializeClientForOwner)
   });
-});
+}));
 
 // ─── GET /hhttps/developers/clients/:id — Detail ───────────────────────────
-app.get('/hhttps/developers/clients/:id', async (req, res) => {
+app.get('/hhttps/developers/clients/:id', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const client = await db.oauthClients.get(req.params.id);
@@ -4372,10 +4993,10 @@ app.get('/hhttps/developers/clients/:id', async (req, res) => {
     return res.status(404).json({ error: 'not_found' });
   }
   res.json({ success: true, client: serializeClientForOwner(client) });
-});
+}));
 
 // ─── PATCH /hhttps/developers/clients/:id — Update metadata ────────────────
-app.patch('/hhttps/developers/clients/:id', async (req, res) => {
+app.patch('/hhttps/developers/clients/:id', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4384,14 +5005,32 @@ app.patch('/hhttps/developers/clients/:id', async (req, res) => {
     return res.status(404).json({ error: 'not_found' });
   }
 
+  // AP5-20: while an admin is looking at the platform nothing may change
+  // underneath the review (TOCTOU) — the dashboard hides "Edit" here, the
+  // server now enforces it.
+  if (client.verification_status === 'pending_review') {
+    return res.status(409).json({ error: 'wrong_state',
+      message: 'The platform is in admin review and cannot be edited until the review is done.' });
+  }
+
   const { name, description, redirect_uris, logo_url, impressum_url, contact_email } = req.body || {};
 
-  // Validate updates
+  // Validate updates. AP5-07: `undefined` = leave unchanged, `null` (or '')
+  // = clear the field — description and logo_url are optional and clearable.
   if (name !== undefined && (typeof name !== 'string' || name.length < 2 || name.length > 120)) {
     return res.status(400).json({ error: 'invalid_name' });
   }
-  if (description !== undefined && description !== null && description.length > 2000) {
+  if (description !== undefined && description !== null &&
+      (typeof description !== 'string' || description.length > 2000)) {
     return res.status(400).json({ error: 'description_too_long' });
+  }
+  if (impressum_url !== undefined && !isValidImpressumUrl(impressum_url)) {
+    return res.status(400).json({ error: 'invalid_impressum_url',
+      message: 'impressum_url must be an https:// URL (≤ 2048 chars)' });
+  }
+  if (logo_url !== undefined && logo_url !== null && logo_url !== '' && !isValidLogoUrl(logo_url)) {
+    return res.status(400).json({ error: 'invalid_logo_url',
+      message: 'logo_url must be an https:// URL (≤ 2048 chars) or a data:image/* URI (≤ 64 KiB)' });
   }
   if (redirect_uris !== undefined) {
     if (!Array.isArray(redirect_uris) || redirect_uris.length === 0 || redirect_uris.length > 10) {
@@ -4425,28 +5064,67 @@ app.patch('/hhttps/developers/clients/:id', async (req, res) => {
     } catch (err) { console.warn('[DEVELOPERS] email change email failed:', err.message); }
   }
 
-  // Metadata updates
+  // Metadata updates (updateMetadata treats null as "unchanged")
   await db.oauthClients.updateMetadata(client.client_id, {
     name, description, redirectUris: redirect_uris, logoUrl: logo_url, impressumUrl: impressum_url
   });
+  // AP5-07: explicit null / '' clears the optional fields.
+  const clear = [];
+  if (description === null || description === '') clear.push('description');
+  if (logo_url === null || logo_url === '')       clear.push('logo_url');
+  if (clear.length) {
+    await db.pool().query(
+      `UPDATE oauth_clients SET ${clear.map(c => `${c} = NULL`).join(', ')} WHERE client_id = $1`,
+      [client.client_id]);
+  }
+
+  // AP5-20: a verified platform that changes what users see on the consent
+  // screen or where tokens are sent falls back to `unverified` — the DNS and
+  // e-mail proofs stay, only the admin approval has to be repeated.
+  const changed = (a, b) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+  const securityRelevant =
+    (name !== undefined && changed(name, client.name)) ||
+    (redirect_uris !== undefined && changed(redirect_uris, client.redirect_uris)) ||
+    (impressum_url !== undefined && changed(impressum_url, client.impressum_url)) ||
+    (logo_url !== undefined && changed(logo_url || null, client.logo_url));
+  let downgraded = false;
+  if (client.verification_status === 'verified' && securityRelevant) {
+    const { rowCount } = await db.pool().query(
+      `UPDATE oauth_clients SET verification_status = 'unverified', verified = FALSE
+        WHERE client_id = $1 AND verification_status = 'verified'`, [client.client_id]);
+    downgraded = rowCount > 0;
+  }
 
   const updated = await db.oauthClients.get(client.client_id);
-  res.json({ success: true, client: serializeClientForOwner(updated) });
-});
+  res.json({ success: true, downgraded, client: serializeClientForOwner(updated) });
+}));
 
 // ─── DELETE /hhttps/developers/clients/:id — Delete draft ──────────────────
-app.delete('/hhttps/developers/clients/:id', async (req, res) => {
+app.delete('/hhttps/developers/clients/:id', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const deleted = await db.oauthClients.deleteIfDraft(req.params.id, u.userId);
+  // AP5-06: deleteIfDraft removes only `email_pending` rows; the dashboard now
+  // offers "Delete" for exactly that state.
   if (!deleted) return res.status(409).json({ error: 'cannot_delete',
-    message: 'Only draft/email_pending clients can be deleted. Use suspend instead.' });
+    message: 'Only clients still awaiting e-mail confirmation (email_pending) can be deleted. Ask an admin to suspend it instead.' });
   res.json({ success: true });
-});
+}));
 
 // ─── POST /hhttps/developers/clients/:id/dns-check ────────────────────────
 // Triggers a DNS lookup for _hhttps-verify.<apex> and matches against dns_token.
-app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
+// AP5-31: the lookup has a timeout, the route a limiter and a minimum
+// interval per client (dns_last_checked_at).
+const DNS_TIMEOUT_MS      = 3000;
+const DNS_MIN_INTERVAL_MS = 15_000;
+limit.dnsCheck = rl(10, 60_000);
+
+function dnsCheckTooSoon(client) {
+  const last = client.dns_last_checked_at ? new Date(client.dns_last_checked_at).getTime() : 0;
+  return last && (Date.now() - last) < DNS_MIN_INTERVAL_MS;
+}
+
+app.post('/hhttps/developers/clients/:id/dns-check', limit.dnsCheck, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4458,6 +5136,11 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
     return res.status(400).json({ error: 'no_dns_token',
       message: 'This client does not have a DNS token. Internal inconsistency.' });
   }
+  if (dnsCheckTooSoon(client)) {
+    return res.status(429).json({ error: 'dns_check_too_soon',
+      message: `Wait ${Math.ceil(DNS_MIN_INTERVAL_MS / 1000)} s between DNS checks.`,
+      retry_after: Math.ceil(DNS_MIN_INTERVAL_MS / 1000) });
+  }
 
   const apex = apexDomainFromUrl(client.homepage_url);
   if (!apex) {
@@ -4465,15 +5148,21 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
       message: 'Cannot resolve apex domain from homepage_url' });
   }
 
-  // DNS lookup via Node's dns/promises
+  // DNS lookup via Node's dns/promises — bounded by the resolver timeout AND
+  // a hard deadline (the resolver timeout is per attempt / per server).
   const { Resolver } = await import('dns/promises');
-  const resolver = new Resolver();
+  const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
   resolver.setServers(['1.1.1.1', '8.8.8.8']);
 
   let found = false;
   let records = [];
   try {
-    records = await resolver.resolveTxt(`_hhttps-verify.${apex}`);
+    records = await Promise.race([
+      resolver.resolveTxt(`_hhttps-verify.${apex}`),
+      new Promise((_, reject) => setTimeout(() => {
+        const e = new Error('DNS lookup timed out'); e.code = 'ETIMEOUT'; reject(e);
+      }, DNS_TIMEOUT_MS * 2 + 500).unref())
+    ]);
     // records is array of arrays of strings (TXT can have multiple chunks)
     for (const recordChunks of records) {
       const joined = recordChunks.join('');
@@ -4509,11 +5198,11 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
     expected_host: `_hhttps-verify.${apex}`,
     found_records: records.map(r => r.join(''))
   });
-});
+}));
 
 // ─── POST /hhttps/developers/clients/:id/submit-review ─────────────────────
 // Owner asks for admin verification. Checks all hard requirements first.
-app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
+app.post('/hhttps/developers/clients/:id/submit-review', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4560,13 +5249,13 @@ app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
   }
 
   res.json({ success: true, verification_status: 'pending_review' });
-});
+}));
 
 // ─── POST /hhttps/developers/clients/:id/resend-email ─────────────────────
 // The dashboard offers a "resend confirmation" button; without this route it
 // 404s. Only valid while the platform is still waiting for its first e-mail
 // confirmation — afterwards there is nothing to resend.
-app.post('/hhttps/developers/clients/:id/resend-email', limit.email, async (req, res) => {
+app.post('/hhttps/developers/clients/:id/resend-email', limit.email, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4607,44 +5296,43 @@ app.post('/hhttps/developers/clients/:id/resend-email', limit.email, async (req,
     .replace(/^(.)(.*)(@.*)$/, (m, a, b, c) => a + '*'.repeat(Math.max(b.length, 1)) + c);
 
   res.json({ success: true, sent_to: masked, expires_at: emailExpires.toISOString() });
-});
+}));
 
 // ─── GET /hhttps/developers/clients/:id/stats ─────────────────────────────
-app.get('/hhttps/developers/clients/:id/stats', async (req, res) => {
+app.get('/hhttps/developers/clients/:id/stats', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const client = await db.oauthClients.get(req.params.id);
   if (!client || client.owner_user_id !== u.userId) {
     return res.status(404).json({ error: 'not_found' });
   }
-  const days = Math.min(parseInt(req.query.days || '30', 10), 90);
+  // AP5-09 / AP5-15: `?days=abc` used to reach Postgres as 'NaN days'.
+  const parsedDays = parseInt(req.query.days, 10);
+  const days = Number.isFinite(parsedDays) ? Math.min(Math.max(parsedDays, 1), 90) : 30;
   const [daily, total] = await Promise.all([
     db.clientStats.getDaily(client.client_id, days),
     db.clientStats.getTotal(client.client_id)
   ]);
   res.json({ success: true, client_id: client.client_id, days, total, daily });
-});
+}));
 
 // ─── Admin endpoints ──────────────────────────────────────────────────────
 
 // GET /hhttps/admin/clients/pending — admin queue
-app.get('/hhttps/admin/clients/pending', async (req, res) => {
+app.get('/hhttps/admin/clients/pending', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const clients = await db.oauthClients.listPendingReview();
   res.json({ success: true, clients: clients.map(serializeClientForAdmin) });
-});
+}));
 
 // POST /hhttps/admin/clients/:id/approve
-app.post('/hhttps/admin/clients/:id/approve', async (req, res) => {
+app.post('/hhttps/admin/clients/:id/approve', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const client = await db.oauthClients.get(req.params.id);
   if (!client) return res.status(404).json({ error: 'not_found' });
-  if (client.verification_status !== 'pending_review') {
-    return res.status(409).json({ error: 'wrong_state',
-      message: `Can only approve clients in 'pending_review' state. Current: ${client.verification_status}` });
-  }
+  if (!assertTransition(res, client, 'approve')) return;
   await db.oauthClients.adminApprove(client.client_id, a.userId);
   await db.adminActions.log('verify_client', 'oauth_client', client.client_id, a.userId,
     { previous_status: 'pending_review' });
@@ -4657,16 +5345,17 @@ app.post('/hhttps/admin/clients/:id/approve', async (req, res) => {
     }).catch(err => console.warn('[ADMIN] verified email failed:', err.message));
   }
   res.json({ success: true });
-});
+}));
 
 // POST /hhttps/admin/clients/:id/reject  body: { reason }
-app.post('/hhttps/admin/clients/:id/reject', async (req, res) => {
+app.post('/hhttps/admin/clients/:id/reject', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const reason = (req.body?.reason || '').toString().slice(0, 1000).trim();
   if (!reason) return res.status(400).json({ error: 'reason_required' });
   const client = await db.oauthClients.get(req.params.id);
   if (!client) return res.status(404).json({ error: 'not_found' });
+  if (!assertTransition(res, client, 'reject')) return;   // AP5-08
   await db.oauthClients.adminReject(client.client_id, a.userId, reason);
   await db.adminActions.log('reject_client', 'oauth_client', client.client_id, a.userId,
     { previous_status: client.verification_status, reason });
@@ -4678,24 +5367,25 @@ app.post('/hhttps/admin/clients/:id/reject', async (req, res) => {
     }).catch(err => console.warn('[ADMIN] rejected email failed:', err.message));
   }
   res.json({ success: true });
-});
+}));
 
 // POST /hhttps/admin/clients/:id/suspend  body: { reason }
-app.post('/hhttps/admin/clients/:id/suspend', async (req, res) => {
+app.post('/hhttps/admin/clients/:id/suspend', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const reason = (req.body?.reason || '').toString().slice(0, 1000).trim();
   if (!reason) return res.status(400).json({ error: 'reason_required' });
   const client = await db.oauthClients.get(req.params.id);
   if (!client) return res.status(404).json({ error: 'not_found' });
+  if (!assertTransition(res, client, 'suspend')) return;  // AP5-08
   await db.oauthClients.adminSuspend(client.client_id, a.userId, reason);
   await db.adminActions.log('suspend_client', 'oauth_client', client.client_id, a.userId,
     { previous_status: client.verification_status, reason });
   res.json({ success: true });
-});
+}));
 
 // GET /hhttps/admin/clients — list all (with filter)
-app.get('/hhttps/admin/clients', async (req, res) => {
+app.get('/hhttps/admin/clients', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const status = req.query.status;
@@ -4711,10 +5401,10 @@ app.get('/hhttps/admin/clients', async (req, res) => {
     return serializeClientForAdmin(r);
   });
   res.json({ success: true, clients });
-});
+}));
 
 // GET /hhttps/admin/stats — system overview
-app.get('/hhttps/admin/stats', async (req, res) => {
+app.get('/hhttps/admin/stats', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const { rows } = await db.pool().query(
@@ -4728,7 +5418,7 @@ app.get('/hhttps/admin/stats', async (req, res) => {
     clients_by_status: rows,
     recent_admin_actions: recentActions
   });
-});
+}));
 
 // ─── Helpers used by Phase 3b endpoints ────────────────────────────────────
 
@@ -4808,7 +5498,13 @@ function renderSimplePage(title, body) {
 
 // ─── Public Stats ─────────────────────────────────────────────────────────────
 
-app.get('/hhttps/stats', async (req, res) => {
+// AP5-30: eight queries (four COUNT(*)) per anonymous call — cached for 60 s
+// in the module and marked cacheable for proxies. Webhooks are COUNTed
+// instead of loaded (listWebhooks() is owner-scoped since AP5-16).
+const STATS_CACHE_TTL_MS = 60_000;
+let _statsCache = { at: 0, data: null, pending: null };
+
+async function computePublicStats() {
   const [s, dist, c] = await Promise.all([
     db.stats.getAll(),
     db.rolesDeclared.distribution(),
@@ -4816,13 +5512,11 @@ app.get('/hhttps/stats', async (req, res) => {
       db.tokens.count(), db.refreshTokens.count(),
       db.credentials.count(), db.revokedTokens.count(),
       db.machineOperators.count(),
-      listWebhooks().then(w => w.length)
+      db.pool().query(`SELECT COUNT(*)::int AS n FROM webhooks WHERE active = TRUE`).then(r => r.rows[0].n)
     ])
   ]);
-
   const total = dist.reduce((sum, r) => sum + r.n, 0);
-
-  sendJson(req, res, {
+  return {
     hhttps: { version: '0.5.0' },
     stats: {
       verifications:       s.verifications      || 0,
@@ -4841,17 +5535,35 @@ app.get('/hhttps/stats', async (req, res) => {
       ),
       uptime: Math.floor(process.uptime()) + 's'
     }
-  }, {
+  };
+}
+
+async function cachedPublicStats() {
+  const now = Date.now();
+  if (_statsCache.data && now - _statsCache.at < STATS_CACHE_TTL_MS) return _statsCache.data;
+  if (!_statsCache.pending) {              // one in-flight computation, shared by concurrent callers
+    _statsCache.pending = computePublicStats()
+      .then(data => { _statsCache = { at: Date.now(), data, pending: null }; return data; })
+      .catch(err => { _statsCache.pending = null; throw err; });
+  }
+  return _statsCache.pending;
+}
+
+app.get('/hhttps/stats', wrap(async (req, res) => {
+  const data = await cachedPublicStats();
+  res.set('Cache-Control', `public, max-age=${STATS_CACHE_TTL_MS / 1000}`);
+  sendJson(req, res, data, {
     title:    'Public Stats',
     subtitle: 'Aggregated server statistics — no personal data, no individual user info.'
   });
-});
+}));
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 async function main() {
   // 0. F-4 (S-5): refuse to boot in production without the anchor pepper.
   assertPepperConfigured();
+  assertPairwiseSecretConfigured();
 
   // 1. Init keys
   loadOrCreateKeys();
@@ -4879,8 +5591,12 @@ async function main() {
     process.exit(1);
   }
 
-mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
-mountPopVerify(app, { db, verifyToken, RP_ID, BASE_URL }); // POP-VERIFY
+  mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
+  // AP5-05: PoP checks the token like every other route (signature + exp +
+  // revocation + active), not just the signature.
+  mountPopVerify(app, { db, checkTokenValid, RP_ID, BASE_URL }); // POP-VERIFY
+  // AP5-09: last — catches every forwarded async rejection.
+  app.use(centralErrorHandler);
   app.listen(PORT, () => {
     console.log(`\n🔐 HHTTPS v4.1 · Port ${PORT}`);
     console.log(`   RP_ID:   ${RP_ID}`);

@@ -5,6 +5,9 @@ import assert from 'node:assert/strict';
 
 import {
   validateAuthorizeParams,
+  validateTokenParams,
+  TOKEN_STRING_PARAMS,
+  SCOPE_MAX_LENGTH,
   STATE_MAX_LENGTH,
   CODE_CHALLENGE_MIN_LENGTH,
   CODE_CHALLENGE_MAX_LENGTH,
@@ -79,5 +82,34 @@ describe('validateAuthorizeParams: PKCE (RFC 7636 §4.2)', () => {
   test('code_challenge_method without code_challenge is still validated', () => {
     bad({ code_challenge_method: 'foo' }, /code_challenge_method/);
     ok({ code_challenge_method: 'S256' });
+  });
+});
+
+// ─── AP2-04 (#77): non-string parameters are a client error, not a TypeError ──
+
+describe('AP2-04 (#77): non-string parameters', () => {
+  test('validateAuthorizeParams: scope as array/object/number → invalid_request; string / absent → ok', () => {
+    bad({ scope: ['openid', 'email'] }, /scope must be a single string/);
+    bad({ scope: { a: 1 } }, /scope/);
+    bad({ scope: 42 }, /scope/);
+    bad({ scope: 'o'.repeat(SCOPE_MAX_LENGTH + 1) }, /scope must not exceed/);
+    ok({ scope: 'openid email' });
+    ok({ scope: '' });
+    ok({});
+  });
+
+  test('validateTokenParams: every present token parameter must be a string', () => {
+    assert.deepEqual(validateTokenParams({}), { ok: true });
+    assert.deepEqual(validateTokenParams({ grant_type: 'authorization_code', code: 'hp-x', client_id: 'c', client_secret: 's', code_verifier: 'v', redirect_uri: 'http://l/cb', refresh_token: 'r' }), { ok: true });
+    for (const name of TOKEN_STRING_PARAMS) {
+      for (const value of [['a'], { a: 1 }, 123, true]) {
+        const r = validateTokenParams({ [name]: value });
+        assert.equal(r.ok, false, `${name}=${JSON.stringify(value)} rejected`);
+        assert.equal(r.error, 'invalid_request');
+        assert.match(r.description, new RegExp(name));
+      }
+      assert.deepEqual(validateTokenParams({ [name]: null }), { ok: true }, `${name}=null is treated as absent`);
+    }
+    assert.deepEqual(validateTokenParams({ unrelated: ['x'] }), { ok: true }, 'unknown params are not typed here');
   });
 });

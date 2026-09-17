@@ -148,9 +148,10 @@ export async function startGithubVerify({ sessionId, redirectBase }) {
  * 5. Record only: anchor hash + user_id + trust_score.
  * 6. Mark the session as github-verified.
  *
- * Returns { sessionId, trustScore, alreadyOwnedBy } where alreadyOwnedBy is
- * non-null if this GitHub account was already linked to a different HHTTPS
- * user — caller decides how strict to be (we just warn).
+ * Returns { sessionId, trustScore, alreadyOwnedBy: null }. If the GitHub
+ * account is already the anchor of a DIFFERENT HHTTPS user the call throws
+ * `github_already_bound` BEFORE any write (AP3-09/#76) — no anchor takeover,
+ * no github-verified session.
  */
 export async function handleGithubCallback({ code, state, redirectBase }) {
   if (!isGithubConfigured()) {
@@ -217,6 +218,18 @@ export async function handleGithubCallback({ code, state, redirectBase }) {
   );
   const alreadyOwnedBy = priorRows[0]?.user_id || null;
 
+  // AP3-09 (#76) / AP4-11: a GitHub account is ONE person. If this account is
+  // already the anchor of a DIFFERENT HHTTPS user, stop here — before
+  // recordAnchor() would re-point the anchor row (ON CONFLICT … SET user_id)
+  // and before the session would be marked github-verified. Previously both
+  // writes ran and the collision was only reported as a cosmetic warning, so a
+  // second account could take over a foreign anchor and still be verified.
+  if (alreadyOwnedBy && alreadyOwnedBy !== session.userId) {
+    const err = new Error('github_already_bound');
+    err.code = 'github_already_bound';
+    throw err;
+  }
+
   // 5. Record anchor (insert or update timestamp)
   await recordAnchor({
     provider:   'github',
@@ -236,7 +249,8 @@ export async function handleGithubCallback({ code, state, redirectBase }) {
   return {
     sessionId,
     trustScore,
-    alreadyOwnedBy: (alreadyOwnedBy && alreadyOwnedBy !== session.userId) ? alreadyOwnedBy : null,
+    // AP3-09: a foreign owner throws above; what is left is this very user.
+    alreadyOwnedBy: null,
   };
 }
 
