@@ -27,7 +27,7 @@ Stand: `main` @ `bf0a82b`. Zeilennummern per `grep -n`/`sed -n` im aktuellen Sta
 **Empfehlung:** `VALID_EVENTS` auf die tatsächlich gefeuerten Events erweitern (und `'*'`-Expansion daraus ableiten), `role.declared` entfernen oder in `/hhttps/role/declare` feuern; Katalog in `/hhttps/info` und Doku angleichen.
 
 ### [S3] [Korrektheit] server/server.js:L379-389 — CORS `exposedHeaders` enthält die v0.5-Methoden-Header nicht; Cross-Origin-Clients können `HHTTPS-Verified-Methods` & Co. nicht lesen
-**Begründung:** `setHHTPPS` setzt seit v0.5 `HHTTPS-Verified-Methods` (L581), pro Methode `HHTTPS-Email-Verified`, `HHTTPS-Passkey-Verified`, `HHTTPS-Github-Verified`, `HHTTPS-Eudi-Verified`, `HHTTPS-Domain-Verified` sowie `HHTTPS-Domain` (L582-590, Namen aus `VERIFICATION_METHODS` in roles.js L110-137). In der `exposedHeaders`-Liste L380-387 fehlen alle diese Header (ebenso `HHTTPS-RAL`/`HHTTPS-Role-ISCO08` aus roles.eaa.js L52-58). Ohne `Access-Control-Expose-Headers` liefert `response.headers.get()` im Browser für fremde Origins `null`.
+**Begründung:** `setHHTPPS` setzt seit v0.5 `HHTTPS-Verified-Methods` (L581), pro Methode `HHTTPS-Email-Verified`, `HHTTPS-Passkey-Verified`, `HHTTPS-Github-Verified`, `HHTTPS-Eudi-Verified`, `HHTTPS-Domain-Verified` sowie `HHTTPS-Domain` (L582-590, Namen aus `VERIFICATION_METHODS` in roles.js L120-146). In der `exposedHeaders`-Liste L380-387 fehlen alle diese Header (ebenso `HHTTPS-RAL`/`HHTTPS-Role-ISCO08` aus roles.eaa.js L53-58). Ohne `Access-Control-Expose-Headers` liefert `response.headers.get()` im Browser für fremde Origins `null`.
 **Auswirkung:** Plattformen, die `/hhttps/check` per `fetch` aus dem Browser aufrufen, sehen die „Trademark“-Header nicht — die Header-Schnittstelle ist cross-origin unvollständig; nur der JSON-Body funktioniert.
 **Empfehlung:** `exposedHeaders` aus `VERIFICATION_METHODS` ableiten (`Object.values(...).flatMap(m => [m.header, m.valueHeader].filter(Boolean))`) plus `HHTTPS-Verified-Methods`, `HHTTPS-RAL`, `HHTTPS-Role-ISCO08` ergänzen.
 
@@ -37,12 +37,12 @@ Stand: `main` @ `bf0a82b`. Zeilennummern per `grep -n`/`sed -n` im aktuellen Sta
 **Empfehlung:** Stems auf Wortgrenzen matchen (`\b`-Regex oder Token-Vergleich nach `normalize`), spezifischere Stems/Präfixe zuerst prüfen (längster Treffer gewinnt), und `'261'`/`'335'` durch die konkreten 4-stelligen ISCO-Codes ersetzen.
 
 ### [S3] [Korrektheit] server/server.js:L1089-1141 — Domain wird ohne Längenprüfung in `bound_domain VARCHAR(120)` geschrieben; Überlauf endet als 401 mit PG-Fehlertext
-**Begründung:** `normalizeApexDomain` (L607-624) begrenzt die Länge nicht (Regex `^[a-z0-9.\-]+$`), ein Label darf laut Regex beliebig lang sein (z. B. 130× `a` + `.com`). `db.signatures.create` (L1126-1141) schlägt mit `value too long for type character varying(120)` fehl, der catch L1155-1157 antwortet `401 { error: <pg-Fehlertext> }`.
+**Begründung:** `normalizeApexDomain` (L607-624) begrenzt die Länge nicht (Regex `^[a-z0-9.\-]+$`), ein Label darf laut Regex beliebig lang sein (z. B. 130× `a` + `.com`). `db.signatures.create` (L1126-1141) schlägt mit `value too long for type character varying(120)` fehl, der catch L1157-1159 antwortet `401 { error: <pg-Fehlertext> }`.
 **Auswirkung:** Falscher Statuscode (401 „unauthorized“ für einen Validierungsfehler), interner DB-Fehlertext wird an den Client durchgereicht; Slug wurde bereits erzeugt/geprüft, Zähler nicht erhöht — kein Datenschaden, aber irreführende API-Semantik.
 **Empfehlung:** In `normalizeApexDomain` `h.length > 253` bzw. Label-Länge > 63 → `null` (RFC 1035), und im catch zwischen Token-Fehlern (401) und sonstigen Fehlern (400/500) unterscheiden.
 
 ### [S3] [Korrektheit] server/server.js:L774-796 — ESCO-Proxy ruft `fetch` ohne Timeout auf; hängender Upstream blockiert den Request unbegrenzt
-**Begründung:** `await fetch(url, { headers: ... })` (L781) ohne `signal: AbortSignal.timeout(...)`. Node-`fetch` hat keinen Default-Timeout; bei nicht antwortendem `ec.europa.eu` wartet der Handler bis zum TCP-Timeout des Betriebssystems. webhooks.js macht es korrekt (`AbortSignal.timeout(8000)`, L79).
+**Begründung:** `await fetch(url, { headers: ... })` (L781) ohne `signal: AbortSignal.timeout(...)`. Node-`fetch` hat keinen Default-Timeout; bei nicht antwortendem `ec.europa.eu` wartet der Handler bis zum TCP-Timeout des Betriebssystems. webhooks.js macht es korrekt (`AbortSignal.timeout(8000)`, L76).
 **Auswirkung:** Typeahead-Requests des Rollen-Formulars hängen minutenlang; jeder Tastendruck des Nutzers öffnet einen weiteren hängenden Request und belegt Verbindungen des globalen Rate-Limits (300/min).
 **Empfehlung:** `signal: AbortSignal.timeout(5000)` ergänzen; der bestehende catch liefert dann sauber `{ results: [], error: 'esco_unreachable' }`.
 
@@ -57,13 +57,13 @@ Stand: `main` @ `bf0a82b`. Zeilennummern per `grep -n`/`sed -n` im aktuellen Sta
 **Empfehlung:** Datei nach `test/unit/roles.taxonomy.test.mjs` verschieben und auf `node:test` (`test()`/`describe()`) umstellen.
 
 ### [S4] [Korrektheit] server/server.js:L1331-1341 — `reason` beim Signatur-Revoke ungeprüft in `revoke_reason VARCHAR(120)`; >120 Zeichen → 401 mit PG-Fehlertext
-**Begründung:** `const reason = req.body?.reason` (L1331) wird ohne Typ-/Längenprüfung an `db.signatures.revoke` (L1341) gegeben; bei >120 Zeichen wirft pg, der catch L1349 antwortet `401 { error: 'value too long …' }` — der Nutzer war aber korrekt authentifiziert.
+**Begründung:** `const reason = req.body?.reason` (L1331) wird ohne Typ-/Längenprüfung an `db.signatures.revoke` (L1341) gegeben; bei >120 Zeichen wirft pg, der catch L1351 antwortet `401 { error: 'value too long …' }` — der Nutzer war aber korrekt authentifiziert.
 **Auswirkung:** Falscher Statuscode, Revoke schlägt still fehl (Signatur bleibt gültig), Client erhält keine verwertbare Fehlermeldung.
 **Empfehlung:** `typeof reason === 'string' ? reason.slice(0, 120) : null` vor dem DB-Aufruf.
 
 ### [S4] [Korrektheit] server/keys.js:L142-150 — `forgetRetiredKey` ist nicht restart-fest; `rotateKeys`/`forgetRetiredKey` haben keinen Aufrufer
-**Begründung:** `forgetRetiredKey` löscht den kid nur aus der In-Memory-Map (`_retired.delete(kid)`, L146), die Datei `keys/retired/<kid>.pem` bleibt liegen. `loadRetiredKeys` (L58-70) liest beim nächsten Start alle `.pem` wieder ein → der Schlüssel erscheint erneut im JWKS. Zudem gibt es im Repo (grep über *.js/*.mjs/*.sh, ohne node_modules) keinen Aufrufer von `rotateKeys` oder `forgetRetiredKey` — die Rotation ist nur per REPL/Eigenskript auslösbar.
-**Auswirkung:** Ein bewusst aus dem JWKS entfernter Alt-Schlüssel wird nach Deploy/Neustart wieder veröffentlicht (Kommentar L138-140 verspricht das Gegenteil); operativ ist die dokumentierte Rotation nicht ausführbar.
+**Begründung:** `forgetRetiredKey` löscht den kid nur aus der In-Memory-Map (`_retired.delete(kid)`, L146), die Datei `keys/retired/<kid>.pem` bleibt liegen. `loadRetiredKeys` (L57-70) liest beim nächsten Start alle `.pem` wieder ein → der Schlüssel erscheint erneut im JWKS. Zudem gibt es im Repo (grep über *.js/*.mjs/*.sh, ohne node_modules) keinen Aufrufer von `rotateKeys` oder `forgetRetiredKey` — die Rotation ist nur per REPL/Eigenskript auslösbar.
+**Auswirkung:** Ein bewusst aus dem JWKS entfernter Alt-Schlüssel wird nach Deploy/Neustart wieder veröffentlicht (Kommentar L139-141 verspricht das Gegenteil); operativ ist die dokumentierte Rotation nicht ausführbar.
 **Empfehlung:** In `forgetRetiredKey` die Datei umbenennen/löschen (oder eine `.forgotten`-Markierung), und ein `scripts/rotate-keys.mjs` bereitstellen.
 
 ### [S4] [Korrektheit] server/server.js:L412-417 — Rate-Limit-Handler meldet `retryAfter` als volles Fenster statt Restzeit
@@ -77,12 +77,12 @@ Stand: `main` @ `bf0a82b`. Zeilennummern per `grep -n`/`sed -n` im aktuellen Sta
 **Empfehlung:** Gemeinsame Helper-Funktion `bearerFrom(req)` mit `/^bearer\s+(.+)$/i`.
 
 ### [S4] [Korrektheit] server/server.js:L333-357 — HTML-Viewer von `sendJson` verwirft den Query-String; „Raw JSON“/„Kopieren“ liefern ein anderes Ergebnis als die angezeigte Seite
-**Begründung:** Links und `fetch` verwenden `${req.path}?format=json`; `req.path` enthält keine Query. Für `/hhttps/s/:slug?domain=example.com` zeigt der Viewer z. B. `wrong-domain`, der Raw-Link liefert `verified` (Domain-Check entfällt L1180). Zudem setzt der erste Aufruf `first_seen` (L1183-1185) und erhöht `verify_count` (L1176) ein zweites Mal.
+**Begründung:** Links und `fetch` verwenden `${req.path}?format=json`; `req.path` enthält keine Query. Für `/hhttps/s/:slug?domain=example.com` zeigt der Viewer z. B. `wrong-domain`, der Raw-Link liefert `verified` (Domain-Check entfällt L1180). Zudem setzt der erste Aufruf `first_seen` (L1183-1185) und erhöht `verify_count` (L1177) ein zweites Mal.
 **Auswirkung:** Irreführende Anzeige beim manuellen Prüfen einer Signatur mit Domain-Parameter; Zähler doppelt.
 **Empfehlung:** `req.originalUrl` mit angehängtem `format=json` (via `URLSearchParams`) verwenden.
 
 ### [S4] [Korrektheit] server/server.js:L751 — Discovery meldet `supported_verification` aus dem Legacy-Katalog `VERIFICATION_LEVELS` statt der v0.5-Methoden
-**Begründung:** `supported_verification: Object.keys(VERIFICATION_LEVELS)` listet 25 Level (`press-card`, `bar-association-id`, …), von denen laut roles.js L200-215 die meisten `implemented: false` sind; das tatsächliche v0.5-Modell (`VERIFICATION_METHODS`: email, passkey, domain, github, eudi, age) und `HHTTPS-Verified-Methods` werden nicht beworben. `/hhttps/info` (L811-812) beschreibt dagegen `features: ['webauthn','roles-esco-dynamic','email-verification', …]`.
+**Begründung:** `supported_verification: Object.keys(VERIFICATION_LEVELS)` listet 25 Level (`press-card`, `bar-association-id`, …), von denen laut roles.js L241-254 die meisten `implemented: false` sind; das tatsächliche v0.5-Modell (`VERIFICATION_METHODS`: email, passkey, domain, github, eudi, age) und `HHTTPS-Verified-Methods` werden nicht beworben. `/hhttps/info` (L811-812) beschreibt dagegen `features: ['webauthn','roles-esco-dynamic','email-verification', …]`.
 **Auswirkung:** Discovery-Dokument und Wire-Format (`verified_methods[]` im Token, Header) sind inkonsistent; Clients können die tatsächlich möglichen Methoden nicht aus der Discovery ableiten.
 **Empfehlung:** `supported_verification_methods: Object.keys(VERIFICATION_METHODS)` (+ Header-Namen) ausgeben und `VERIFICATION_LEVELS` als `legacy_role_levels` kennzeichnen oder weglassen.
 
@@ -97,12 +97,12 @@ Stand: `main` @ `bf0a82b`. Zeilennummern per `grep -n`/`sed -n` im aktuellen Sta
 **Empfehlung:** `net.isIP(h)` → IP unverändert zurückgeben (oder `null` und 400).
 
 ### [S4] [Korrektheit] server/webhooks.js:L20-25 — `events` wird ohne Typprüfung verwendet; String statt Array erzeugt eine TypeError-Meldung als 400-Text
-**Begründung:** `events.find(...)` (L20) wirft bei `events: "token.issued"` (String) `events.find is not a function`; der Aufrufer L3893-3902 gibt `e.message` als 400 weiter. Zusätzlich: `deactivateIfFailing(wh.id, 10)` (L95) wird pro fehlgeschlagenem Event erst nach 3 Versuchen aufgerufen, `failures` zählt aber jeden Versuch (db.js L695-699) → Deaktivierung effektiv nach dem 4. fehlgeschlagenen Event (12 Failures), nicht „nach 10 Failures“ wie L93-96 kommentiert.
+**Begründung:** `events.find(...)` (L20) wirft bei `events: "token.issued"` (String) `events.find is not a function`; der Aufrufer L3893-3903 gibt `e.message` als 400 weiter. Zusätzlich: `deactivateIfFailing(wh.id, 10)` (L95) wird pro fehlgeschlagenem Event erst nach 3 Versuchen aufgerufen, `failures` zählt aber jeden Versuch (db.js L697) → Deaktivierung effektiv nach dem 4. fehlgeschlagenen Event (12 Failures), nicht „nach 10 Failures“ wie L94 kommentiert.
 **Auswirkung:** Unverständliche Fehlermeldung für Integratoren; Abschaltschwelle weicht von Doku/Kommentar ab.
 **Empfehlung:** `if (!Array.isArray(events) || !events.length) throw new Error('events must be a non-empty array')`; Schwelle auf Event-Basis zählen oder Kommentar/Doku anpassen.
 
 ### [S4] [Korrektheit] server/roles.i18n.js:L307 — Deutsche Übersetzung markiert EUDI-Altersnachweis als „Geplant“, kanonisch ist er live
-**Begründung:** DE-Katalog: `'eudi-wallet': { …, note: '… Geplant.' }`; roles.js L322-326 (`available: true`, „live today“). Zudem fehlt `'av-app'` (roles.js L327-331) im DE-Katalog (Fallback Englisch, funktional ok).
+**Begründung:** DE-Katalog: `'eudi-wallet': { …, note: '… Geplant.' }`; roles.js L346-350 (`available: true`, „live today“). Zudem fehlt `'av-app'` (roles.js L351-355) im DE-Katalog (Fallback Englisch, funktional ok).
 **Auswirkung:** Deutsche UI zeigt eine verfügbare Methode als geplant an.
 **Empfehlung:** Note aktualisieren, `av-app` ergänzen.
 
