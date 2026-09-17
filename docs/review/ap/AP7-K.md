@@ -7,7 +7,7 @@ Stand: `main` @ `bf0a82b`, Zeilennummern per `awk`/`sed -n` geprüft.
 ---
 
 ### [S2] [Korrektheit] server/privacy-pass/issuance.js:L77-82 — `/privacy-pass/issue` verlangt `session.role === role`, aber kein Server-Pfad setzt `sessions.role` mehr → Token-Ausgabe über die Wallet ist vollständig blockiert
-**Begründung:** Der Handler lehnt ab, wenn `session.role !== role`. Die Wallet „attestiert“ die Rolle vorher über `POST /hhttps/role/declare` (wallet.html L1185-1191, `verificationMethod: 'self_declared'`). Seit v0.5 nimmt `/hhttps/role/declare` jedoch keine Rolle mehr aus dem Request („we do not take a role from the request“, server.js L3116-3119) und schreibt nur `db.sessions.update(sessionId, { trustScore })`. Es gibt im gesamten Server keinen `sessions.update(..., { role })`-Aufruf mehr (grep über `server/`; `db.js:595` betrifft `roles_declared`, nicht `sessions`). `session.role` ist damit immer `null`:
+**Begründung:** Der Handler lehnt ab, wenn `session.role !== role`. Die Wallet „attestiert“ die Rolle vorher über `POST /hhttps/role/declare` (wallet.html L1185-1191, `verificationMethod: 'self_declared'`). Seit v0.5 nimmt `/hhttps/role/declare` jedoch keine Rolle mehr aus dem Request („we do not take a role from the request“, server.js L3112-3114) und schreibt nur `db.sessions.update(sessionId, { trustScore })`. Es gibt im gesamten Server keinen `sessions.update(..., { role })`-Aufruf mehr (grep über `server/`; `db.js:595` betrifft `roles_declared`, nicht `sessions`). `session.role` ist damit immer `null`:
 ```js
 if (session.role !== role) {
   return res.status(403).json({ error: 'role_mismatch',
@@ -44,7 +44,7 @@ Der Server prüft `session.userId !== userId → 401 session_user_mismatch`. Nur
 
 ### [S3] [Korrektheit] server/privacy-pass/keys.js:L80,L143-150 — Kollisionen des `truncated_token_key_id` (1 Byte) über 16 Issuer werden weder erkannt noch behandelt
 **Begründung:** Der Key-Identifier ist das letzte Byte von SHA-256(pub) (L80, L128). Mit 16 Issuern (default + 15 Rollen) liegt die Kollisionswahrscheinlichkeit bei der Erstgenerierung bei ≈38 % (1−∏(1−i/256), i=0..15). `findIssuerByTruncatedKeyId` (L143-150) gibt bei Kollision den *ersten* Treffer in Map-Reihenfolge zurück; `loadOrCreateKeys` prüft nichts. (Die aktuell im Repo-Verzeichnis liegenden 16 `meta.json` sind zufällig kollisionsfrei — geprüft; für andere Deployments gilt das nicht.)
-**Auswirkung:** Am öffentlichen RFC-Endpunkt `POST /privacy-pass/token-request` (issuer.js L91-105) wird bei Kollision der falsche Schlüssel verwendet; der Client scheitert beim DLEQ-Proof bzw. erhält ein Token, das später `authenticator mismatch` liefert. Nicht deterministisch reproduzierbar, daher schwer zu diagnostizieren.
+**Auswirkung:** Am öffentlichen RFC-Endpunkt `POST /privacy-pass/token-request` (issuer.js L82-105) wird bei Kollision der falsche Schlüssel verwendet; der Client scheitert beim DLEQ-Proof bzw. erhält ein Token, das später `authenticator mismatch` liefert. Nicht deterministisch reproduzierbar, daher schwer zu diagnostizieren.
 **Empfehlung:** Beim Laden/Generieren Eindeutigkeit der Truncated-IDs prüfen und bei Kollision den Schlüssel neu generieren (RFC 9578 §6.1 verlangt vom Issuer eindeutige truncated IDs pro Directory), oder `token-request` zusätzlich mit einem Rollen-Pfad (`/r/:role/token-request`) anbieten.
 
 ### [S3] [Korrektheit] server/privacy-pass/keys.js:L61-75,L77-95 — Fehlt eine der drei Key-Dateien (z. B. `meta.json`), wird stillschweigend ein neues Schlüsselpaar erzeugt und der alte Private Key überschrieben
@@ -82,14 +82,14 @@ Nach einer Schlüsselrotation auf dem Issuer tragen neue Tokens einen neuen `kid
 **Empfehlung:** In `_fetchAbsolute` erst `res.ok`/Content-Type prüfen, Body tolerant parsen; in `check()` 401 in `{ ...this._unverified(), status: 'invalid' }` übersetzen (Parität zu `verifyLocal` und zum Python-SDK).
 
 ### [S3] [Tests] server/test/e2e/wallet.e2e.test.mjs:L80-131 — Einziger Privacy-Pass-Test deckt nur den Login ab; Issuance/Verify/Redeem/Eligibility/E-Mail-Verify/Recovery sind komplett ungetestet
-**Begründung:** Unter `server/test/{unit,integration}` gibt es keine Datei, die `/privacy-pass/*` anspricht (grep `privacy-pass` → nur `legacy-pages.test.mjs`, das den Wallet-Script-Text regex-prüft, und der e2e-Test). Der e2e-Test endet bei „Angemeldet“ (L118-129). Konkret ungetestet: `POST /privacy-pass/issue` (hätte Finding 1, den dauerhaften 403 `role_mismatch`, sofort gezeigt), `parseAndVerify`/`/redeem` inkl. Double-Spend (`ON CONFLICT`), `checkEligibility` mit strikten Rollen, `emailDomainMatchesRole` (Finding 5), `/email/start`→`/email/verify`-Kette, `consumeRecoveryCode`, Wire-Format-Annahmen in issuer.js L138-152 / wallet.html L1424-1430 gegenüber `@cloudflare/voprf-ts`.
+**Begründung:** Unter `server/test/{unit,integration}` gibt es keine Datei, die `/privacy-pass/*` anspricht (grep `privacy-pass` → nur `legacy-pages.test.mjs`, das den Wallet-Script-Text regex-prüft, und der e2e-Test). Der e2e-Test endet bei „Angemeldet“ (L118-129). Konkret ungetestet: `POST /privacy-pass/issue` (hätte Finding 1, den dauerhaften 403 `role_mismatch`, sofort gezeigt), `parseAndVerify`/`/redeem` inkl. Double-Spend (`ON CONFLICT`), `checkEligibility` mit strikten Rollen, `emailDomainMatchesRole` (Finding 5), `/email/start`→`/email/verify`-Kette, `consumeRecoveryCode`, Wire-Format-Annahmen in issuer.js L49-64 / wallet.html L1424-1430 gegenüber `@cloudflare/voprf-ts`.
 **Auswirkung:** Regressionen im Kernpfad (Blind-Evaluate → Finalize → Verify) und in den Gates bleiben unentdeckt; der aktuelle Bruch der Ausgabe ist ein Beispiel.
 **Empfehlung:** Integrationstest, der mit `VOPRFClient` aus `@cloudflare/voprf-ts` 2 Tokens über `/issue` holt, finalisiert, `/verify` → valid, `/redeem` → redeemed, zweites `/redeem` → `already_redeemed`; Unit-Tests für `checkEligibility`/`emailDomainMatchesRole`; e2e um Schritt 2-5 erweitern.
 
 ---
 
 ### [S4] [Korrektheit] server/privacy-pass/issuance.js:L118,L140 — Nicht-String-Elemente in `requests` und ungültige Gruppenelemente führen zu 500 statt 400
-**Begründung:** `Buffer.from(requests[i], 'base64')` wirft `TypeError` bei Zahlen/Objekten im Array; `EvaluationRequest.deserialize` (issuer.js L138-141) wirft bei einem Byte-String korrekter Länge, der kein gültiger P-384-Punkt ist. Beides landet im Catch L156-159 → 500 `issuance_failed` mit interner Fehlermeldung.
+**Begründung:** `Buffer.from(requests[i], 'base64')` wirft `TypeError` bei Zahlen/Objekten im Array; `EvaluationRequest.deserialize` (issuer.js L49-52) wirft bei einem Byte-String korrekter Länge, der kein gültiger P-384-Punkt ist. Beides landet im Catch L156-159 → 500 `issuance_failed` mit interner Fehlermeldung.
 **Auswirkung:** Falsche Statusklasse (Client-Fehler als Serverfehler), Monitoring-Rauschen.
 **Empfehlung:** `typeof requests[i] === 'string'` prüfen; Deserialisierung in try/catch mit 400 `malformed_request`.
 
