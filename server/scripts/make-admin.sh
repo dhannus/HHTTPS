@@ -13,12 +13,14 @@
 #   ./make-admin.sh --revoke <USER_ID>
 #   ./make-admin.sh --whoami <USER_ID>      # is this user an admin?
 #
-# NOTE ON IDENTITY DURABILITY
-#   user_id is stable ONLY for passkey- or eID-anchored identities: it comes
-#   from the stored credential. An e-mail-only sign-in mints a fresh uuid per
-#   session, so admin rights granted to such an id are gone at the next login.
-#   The developer portal therefore requires a passkey — sign in with yours
-#   FIRST, then grant. Check the anchor at: GET /hhttps/whoami
+# NOTE ON IDENTITY DURABILITY (phase 8: e-mail-anchored identity)
+#   user_id is stable for every ANCHORED identity: a passkey (from the stored
+#   credential) and, since phase 8, a confirmed e-mail address as well — the
+#   anchor table maps HMAC(pepper, e-mail) to one permanent user_id, so the
+#   same address yields the same id on every future sign-in.
+#   Not stable: a session that has neither a passkey nor a confirmed address
+#   (it carries a per-session uuid). Grant only to an anchored id.
+#   Check which one you have at: GET /hhttps/whoami
 #
 # Reads DB credentials from ../.env (DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD).
 # Runs as the application DB user — never as postgres superuser.
@@ -31,7 +33,7 @@ ENV_FILE="${SCRIPT_DIR}/../.env"
 # --help must work without a database or an .env file.
 for a in "$@"; do
   if [[ "$a" == "-h" || "$a" == "--help" ]]; then
-    sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 0
   fi
 done
@@ -41,33 +43,8 @@ if [[ ! -f "$ENV_FILE" ]]; then
   exit 1
 fi
 
-# Read a single key from the .env file.
-#
-# Deliberately NOT `source`: an .env may legitimately contain unquoted values
-# with spaces (e.g. SMTP_FROM_NAME=HHTTPS Open Issuer), which bash would parse
-# as a command invocation. This reads the file as data, not as script.
-# Handles: leading whitespace, optional `export `, surrounding quotes,
-# trailing inline comments, CRLF line endings. Last occurrence wins.
-env_get() {
-  local key="$1" line value
-  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${key}[[:space:]]*=" "$ENV_FILE" | tail -1 || true)"
-  [[ -z "$line" ]] && return 0
-  value="${line#*=}"
-  value="${value%$'\r'}"                      # strip CR from CRLF files
-  value="${value#"${value%%[![:space:]]*}"}"  # ltrim
-
-  if [[ "${value:0:1}" == '"' ]]; then
-    value="${value#\"}"; value="${value%%\"*}"        # up to the closing "
-  elif [[ "${value:0:1}" == "'" ]]; then
-    value="${value#\'}"; value="${value%%\'*}"        # up to the closing '
-  else
-    # Unquoted: strip a trailing comment only when the # is preceded by
-    # whitespace. A password like abc#def stays intact; "abc  # note" does not.
-    value="$(printf '%s' "$value" | sed -E 's/[[:space:]]+#.*$//')"
-    value="${value%"${value##*[![:space:]]}"}"        # rtrim
-  fi
-  printf '%s' "$value"
-}
+# AP6-48 (#192): env_get and the log helpers live in the one shared library.
+source "${SCRIPT_DIR}/lib/common.sh"
 
 DB_HOST="$(env_get DB_HOST)";     DB_HOST="${DB_HOST:-localhost}"
 DB_PORT="$(env_get DB_PORT)";     DB_PORT="${DB_PORT:-5432}"
@@ -88,7 +65,7 @@ psql_run() {
 }
 
 usage() {
-  sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 1
 }
 
@@ -105,10 +82,10 @@ while [[ $# -gt 0 ]]; do
       if [[ "${2:-}" =~ ^[0-9]+$ ]]; then RECENT_N="$2"; shift 2; else shift; fi ;;
     --grant-recent) ACTION="grant-recent"; shift ;;
     --yes)          ASSUME_YES=1; shift ;;
-    --grant)  ACTION="grant";  USER_ID="${2:-}"; shift 2 ;;
-    --revoke) ACTION="revoke"; USER_ID="${2:-}"; shift 2 ;;
-    --whoami) ACTION="whoami"; USER_ID="${2:-}"; shift 2 ;;
-    --note)   NOTE="${2:-}";   shift 2 ;;
+    --grant)  ACTION="grant";  USER_ID="${2:-}"; shift $(( $# >= 2 ? 2 : 1 )) ;;
+    --revoke) ACTION="revoke"; USER_ID="${2:-}"; shift $(( $# >= 2 ? 2 : 1 )) ;;
+    --whoami) ACTION="whoami"; USER_ID="${2:-}"; shift $(( $# >= 2 ? 2 : 1 )) ;;
+    --note)   NOTE="${2:-}";   shift $(( $# >= 2 ? 2 : 1 )) ;;
     -h|--help) usage ;;
     *) echo "Unknown argument: $1" >&2; usage ;;
   esac
@@ -194,8 +171,9 @@ ON CONFLICT (user_id) DO NOTHING;
 SQL
     echo "✓ ${USER_ID} is now an admin."
     echo ""
-    echo "  IMPORTANT: if you signed in with e-mail only, this id dies with the"
-    echo "  session. Register a passkey and re-grant, or you will lose admin again."
+    echo "  IMPORTANT: this only lasts if the id is ANCHORED — by a passkey or by"
+    echo "  a confirmed e-mail address (phase 8). An id from a session with"
+    echo "  neither is per-session and the grant dies with it."
     echo "  Check the anchor at https://hhttps.org/developers/ (identity panel)."
     ;;
 

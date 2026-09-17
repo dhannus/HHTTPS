@@ -1,13 +1,16 @@
 {
   "name": "hhttps-role-api",
   "version": "4.1.0",
-  "description": "HHTTPS — Role Identity API v4.1 (PostgreSQL persistence + role identity)",
+  "description": "HHTTPS — Role Identity API: pseudonymous role identity (passkey, e-mail anchor, EUDI) with an OAuth 2.0 / OIDC provider, on PostgreSQL",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
     "migrate": "node scripts/migrate.js",
-    "db:check": "node scripts/db-check.js",
+    "migrate:dry-run": "node scripts/migrate.js --dry-run",
     "test": "node --test \"test/unit/**/*.test.mjs\" \"test/integration/**/*.test.mjs\"",
     "test:e2e": "node --test \"test/e2e/**/*.e2e.test.mjs\"",
     "lint": "eslint ."

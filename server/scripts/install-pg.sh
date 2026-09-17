@@ -14,13 +14,9 @@ INSTALL_DIR="${1:-/var/www/hhttps}"
 DB_NAME="hhttps"
 DB_USER="hhttps"
 
-# Colors
-G=$'\033[0;32m'; Y=$'\033[0;33m'; R=$'\033[0;31m'; B=$'\033[0;36m'; N=$'\033[0m'
-
-ok()    { printf "  ${G}✓${N} %s\n" "$1"; }
-warn()  { printf "  ${Y}⚠${N}  %s\n" "$1"; }
-err()   { printf "  ${R}✗${N} %s\n" "$1"; }
-step()  { printf "\n${B}═══ %s ═══${N}\n" "$1"; }
+# AP6-57 (#213) / AP6-48 (#192): colours, log helpers and the .env reader
+# come from the one shared library, not from a per-script copy.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 
 step "PostgreSQL Setup für HHTTPS v4.1"
 
@@ -44,7 +40,11 @@ if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'
   read -p "  Passwort neu setzen? [y/N]: " resetpw
   if [[ "${resetpw,,}" == "y" ]]; then
     DB_PASSWORD=$(openssl rand -hex 24)
-    sudo -u postgres psql -c "ALTER USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';" >/dev/null
+    # AP6-22 (#213): bound as a psql variable, never interpolated into the
+    # command line (where `ps` would show the secret to every local user).
+    sudo -u postgres psql -v pw="${DB_PASSWORD}" -q -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+ALTER USER hhttps WITH PASSWORD :'pw';
+SQL
     ok "Passwort neu gesetzt"
   else
     DB_PASSWORD=""
@@ -52,7 +52,10 @@ if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'
   fi
 else
   DB_PASSWORD=$(openssl rand -hex 24)
-  sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';" >/dev/null
+  # AP6-22 (#213): bound as a psql variable, not on the command line.
+  sudo -u postgres psql -v pw="${DB_PASSWORD}" -q -v ON_ERROR_STOP=1 >/dev/null <<'SQL'
+CREATE USER hhttps WITH PASSWORD :'pw';
+SQL
   ok "DB-User '${DB_USER}' angelegt"
 fi
 
@@ -69,26 +72,8 @@ sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_
 sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL ON SCHEMA public TO ${DB_USER};" >/dev/null
 ok "Berechtigungen erteilt"
 
+# env_get (lib/common.sh) defaults to $ENV_FILE.
 ENV_FILE="${INSTALL_DIR}/.env"
-
-# Read ONE key from the .env as data. Never `source` it (AP6-17 / #118):
-# unquoted values with spaces would be executed as commands and every secret
-# would end up exported into this shell (and into everything it starts).
-env_get() {
-  local line value
-  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${1}[[:space:]]*=" "${ENV_FILE}" 2>/dev/null | tail -1 || true)"
-  [[ -z "${line}" ]] && return 0
-  value="${line#*=}"
-  value="${value%$'\r'}"
-  value="${value#"${value%%[![:space:]]*}"}"
-  case "${value}" in
-    \"*) value="${value#\"}"; value="${value%%\"*}" ;;
-    \'*) value="${value#\'}"; value="${value%%\'*}" ;;
-    *)   value="${value%%[[:space:]]#*}"
-         value="${value%"${value##*[![:space:]]}"}" ;;
-  esac
-  printf '%s' "${value}"
-}
 
 # 6. Repair object ownership (AP6-08 / #85). Older installs applied the schema
 #    through a silent `sudo -u postgres` fallback, which left postgres as the
@@ -124,7 +109,7 @@ fi
 (cd "${INSTALL_DIR}" && \
   DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${MIGRATE_PW}" \
   node scripts/migrate.js) || { err "Migration fehlgeschlagen"; exit 1; }
-ok "Migrationen angewendet als ${DB_USER} (schema.sql + Phasen 2.5 … 10)"
+ok "Migrationen angewendet als ${DB_USER} (vollständige Kette aus db.js: MIGRATIONS)"
 
 # 8. Update .env (only if we set a new password)
 if [[ -n "${DB_PASSWORD}" ]]; then

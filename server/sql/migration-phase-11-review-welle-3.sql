@@ -11,31 +11,30 @@
 -- ─────────────────────────────────────────────────────────────────────────
 
 -- ════════════════════════════════════════════════════════════════════════════
--- HHTTPS — Migration phase 7: Age group (orthogonal, EUDI-aligned)
+-- HHTTPS — Migration Phase 11 (Projekt-Review 2026-09, Welle 3 / AP6)
+-- ════════════════════════════════════════════════════════════════════════════
 --
--- Adds an OPTIONAL, orthogonal age_group claim to the OAuth authorization code,
--- so it can be carried into the OIDC id_token / userinfo when a client requests
--- the new `age_group` scope. age_group is INDEPENDENT of role (a person can be
--- both medical_professional AND adult_18_plus).
---
--- Phase 1 (this migration): age_group is self-declared only —
---   age_verified = FALSE, age_verification_method = 'self-declared', low trust.
--- Phase 3 (later): an EUDI Wallet PID presentation (age_over_NN, selective
---   disclosure) will set age_verified = TRUE, method = 'eudi-wallet'. No schema
---   change needed then — only the values change.
---
--- Groups (German legal thresholds):
---   minor_under_14 · minor_14_to_15 · minor_16_to_17 · adult_18_plus
---
--- Idempotent: safe to run multiple times (ADD COLUMN IF NOT EXISTS).
---
+-- Finding:
+--   AP6-11 (#213) `stats` is a row-based (metric, value) table. Phase 2.5 and
+--                 phase 3a nonetheless added six counter COLUMNS to it that no
+--                 code ever read or wrote — db.stats.increment() has always
+--                 used rows. The columns are dropped and the six metrics are
+--                 seeded as rows, the way schema.sql seeds the others.
 -- ════════════════════════════════════════════════════════════════════════════
 
-ALTER TABLE authorization_codes
-  ADD COLUMN IF NOT EXISTS age_group               TEXT,
-  ADD COLUMN IF NOT EXISTS age_verified            BOOLEAN,
-  ADD COLUMN IF NOT EXISTS age_verification_method TEXT;
+ALTER TABLE stats
+  DROP COLUMN IF EXISTS signatures_created,
+  DROP COLUMN IF EXISTS signatures_verified,
+  DROP COLUMN IF EXISTS signatures_revoked,
+  DROP COLUMN IF EXISTS oauth_authorizations,
+  DROP COLUMN IF EXISTS oauth_tokens_issued,
+  DROP COLUMN IF EXISTS oauth_logins;
 
--- The access/refresh token tables do not need new columns: age_group travels
--- inside the signed JWT payload (issueAccessToken spreads it via ...payload),
--- and the token store only tracks jti/role/trust for revocation. No change there.
+INSERT INTO stats (metric, value) VALUES
+  ('signatures_created',   0),
+  ('signatures_verified',  0),
+  ('signatures_revoked',   0),
+  ('oauth_authorizations', 0),
+  ('oauth_tokens_issued',  0),
+  ('oauth_logins',         0)
+ON CONFLICT (metric) DO NOTHING;

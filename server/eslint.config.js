@@ -17,12 +17,19 @@ export default [
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
-      globals: { ...globals.node, ...globals.browser },
+      globals: { ...globals.node },
     },
     rules: {
       'no-empty': ['error', { allowEmptyCatch: true }],
       'no-unused-vars': 'warn',
       'no-useless-escape': 'warn',
     },
+  },
+  {
+    // AP6-52 (#213): browser globals are NOT server-wide any more — they were
+    // hiding typos like `documnet` in the whole tree. Only the files that
+    // really run in a browser get them.
+    files: ['sdk/**/*.js', 'test/e2e/**/*.js'],
+    languageOptions: { globals: { ...globals.browser } },
   },
 ];

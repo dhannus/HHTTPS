@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- HHTTPS Phase 3b — Developer Self-Service Registration
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -169,21 +181,11 @@ COMMENT ON TABLE admin_actions IS
   'Append-only audit log of admin actions. For transparency and dispute resolution.';
 
 
--- ─── 5. Ownership grants ───────────────────────────────────────────────────
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hhttps') THEN
-    EXECUTE 'ALTER TABLE admins             OWNER TO hhttps';
-    EXECUTE 'ALTER TABLE client_stats_daily OWNER TO hhttps';
-    EXECUTE 'ALTER TABLE admin_actions      OWNER TO hhttps';
-    EXECUTE 'ALTER SEQUENCE admin_actions_id_seq OWNER TO hhttps';
-
-    GRANT ALL ON admins             TO hhttps;
-    GRANT ALL ON client_stats_daily TO hhttps;
-    GRANT ALL ON admin_actions      TO hhttps;
-    GRANT ALL ON SEQUENCE admin_actions_id_seq TO hhttps;
-  END IF;
-END$$;
+-- ─── Ownership / grants ────────────────────────────────────────────────────
+-- None (AP6-49, #200). The convention is: every migration runs AS THE APP
+-- USER via `node scripts/migrate.js`, so the app user owns what it creates.
+-- sql/ownership-hhttps.sql repairs installations where a historical
+-- `sudo -u postgres psql -f …` made postgres the owner.
 
 COMMIT;
 
