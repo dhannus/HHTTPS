@@ -142,12 +142,32 @@ else
   ok ".env unverändert"
 fi
 
+# AP6-08 (#85): repair object ownership BEFORE the migration chain. Older
+# installs applied the schema through a silent `sudo -u postgres` fallback,
+# which left postgres as the table owner; every later ALTER then failed with
+# "must be owner of table". Idempotent, a no-op on a clean install.
+OWNERSHIP_FILE="${SERVER_DIR}/sql/ownership-hhttps.sql"
+if [[ -f "${OWNERSHIP_FILE}" ]]; then
+  sudo -u postgres psql -d "${DB_NAME}" -v ON_ERROR_STOP=1 -v owner_role="${DB_USER}" -q \
+    -f "${OWNERSHIP_FILE}" >/dev/null \
+    || { err "Ownership-Reparatur fehlgeschlagen — siehe Fehler oben"; exit 1; }
+  ok "Objekt-Eigentümer: ${DB_USER}"
+else
+  err "Ownership-Datei fehlt: ${OWNERSHIP_FILE}"
+  exit 1
+fi
+
 # AP6-01: apply the whole migration chain (ledger in schema_migrations), not
 # just schema.sql — a fresh DB is otherwise missing authorization_codes & Co.
-ENV_PW=$(grep ^DB_PASSWORD "${SERVER_DIR}/.env" | cut -d= -f2)
+# The chain runs AS THE APP USER; there is no superuser fallback (AP6-08).
+# The password is read as data (AP6-17), never by sourcing the .env: `cut -d=
+# -f2` alone would also truncate a password containing '='.
+ENV_PW=$(grep -E '^[[:space:]]*(export[[:space:]]+)?DB_PASSWORD[[:space:]]*=' "${SERVER_DIR}/.env" \
+         | tail -1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")
+[[ -n "${ENV_PW}" ]] || { err "DB_PASSWORD fehlt in ${SERVER_DIR}/.env"; exit 1; }
 (cd "${SERVER_DIR}" && \
   DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${ENV_PW}" \
-  node scripts/migrate.js) && ok "Migrationen angewendet" || { err "Migration fehlgeschlagen"; exit 1; }
+  node scripts/migrate.js) && ok "Migrationen angewendet als ${DB_USER}" || { err "Migration fehlgeschlagen"; exit 1; }
 
 cd "${SERVER_DIR}"
 npm install --production --silent 2>&1 | tail -2
@@ -242,6 +262,31 @@ ok "Auto-Renewal aktiv"
 # ─── 8. Nginx HTTPS-Configs (vollständig) ────────────────────────────────────
 step "[8/9] Nginx HTTPS-Configs"
 
+# AP6-18 (#126): nginx does NOT inherit `add_header` into a block that sets
+# its own add_header — a `location` with e.g. Cache-Control silently drops
+# every server-level security header. The headers therefore live in one
+# snippet per site, included at server level AND in every location that needs
+# headers of its own. Cache-Control is set via `expires`, which is not an
+# add_header and therefore never triggers the inheritance cut-off.
+mkdir -p /etc/nginx/snippets
+cat > /etc/nginx/snippets/hhttps-security-headers.conf <<'EOF'
+# HHTTPS security headers (hhttps.org). Include in `server` AND in every
+# `location` that uses add_header itself — add_header is not inherited then.
+add_header X-Content-Type-Options nosniff always;
+add_header X-Frame-Options SAMEORIGIN always;
+add_header Referrer-Policy strict-origin-when-cross-origin always;
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+EOF
+cat > /etc/nginx/snippets/iamhmn-security-headers.conf <<'EOF'
+# Security headers (iamhmn.org). Include in `server` AND in every `location`
+# that uses add_header itself — add_header is not inherited then.
+add_header X-Content-Type-Options nosniff always;
+add_header X-Frame-Options DENY always;
+add_header Referrer-Policy strict-origin-when-cross-origin always;
+add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+EOF
+ok "Security-Header-Snippets geschrieben"
+
 cat > /etc/nginx/sites-available/hhttps.org <<EOF
 # HTTP → HTTPS Redirect
 server {
@@ -264,18 +309,19 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options SAMEORIGIN always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    include snippets/hhttps-security-headers.conf;
 
     limit_conn hhttps_conn 30;
 
     location = /spec {
         limit_req zone=hhttps_static burst=20 nodelay;
         alias ${SPEC_DIR}/spec.html;
-        add_header Content-Type "text/html; charset=utf-8";
-        add_header Cache-Control "public, max-age=300";
+        # .html → text/html via mime.types; `charset` appends "; charset=utf-8"
+        # and `expires` sets Cache-Control — neither is an add_header, so the
+        # included security headers below are the only ones in this block.
+        charset utf-8;
+        expires 5m;
+        include snippets/hhttps-security-headers.conf;
     }
     location = /spec.html { return 301 /spec; }
 
@@ -362,10 +408,7 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
-    add_header X-Content-Type-Options nosniff always;
-    add_header X-Frame-Options DENY always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    include snippets/iamhmn-security-headers.conf;
 
     limit_conn hhttps_conn 30;
 
@@ -375,7 +418,9 @@ server {
     location / {
         limit_req zone=hhttps_static burst=30 nodelay;
         try_files \$uri \$uri/ =404;
-        add_header Cache-Control "public, max-age=300";
+        # Cache-Control via `expires`, not add_header (AP6-18).
+        expires 5m;
+        include snippets/iamhmn-security-headers.conf;
     }
 }
 
@@ -408,14 +453,17 @@ fi
 # ─── 9. PM2 ──────────────────────────────────────────────────────────────────
 step "[9/9] PM2 + Auto-Start"
 
+# AP6-17 (#118): the .env is NOT sourced. server.js loads it itself via dotenv;
+# sourcing would export every secret into the pm2 process environment and into
+# ~/.pm2/dump.pm2, and unquoted values with spaces or `$(…)` would be executed.
 cd "${SERVER_DIR}"
-set -a; source .env; set +a
 
 if pm2 list 2>/dev/null | grep -q "${PM2_APP}"; then
   pm2 restart "${PM2_APP}" --update-env >/dev/null
   ok "${PM2_APP} neu gestartet"
 else
-  pm2 start server.js --name "${PM2_APP}" >/dev/null
+  # --cwd so dotenv finds the .env when pm2 resurrects the process later.
+  pm2 start server.js --name "${PM2_APP}" --cwd "${SERVER_DIR}" >/dev/null
   ok "${PM2_APP} gestartet"
 fi
 

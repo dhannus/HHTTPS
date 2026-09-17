@@ -14,6 +14,7 @@
  * The pool is shared across all queries. Reconnects automatically.
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,16 @@ import pg from 'pg';
 const { Pool } = pg;
 
 const SQL_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'sql');
+
+// AP6-33 (#153): no single statement may hold a pool connection indefinitely.
+// statement_timeout is enforced by Postgres (error 57014); the client-side
+// query_timeout is the safety net for a server that never answers at all.
+export const STATEMENT_TIMEOUT_MS = 15_000;
+export const QUERY_TIMEOUT_MS     = 20_000;
+// cleanup_expired() may legitimately run longer after a long standstill.
+const CLEANUP_TIMEOUT_MS = 60_000;
+
+const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 
 let _pool = null;
 
@@ -35,7 +46,9 @@ export function init() {
     password: process.env.DB_PASSWORD,
     max:                20,           // pool size
     idleTimeoutMillis:  30000,
-    connectionTimeoutMillis: 5000
+    connectionTimeoutMillis: 5000,
+    statement_timeout:  STATEMENT_TIMEOUT_MS,   // AP6-33: server-side, per statement
+    query_timeout:      QUERY_TIMEOUT_MS        // AP6-33: client-side, per query
   });
 
   _pool.on('error', (err) => {
@@ -58,6 +71,24 @@ export async function q(text, params = []) {
     throw err;
   }
 }
+
+// AP6-29 (#143): the COUNT(*) statistics behind /hhttps/info and /hhttps/stats
+// are served from a short-lived in-memory memo. Concurrent callers share ONE
+// promise (no thundering herd); a failed query is not cached.
+export const COUNT_CACHE_TTL_MS = 30_000;
+const _countCache = new Map();
+export function cachedCount(key, fn, ttlMs = COUNT_CACHE_TTL_MS) {
+  const hit = _countCache.get(key);
+  if (hit && hit.expiresAt > Date.now()) return hit.promise;
+  const promise = Promise.resolve().then(fn).catch((err) => {
+    if (_countCache.get(key)?.promise === promise) _countCache.delete(key);
+    throw err;
+  });
+  _countCache.set(key, { promise, expiresAt: Date.now() + ttlMs });
+  return promise;
+}
+/** Drop every memoised count (tests, explicit invalidation). */
+export function resetCountCache() { _countCache.clear(); }
 
 // ─── CREDENTIALS ──────────────────────────────────────────────────────────────
 
@@ -88,8 +119,10 @@ export const credentials = {
   },
 
   async count() {
-    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM credentials`);
-    return rows[0].n;
+    return cachedCount('credentials', async () => {
+      const { rows } = await q(`SELECT COUNT(*)::int AS n FROM credentials`);
+      return rows[0].n;
+    });
   },
 
   _normalize(r) {
@@ -210,8 +243,10 @@ export const sessions = {
   },
 
   async count() {
-    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM sessions WHERE expires_at > NOW()`);
-    return rows[0].n;
+    return cachedCount('sessions', async () => {
+      const { rows } = await q(`SELECT COUNT(*)::int AS n FROM sessions WHERE expires_at > NOW()`);
+      return rows[0].n;
+    });
   },
 
   _normalize(r) {
@@ -267,8 +302,10 @@ export const tokens = {
   },
 
   async count() {
-    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM tokens WHERE expires_at > NOW()`);
-    return rows[0].n;
+    return cachedCount('tokens', async () => {
+      const { rows } = await q(`SELECT COUNT(*)::int AS n FROM tokens WHERE expires_at > NOW()`);
+      return rows[0].n;
+    });
   }
 };
 
@@ -312,8 +349,10 @@ export const refreshTokens = {
   },
 
   async count() {
-    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM refresh_tokens WHERE expires_at > NOW()`);
-    return rows[0].n;
+    return cachedCount('refresh_tokens', async () => {
+      const { rows } = await q(`SELECT COUNT(*)::int AS n FROM refresh_tokens WHERE expires_at > NOW()`);
+      return rows[0].n;
+    });
   }
 };
 
@@ -334,8 +373,10 @@ export const revokedTokens = {
   },
 
   async count() {
-    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM revoked_tokens`);
-    return rows[0].n;
+    return cachedCount('revoked_tokens', async () => {
+      const { rows } = await q(`SELECT COUNT(*)::int AS n FROM revoked_tokens`);
+      return rows[0].n;
+    });
   }
 };
 
@@ -344,8 +385,9 @@ export const revokedTokens = {
 export const emailVerifications = {
   // The `code` column holds the sha256 of the 6-digit verification code that
   // the user types into the original tab. It coexists with `token` (used by
-  // the legacy magic-link fallback at the bottom of the email). One ALTER
-  // is run on boot — see ensureSchema below.
+  // the legacy magic-link fallback at the bottom of the email). The column is
+  // part of schema.sql and of the phase-10 boot DDL (AP6-06, #73) — it is no
+  // longer created by a fire-and-forget ALTER on module import.
   async create({ token, code, email, domain, level, trustBonus, category, sessionId, ttlMs = 900_000 }) {
     await q(
       `INSERT INTO email_verifications (token, code, email, domain, level, trust_bonus, category, session_id, expires_at)
@@ -389,22 +431,6 @@ export const emailVerifications = {
   }
 };
 
-// Ensure the `code` column exists. Idempotent, fires once on import.
-// Lives next to emailVerifications so the schema stays close to the code
-// that uses it.
-let _codeColumnEnsured = false;
-async function ensureCodeColumn() {
-  if (_codeColumnEnsured) return;
-  try {
-    await q(`ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS code TEXT`);
-    _codeColumnEnsured = true;
-  } catch (e) {
-    console.error('[db] ensureCodeColumn:', e.message);
-  }
-}
-// Fire-and-forget on module load — pg client is already initialised.
-ensureCodeColumn().catch(() => {});
-
 // ─── BOOT-DDL MIGRATIONS ──────────────────────────────────────────────────────
 //
 // Some migration files under sql/ are applied by the server itself at boot
@@ -447,6 +473,34 @@ export async function authCodesTextApplied() {
   return rows[0]?.n === 3;
 }
 
+const PHASE10_MIGRATION_FILE = 'migration-phase-10-review-welle-2.sql';
+
+/**
+ * true when the phase-10 boot DDL is present. Checks all three parts, so an
+ * installation that has one of them (e.g. the `code` column from the old
+ * fire-and-forget ALTER) still gets the rest:
+ *   - email_verifications.code           (AP6-06)
+ *   - email_verifications_session_id_idx (AP6-03)
+ *   - the new cleanup_expired() signature (AP6-03 / AP1 / AP5-29) — an
+ *     existing installation otherwise keeps the old function body forever.
+ */
+export async function phase10SchemaApplied() {
+  const { rows } = await q(
+    `SELECT
+       EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'email_verifications' AND column_name = 'code') AS col,
+       to_regclass('email_verifications_session_id_idx') IS NOT NULL AS idx,
+       (SELECT count(*)::int FROM information_schema.parameters
+         WHERE specific_name LIKE 'cleanup_expired%'
+           -- Postgres reports RETURNS TABLE columns with parameter_mode 'OUT'
+           -- (verified on 16); 'TABLE' is accepted too, just in case.
+           AND parameter_mode IN ('OUT', 'TABLE')
+           AND parameter_name IN ('deleted_revoked', 'deleted_webhook_deliveries',
+                                  'deleted_stale_clients')) AS fn`
+  );
+  return rows[0]?.col === true && rows[0]?.idx === true && rows[0]?.fn === 3;
+}
+
 /**
  * Boot-DDL list, in apply order. Each entry: the file under sql/, optionally
  * an `endMarker` (only the text above it is run), and an applied-check —
@@ -464,6 +518,11 @@ export const BOOT_DDL_FILES = [
   // dropped by the OPERATOR section of the same file (never at boot).
   { file: PHASE9_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END,
     columns: [['webhooks', 'owner_user_id'], ['refresh_tokens', 'client_id']] },
+  // Review 2026-09 Welle 2: email_verifications.code becomes part of the schema
+  // (AP6-06), the hot-path index moves to session_id and cleanup_expired() also
+  // removes consumed rows (AP6-03).
+  { file: PHASE10_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END, applied: phase10SchemaApplied,
+    note: 'DDL only — run the OPERATOR section of the migration file to invalidate plaintext client e-mail tokens (AP6-15)' },
 ];
 
 function bootDdlOf({ file, endMarker }) {
@@ -666,8 +725,10 @@ export const machineOperators = {
   },
 
   async count() {
-    const { rows } = await q(`SELECT COUNT(*)::int AS n FROM machine_operators WHERE active = TRUE`);
-    return rows[0].n;
+    return cachedCount('machine_operators', async () => {
+      const { rows } = await q(`SELECT COUNT(*)::int AS n FROM machine_operators WHERE active = TRUE`);
+      return rows[0].n;
+    });
   }
 };
 
@@ -911,18 +972,21 @@ export const oauthClients = {
        JSON.stringify(['openid', 'role', 'email']),
        contactEmail, impressumUrl || null, logoUrl || null,
        ownerUserId, !!domainEmailMatch,
-       emailToken, emailTokenExpiresAt, dnsToken || null]
+       emailToken ? sha256(emailToken) : null, emailTokenExpiresAt, dnsToken || null]
     );
   },
 
-  /** Look up a client by its current email confirmation token. */
+  // AP6-15 (#107): email_token stores sha256(token) — the plaintext token
+  // only ever exists in the confirmation link. The lookup compares hashes.
+  /** Look up a client by its current email confirmation token (plaintext in). */
   async getByEmailToken(token) {
+    if (!token) return null;
     const { rows } = await q(
       `SELECT * FROM oauth_clients
         WHERE email_token = $1
           AND email_token_expires_at > NOW()
           AND is_active = TRUE`,
-      [token]
+      [sha256(token)]
     );
     if (!rows[0]) return null;
     const r = rows[0];
@@ -958,7 +1022,7 @@ export const oauthClients = {
           SET email_token = $2,
               email_token_expires_at = $3
         WHERE client_id = $1`,
-      [clientId, newToken, newExpiry]
+      [clientId, newToken ? sha256(newToken) : null, newExpiry]
     );
   },
 
@@ -974,7 +1038,7 @@ export const oauthClients = {
               verified = FALSE,
               verification_status = 'email_pending'
         WHERE client_id = $1`,
-      [clientId, email, !!domainEmailMatch, emailToken, expires]
+      [clientId, email, !!domainEmailMatch, emailToken ? sha256(emailToken) : null, expires]
     );
   },
 
@@ -1374,17 +1438,34 @@ export const stats = {
 // ─── CLEANUP ──────────────────────────────────────────────────────────────────
 
 export async function cleanupExpired() {
-  const { rows } = await q(`SELECT * FROM cleanup_expired()`);
-  const out = rows[0] || {};
-  // Phase 8: expired plaintext claims (D5) — not part of the SQL function so
-  // the function body in schema.sql stays untouched.
-  const { rowCount } = await q(`DELETE FROM identity_claims_cache WHERE expires_at < NOW()`);
-  out.deleted_claims_cache = rowCount;
-  // AP2-23 / AP6-02: authorization codes (they carry the plaintext e-mail of
-  // the consent) were never cleaned up — expired or consumed ones go too.
-  const codes = await q(`DELETE FROM authorization_codes WHERE expires_at < NOW() - INTERVAL '1 hour'`);
-  out.deleted_auth_codes = codes.rowCount;
-  return out;
+  // AP6-33 (#153): the cleanup DELETEs may legitimately run long after a
+  // standstill — they get their own, higher timeout. SET LOCAL is scoped to
+  // this transaction, so the pool default stays in place for everything else.
+  const client = await pool().connect();
+  const timeout = CLEANUP_TIMEOUT_MS + 5_000;
+  const run = (text) => client.query({ text, query_timeout: timeout });
+  try {
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL statement_timeout = ${CLEANUP_TIMEOUT_MS}`);
+    const { rows } = await run(`SELECT * FROM cleanup_expired()`);
+    const out = rows[0] || {};
+    // Phase 8: expired plaintext claims (D5) — not part of the SQL function so
+    // the function body in schema.sql stays untouched.
+    const { rowCount } = await run(`DELETE FROM identity_claims_cache WHERE expires_at < NOW()`);
+    out.deleted_claims_cache = rowCount;
+    // AP2-23 / AP6-02: authorization codes (they carry the plaintext e-mail of
+    // the consent) were never cleaned up — expired or consumed ones go too.
+    const codes = await run(`DELETE FROM authorization_codes WHERE expires_at < NOW() - INTERVAL '1 hour'`);
+    out.deleted_auth_codes = codes.rowCount;
+    await client.query('COMMIT');
+    return out;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error(`[DB] cleanupExpired failed: ${err.message}`);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // ─── HEALTH CHECK ─────────────────────────────────────────────────────────────

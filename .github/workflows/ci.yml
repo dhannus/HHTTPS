@@ -6,82 +6,145 @@ on:
   pull_request:
     branches: [main]
 
+# AP6-19 (#134): the workflow gets no write access to the repository. A job
+# that needs more must request it explicitly at job level.
+permissions:
+  contents: read
+
+# AP6-19: third-party actions are pinned to an immutable patch version.
+# TODO(ops): replace each `@vX.Y.Z` with the corresponding commit SHA
+# (`gh api repos/<owner>/<repo>/commits/vX.Y.Z --jq .sha`) — that could not be
+# resolved from the offline environment this workflow was written in.
+
 jobs:
-  server-syntax:
-    name: Server syntax check
+  # ───────────────────────────────────────────────────────────────────────────
+  # The real gate: lint + the full test suite against a Postgres 16 service.
+  # ───────────────────────────────────────────────────────────────────────────
+  server-test:
+    name: Server lint + tests
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # helpers/db.mjs connects as hhttps/hhttps with the password 'x'.
+          POSTGRES_USER: hhttps
+          POSTGRES_PASSWORD: x
+          POSTGRES_DB: hhttps
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hhttps -d hhttps"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The test helpers use TCP against the service container.
+      TEST_PG_HOST: localhost
+      EMAIL_DEV_MODE: '1'
+
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
-          node-version: '20'
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
 
+      # No `|| npm install` fallback (AP6-19): a lockfile mismatch must fail
+      # the build instead of silently installing unpinned, unverified trees.
       - name: Install server dependencies
         working-directory: server
-        run: npm ci --omit=dev || npm install --omit=dev
+        run: npm ci --no-audit --no-fund
 
-      - name: Syntax check all JS files
-        run: |
-          for f in $(find server -name '*.js' -not -path '*/node_modules/*'); do
-            node --check "$f" || exit 1
-          done
-          echo "✓ All JS files syntax-clean"
+      - name: Apply the migration chain
+        working-directory: server
+        env:
+          DB_HOST: localhost
+          DB_PORT: '5432'
+          DB_NAME: hhttps
+          DB_USER: hhttps
+          DB_PASSWORD: x
+        run: node scripts/migrate.js
+
+      - name: Lint
+        working-directory: server
+        run: npx eslint .
+
+      - name: Tests
+        working-directory: server
+        run: npm test
+
+      # Fails on a known high/critical advisory in the dependency tree.
+      - name: Audit
+        working-directory: server
+        run: npm audit --audit-level=high
 
   extension-validation:
     name: Browser extension validation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
+
+      # AP6-19: a pinned setup-node instead of an unpinned apt package.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '22'
 
       - name: Validate manifest.json
-        run: |
-          python3 -c "import json; json.load(open('extension/manifest.json')); print('✓ manifest.json valid')"
+        run: python3 -c "import json; json.load(open('extension/manifest.json')); print('manifest.json valid')"
 
       - name: Check extension JS syntax
         run: |
-          sudo apt-get install -y nodejs
+          set -euo pipefail
           for f in extension/*.js; do
-            node --check "$f" || exit 1
+            node --check "$f"
           done
-          echo "✓ Extension JS syntax-clean"
+          echo "Extension JS syntax-clean"
 
   examples-syntax:
     name: Examples syntax check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: '3.11'
 
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@v2.31.1
         with:
           php-version: '8.2'
 
       - name: Node examples
         run: |
+          set -euo pipefail
           for f in examples/*/server.js examples/*/app.js; do
             if [ -f "$f" ]; then node --check "$f"; fi
           done
 
       - name: Python examples
         run: |
+          set -euo pipefail
           for f in examples/*/app.py examples/*/views.py; do
             if [ -f "$f" ]; then python3 -m py_compile "$f"; fi
           done
 
       - name: PHP examples
         run: |
+          set -euo pipefail
           for f in examples/*/*.php; do
             if [ -f "$f" ]; then php -l "$f"; fi
           done
@@ -90,16 +153,27 @@ jobs:
     name: Docs / Markdown
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
+
+      # AP6-19: this job used to print broken links and pass anyway ("Don't
+      # fail yet"). It now fails, so a broken relative link is caught in review.
       - name: Check for broken internal links
         run: |
-          set -e
-          for md in $(find . -name '*.md' -not -path './node_modules/*'); do
-            grep -oE '\]\(\./[^)]+\)' "$md" | while read link; do
-              path=$(echo "$link" | sed 's/](//' | sed 's/)$//')
+          set -euo pipefail
+          broken=0
+          while IFS= read -r md; do
+            while IFS= read -r link; do
+              [ -n "$link" ] || continue
+              path="${link#](}"; path="${path%)}"; path="${path%%#*}"
+              [ -n "$path" ] || continue
               if [ ! -e "$(dirname "$md")/$path" ]; then
                 echo "Broken link in $md: $path"
-                # Don't fail yet — just warn during initial cleanup
+                broken=1
               fi
-            done
-          done
+            done < <(grep -oE '\]\(\./[^)]+\)' "$md" || true)
+          done < <(find . -name '*.md' -not -path './node_modules/*' -not -path './*/node_modules/*')
+          if [ "$broken" -ne 0 ]; then
+            echo "::error::broken relative links found"
+            exit 1
+          fi
+          echo "No broken relative links"
