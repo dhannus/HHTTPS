@@ -1,0 +1,94 @@
+
+server/db.js
+   829:68  warning  'e' is defined but never used  no-unused-vars
+   830:69  warning  'e' is defined but never used  no-unused-vars
+   840:70  warning  'e' is defined but never used  no-unused-vars
+   841:71  warning  'e' is defined but never used  no-unused-vars
+   896:68  warning  'e' is defined but never used  no-unused-vars
+   897:69  warning  'e' is defined but never used  no-unused-vars
+  1052:70  warning  'e' is defined but never used  no-unused-vars
+  1053:71  warning  'e' is defined but never used  no-unused-vars
+  1067:70  warning  'e' is defined but never used  no-unused-vars
+  1068:71  warning  'e' is defined but never used  no-unused-vars
+  1295:71  warning  'e' is defined but never used  no-unused-vars
+
+server/email.js
+  159:74  warning  'e' is defined but never used                  no-unused-vars
+  249:23  warning  'title' is defined but never used              no-unused-vars
+  511:69  warning  'homepageUrl' is defined but never used        no-unused-vars
+  573:9   warning  'reasonDe' is assigned a value but never used  no-unused-vars
+
+server/eudi-verifier/backend-client.js
+  370:57  warning  '_responseCode' is defined but never used  no-unused-vars
+
+server/eudi-verifier/index.js
+  213:13  warning  'qrDataUrl' is assigned a value but never used  no-unused-vars
+
+server/pop-verify.js
+  129:28  warning  'RP_ID' is assigned a value but never used  no-unused-vars
+
+server/privacy-pass/demo.js
+  18:8  warning  'jwt' is defined but never used  no-unused-vars
+
+server/privacy-pass/issuance.js
+  24:7  warning  'DEFAULT_BATCH_SIZE' is assigned a value but never used  no-unused-vars
+
+server/privacy-pass/issuer.js
+   9:10  warning  'Oprf' is defined but never used  no-unused-vars
+  16:3   warning  'Ns' is defined but never used    no-unused-vars
+
+server/privacy-pass/role-requirements.js
+  20:10  warning  'ROLES' is defined but never used  no-unused-vars
+
+server/privacy-pass/verifications-api.js
+  25:3  warning  'hashEmail' is defined but never used  no-unused-vars
+
+server/privacy-pass/verifications.js
+  11:66  warning  'emailDomainMatchesRole' is defined but never used  no-unused-vars
+  12:10  warning  'ROLES' is defined but never used                   no-unused-vars
+
+server/privacy-pass/verifier.js
+  11:38  warning  'findIssuerForToken' is defined but never used  no-unused-vars
+
+server/roles.eaa.js
+  17:26  warning  'guardReservedRole' is defined but never used  no-unused-vars
+
+server/roles.js
+  268:54  warning  'baseTrust' is assigned a value but never used  no-unused-vars
+
+server/roles.taxonomy.test.mjs
+  7:63  warning  'guardReservedRole' is defined but never used  no-unused-vars
+  8:34  warning  'CUSTOM_ROLE_ID' is defined but never used     no-unused-vars
+
+server/server.js
+    39:10  warning  'VERIFICATION_CHECKS' is defined but never used          no-unused-vars
+    39:31  warning  'resolveVerification' is defined but never used          no-unused-vars
+    41:10  warning  'TRUST_BANDS' is defined but never used                  no-unused-vars
+    41:23  warning  'trustBand' is defined but never used                    no-unused-vars
+    41:34  warning  'HUMAN_CONFIRMED_THRESHOLD' is defined but never used    no-unused-vars
+    56:16  warning  'resolveEsco' is defined but never used                  no-unused-vars
+    57:65  warning  'CUSTOM_ROLE_ID' is defined but never used               no-unused-vars
+   535:58  warning  'token' is assigned a value but never used               no-unused-vars
+   612:18  warning  Unnecessary escape character: \-                         no-useless-escape
+   792:12  warning  'e' is defined but never used                            no-unused-vars
+  1080:17  warning  'mode' is assigned a value but never used                no-unused-vars
+  1166:20  warning  Unnecessary escape character: \-                         no-useless-escape
+  1254:14  warning  'e' is defined but never used                            no-unused-vars
+  1275:52  warning  Unnecessary escape character: \-                         no-useless-escape
+  1310:16  warning  'e' is defined but never used                            no-unused-vars
+  1334:20  warning  Unnecessary escape character: \-                         no-useless-escape
+  1359:20  warning  Unnecessary escape character: \-                         no-useless-escape
+  1944:12  warning  'e' is defined but never used                            no-unused-vars
+  1969:12  warning  'e' is defined but never used                            no-unused-vars
+  2573:57  warning  'e' is defined but never used                            no-unused-vars
+  3098:22  warning  'role' is assigned a value but never used                no-unused-vars
+  3098:28  warning  'verificationMethod' is assigned a value but never used  no-unused-vars
+  3320:16  warning  '_' is defined but never used                            no-unused-vars
+  3531:16  warning  '_' is defined but never used                            no-unused-vars
+  3945:12  warning  'e' is defined but never used                            no-unused-vars
+  4054:12  warning  'e' is defined but never used                            no-unused-vars
+  4633:68  warning  'e' is defined but never used                            no-unused-vars
+  4634:69  warning  'e' is defined but never used                            no-unused-vars
+
+✖ 59 problems (0 errors, 59 warnings)
+
