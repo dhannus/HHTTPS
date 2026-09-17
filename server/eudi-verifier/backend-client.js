@@ -93,19 +93,39 @@ async function authed(path, init = {}) {
 
 // ── Verifier config (one per age threshold, created on demand) ───────────────
 
+// AP4-18 (Review 2026-09): PID issuer trust. EUDIPLO validates the issuer
+// chain ONLY when the DCQL credential query carries `trusted_authorities`
+// (see the AV section below) — the PID queries never did. The PID trust list
+// (EUDIPLO-hosted LoTE with the PID issuer CAs, e.g. the German Registrar /
+// national PID providers) is configured by the operator:
+//   EUDI_PID_TRUST_LIST=<TENANT_URL>/trust-list/pid-trusted-list   (recommended)
+//   EUDI_PID_TRUST_LIST=off                                        (explicitly skip)
+// Unset → the queries are sent WITHOUT trust binding (EUDIPLO accepts any
+// issuer) and the server logs a loud warning at boot. Activation is an
+// operator step because it needs the LoTE installed in EUDIPLO first.
+const PID_TRUST_LIST_URL = process.env.EUDI_PID_TRUST_LIST || '';
+export function pidTrustBinding() {
+  if (!PID_TRUST_LIST_URL || PID_TRUST_LIST_URL === 'off') return null;
+  return [{ type: 'etsi_tl', values: [PID_TRUST_LIST_URL] }];
+}
+export function warnIfPidTrustUnbound(log = console) {
+  if (pidTrustBinding()) return false;
+  log.warn('[EUDI] EUDI_PID_TRUST_LIST is not set — PID presentations (age via PID, eID) are accepted from ANY issuer (AP4-18). Set EUDI_PID_TRUST_LIST to the EUDIPLO-hosted PID trust list before go-live.');
+  return true;
+}
+
 // DCQL in the OpenID4VP 1.0 `path` form [namespace, element] — the form EUDIPLO
 // expects and that matched the German wallet (confirmed for age_over_18).
-function buildDcqlQuery(minAge) {
-  return {
-    credentials: [
-      {
-        id: 'pid',
-        format: 'mso_mdoc',
-        meta: { doctype_value: AV_DOCTYPE },
-        claims: [{ path: [AV_DOCTYPE, `age_over_${minAge}`] }]
-      }
-    ]
+export function buildDcqlQuery(minAge) {
+  const credential = {
+    id: 'pid',
+    format: 'mso_mdoc',
+    meta: { doctype_value: AV_DOCTYPE },
+    claims: [{ path: [AV_DOCTYPE, `age_over_${minAge}`] }]
   };
+  const trusted = pidTrustBinding();
+  if (trusted) credential.trusted_authorities = trusted;
+  return { credentials: [credential] };
 }
 
 // Track configs we've ensured this process lifetime to avoid re-POSTing.
@@ -132,13 +152,28 @@ async function ensureVerifierConfig(minAge) {
     ensuredConfigs.add(id);
     return id;
   }
-  // Tolerate "already exists": HTTP 409, or a 400/422 whose body mentions it.
+  // Tolerate "already exists": HTTP 409, or a 400/422 whose body mentions it —
+  // but then PATCH the stored DCQL (AP4-18: a config created by an older deploy
+  // keeps its old query, without the trust binding, forever).
   const text = await r.text().catch(() => '');
   if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
+    await patchConfigDcql(id, buildDcqlQuery(minAge));
     ensuredConfigs.add(id);
     return id;
   }
   throw new Error(`EUDIPLO config create failed (${r.status}): ${text.slice(0, 200)}`);
+}
+
+// Best effort: update an existing verifier config's DCQL in place.
+async function patchConfigDcql(id, dcql_query) {
+  try {
+    const r = await authed(`/verifier/config/${encodeURIComponent(id)}`, {
+      method: 'PATCH', body: JSON.stringify({ dcql_query })
+    });
+    if (!r.ok) console.warn(`[EUDI] config ${id}: PATCH dcql_query → ${r.status} (stored query may be stale)`);
+  } catch (e) {
+    console.warn(`[EUDI] config ${id}: PATCH failed: ${e.message}`);
+  }
 }
 
 // ── 1. Init transaction = create an EUDIPLO presentation offer ───────────────
@@ -275,17 +310,16 @@ export async function initAvTransaction(minAge) {
 
 // DCQL requesting one NON-identifying PID attribute, purely to obtain a validated
 // PID presentation. The value is never read (zero-PII) — see EID_CLAIM note above.
-function buildPidDcqlQuery() {
-  return {
-    credentials: [
-      {
-        id: 'pid',
-        format: 'mso_mdoc',
-        meta: { doctype_value: AV_DOCTYPE },
-        claims: [{ path: [AV_DOCTYPE, EID_CLAIM] }]
-      }
-    ]
+export function buildPidDcqlQuery() {
+  const credential = {
+    id: 'pid',
+    format: 'mso_mdoc',
+    meta: { doctype_value: AV_DOCTYPE },
+    claims: [{ path: [AV_DOCTYPE, EID_CLAIM] }]
   };
+  const trusted = pidTrustBinding();
+  if (trusted) credential.trusted_authorities = trusted;   // AP4-18
+  return { credentials: [credential] };
 }
 
 async function ensureEidConfig() {
@@ -301,7 +335,10 @@ async function ensureEidConfig() {
   });
   if (r.ok) { ensuredConfigs.add(id); return id; }
   const text = await r.text().catch(() => '');
-  if (r.status === 409 || /exist|duplicate|already/i.test(text)) { ensuredConfigs.add(id); return id; }
+  if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
+    await patchConfigDcql(id, buildPidDcqlQuery());   // AP4-18
+    ensuredConfigs.add(id); return id;
+  }
   throw new Error(`EUDIPLO eid config create failed (${r.status}): ${text.slice(0, 200)}`);
 }
 

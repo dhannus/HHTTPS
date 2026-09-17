@@ -195,6 +195,12 @@ export const sessions = {
     await q(`UPDATE sessions SET ${sets.join(', ')} WHERE session_id = $${i}`, vals);
   },
 
+  /** AP3-26 / AP3-01: remove a session (used after a passkey login merged it). */
+  async delete(sessionId) {
+    const { rowCount } = await q(`DELETE FROM sessions WHERE session_id = $1`, [sessionId]);
+    return rowCount > 0;
+  },
+
   async incrementEmailsSent(sessionId) {
     const { rows } = await q(
       `UPDATE sessions SET emails_sent = emails_sent + 1 WHERE session_id = $1
@@ -269,12 +275,29 @@ export const tokens = {
 // ─── REFRESH TOKENS ───────────────────────────────────────────────────────────
 
 export const refreshTokens = {
-  async create({ jti, userId, credentialId, role, ttlMs }) {
+  // `clientId` is set for OAuth refresh tokens (one chain per user × platform,
+  // AP2-01) and NULL for HHTTPS refresh tokens.
+  async create({ jti, userId, credentialId, role, ttlMs, clientId = null }) {
     await q(
-      `INSERT INTO refresh_tokens (jti, user_id, credential_id, role, expires_at)
-       VALUES ($1, $2, $3, $4, NOW() + ($5 || ' milliseconds')::interval)`,
-      [jti, userId, credentialId, role, ttlMs]
+      `INSERT INTO refresh_tokens (jti, user_id, credential_id, role, client_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5, NOW() + ($6 || ' milliseconds')::interval)`,
+      [jti, userId, credentialId, role, clientId, ttlMs]
     );
+  },
+
+  /**
+   * AP4-03 / AP2-01: revoke a user's refresh chains. `clientId === null` →
+   * the HHTTPS chains (client_id IS NULL); a string → that platform's chain.
+   * Returns the deleted jtis so the caller can blacklist them.
+   */
+  async deleteByUser(userId, clientId = null) {
+    const { rows } = await q(
+      clientId === null
+        ? `DELETE FROM refresh_tokens WHERE user_id = $1 AND client_id IS NULL RETURNING jti, role`
+        : `DELETE FROM refresh_tokens WHERE user_id = $1 AND client_id = $2 RETURNING jti, role`,
+      clientId === null ? [userId] : [userId, clientId]
+    );
+    return rows;
   },
 
   async get(jti) {
@@ -439,7 +462,8 @@ export const BOOT_DDL_FILES = [
   { file: 'migration-phase-3a1-authcodes-text.sql', applied: authCodesTextApplied },
   // Review 2026-09 Welle 0: webhooks get an owner (AP5-16); Privacy-Pass tables are
   // dropped by the OPERATOR section of the same file (never at boot).
-  { file: PHASE9_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END, columns: [['webhooks', 'owner_user_id']] },
+  { file: PHASE9_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END,
+    columns: [['webhooks', 'owner_user_id'], ['refresh_tokens', 'client_id']] },
 ];
 
 function bootDdlOf({ file, endMarker }) {
@@ -907,18 +931,24 @@ export const oauthClients = {
     return r;
   },
 
-  /** Mark email as confirmed. Moves status from 'email_pending' → 'unverified'. */
+  /**
+   * Mark email as confirmed. Moves status from 'email_pending' → 'unverified'.
+   * AP5-02: returns true only when a row actually changed, so the caller can
+   * refuse to render a success page for a stale/mismatched token.
+   */
   async confirmEmail(clientId) {
-    await q(
+    const { rowCount } = await q(
       `UPDATE oauth_clients
           SET email_verified_at = NOW(),
               email_token = NULL,
               email_token_expires_at = NULL,
               verification_status = 'unverified'
         WHERE client_id = $1
-          AND verification_status = 'email_pending'`,
+          AND verification_status = 'email_pending'
+          AND email_verified_at IS NULL`,
       [clientId]
     );
+    return rowCount > 0;
   },
 
   /** Regenerate the email confirmation token (e.g. user clicked "resend"). */
@@ -941,10 +971,8 @@ export const oauthClients = {
               email_token = $4,
               email_token_expires_at = $5,
               email_verified_at = NULL,
-              verification_status = CASE
-                WHEN verification_status = 'verified' THEN 'unverified'
-                ELSE 'email_pending'
-              END
+              verified = FALSE,
+              verification_status = 'email_pending'
         WHERE client_id = $1`,
       [clientId, email, !!domainEmailMatch, emailToken, expires]
     );
@@ -1352,6 +1380,10 @@ export async function cleanupExpired() {
   // the function body in schema.sql stays untouched.
   const { rowCount } = await q(`DELETE FROM identity_claims_cache WHERE expires_at < NOW()`);
   out.deleted_claims_cache = rowCount;
+  // AP2-23 / AP6-02: authorization codes (they carry the plaintext e-mail of
+  // the consent) were never cleaned up — expired or consumed ones go too.
+  const codes = await q(`DELETE FROM authorization_codes WHERE expires_at < NOW() - INTERVAL '1 hour'`);
+  out.deleted_auth_codes = codes.rowCount;
   return out;
 }
 

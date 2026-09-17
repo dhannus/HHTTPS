@@ -22,6 +22,34 @@
 (function () {
   'use strict';
 
+  // ─── Instance marker (AP8-24) ────────────────────────────────────────────
+  // The manifest injects this script into EVERY frame (all_frames +
+  // match_about_blank), so a same-origin iframe normally has its own instance
+  // with its own scanner, observer and slug cache. The parent instance used to
+  // hook the same contentDocument as well, which doubled the DOM work and the
+  // POST /hhttps/signatures/batch requests per frame (× nesting depth).
+  //
+  // Chosen fix: keep all_frames (it is the only way to reach cross-origin and
+  // sandboxed frames) and keep the parent-side iframe hooks ONLY as a fallback
+  // for frames that have no instance of their own (initial about:blank
+  // documents Chrome does not inject into, document.write()-replaced documents,
+  // frames created before the parent's instance booted …). Each instance stamps
+  // its own <html> with a DOM attribute — attributes are visible across the
+  // per-frame isolated worlds, JS expandos are not — and the parent skips or
+  // disconnects from any frame document that carries it. A replaced document
+  // gets a fresh <html> without the stamp, so the fallback re-engages there
+  // until the new instance boots. This was preferred over dropping all_frames
+  // (loses cross-origin frames) or a postMessage handshake (async, page-visible).
+  const INSTANCE_ATTR = 'data-hhttps-instance';
+  function markOwnInstance() {
+    try { document.documentElement?.setAttribute(INSTANCE_ATTR, '1'); } catch (e) {}
+  }
+  markOwnInstance();
+  // A frame document that already has a content-script instance of its own.
+  function hasOwnInstance(doc) {
+    try { return !!doc?.documentElement?.hasAttribute(INSTANCE_ATTR); } catch (e) { return false; }
+  }
+
   // ─── Marker patterns ─────────────────────────────────────────────────────
   // New format (Phase 2.5+): short slug
   const MARKER_SLUG_RE  = /#hhttps:s:(hp-[A-Z0-9\-]{8,16})/gi;
@@ -147,10 +175,15 @@
   // their iframe content asynchronously. We can't rely on the `load` event
   // because some use `srcdoc=` or `document.write()` which don't fire `load`
   // reliably. Belt-and-braces: hook `load`, watch the iframe's body via
-  // MutationObserver, AND poll for late content as a fallback.
+  // MutationObserver, AND (only while the body is still empty) poll for late
+  // content with exponential backoff.
+  //
+  // All of this is a FALLBACK: frames that run their own instance of this
+  // script (see INSTANCE_ATTR) are left alone entirely (AP8-24).
   const iframesHooked = new WeakSet();
-  const IFRAME_POLL_INTERVAL_MS = 1500;
-  const IFRAME_POLL_MAX_ATTEMPTS = 20;   // 30 seconds total
+  const IFRAME_POLL_INITIAL_MS = 500;      // 0.5 s → 1 s → 2 s → 4 s → 8 s → 16 s
+  const IFRAME_POLL_MAX_MS     = 16_000;
+  const IFRAME_POLL_MAX_ATTEMPTS = 6;      // ≈ 31.5 s total, 6 checks (was 20 × 1.5 s)
 
   function scanIframesIn(root) {
     const iframes = root.nodeType === 1 && root.tagName === 'IFRAME'
@@ -162,6 +195,23 @@
     }
   }
 
+  // Cheap emptiness check — never serialise innerHTML (AP8-23).
+  function bodyHasContent(doc) {
+    const body = doc && doc.body;
+    return !!body && (body.childElementCount > 0 || body.childNodes.length > 0);
+  }
+
+  // Process a reachable frame document once: styles + scan + observer.
+  // Returns false when the frame has its own instance (nothing to do here).
+  function processFrameDocument(doc) {
+    if (!doc || hasOwnInstance(doc)) return false;
+    try {
+      injectStylesInto(doc);
+      if (doc.body) { scanForSignatures(doc.body); watchDocument(doc); }
+    } catch (e) {}
+    return true;
+  }
+
   function tryHookIframe(iframe) {
     let doc;
     try {
@@ -171,99 +221,57 @@
     }
     if (!doc) return;
 
-    const isAlreadyHooked = iframesHooked.has(iframe);
-    const bodyLen = doc.body ? (doc.body.innerHTML || '').length : -1;
-    const markerInBody = doc.body && (doc.body.innerHTML || '').includes('#hhttps:s:');
-    console.log('[HHTTPS] iframe hook', {
-      hookedBefore: isAlreadyHooked,
-      bodyLen,
-      markerInBody,
-      iframeClass: iframe.className,
-      iframeSrc: iframe.src || '(srcdoc/about:blank)'
-    });
+    // Frame runs its own content-script instance → it scans itself (AP8-24).
+    if (hasOwnInstance(doc)) return;
 
-    // Always (re)inject styles + scan, even if we've hooked it before — the
-    // iframe content may have changed since.
-    try {
-      injectStylesInto(doc);
-      if (doc.body) scanForSignatures(doc.body);
-    } catch (e) {}
+    // (Re)scan now — the frame content may have changed since we hooked it.
+    processFrameDocument(doc);
 
     // First time we see this iframe? Set up persistent watchers.
     if (iframesHooked.has(iframe)) return;
     iframesHooked.add(iframe);
 
+    const onFrameChange = () => {
+      try { processFrameDocument(iframe.contentDocument); } catch (e) {}
+    };
+
     // Hook 1: load event (works for src= iframes)
-    iframe.addEventListener('load', () => {
-      try {
-        const d = iframe.contentDocument;
-        if (d) {
-          injectStylesInto(d);
-          if (d.body) scanForSignatures(d.body);
-          watchDocument(d);
-        }
-      } catch (e) {}
-    });
+    iframe.addEventListener('load', onFrameChange);
 
     // Hook 2: MutationObserver on iframe element (catches srcdoc changes)
     try {
-      const attrObserver = new MutationObserver(() => {
-        try {
-          const d = iframe.contentDocument;
-          if (d) {
-            injectStylesInto(d);
-            if (d.body) scanForSignatures(d.body);
-            watchDocument(d);
-          }
-        } catch (e) {}
-      });
-      attrObserver.observe(iframe, {
-        attributes: true,
-        attributeFilter: ['src', 'srcdoc']
-      });
+      const attrObserver = new MutationObserver(onFrameChange);
+      attrObserver.observe(iframe, { attributes: true, attributeFilter: ['src', 'srcdoc'] });
     } catch (e) {}
 
-    // Hook 3: MutationObserver on the iframe's body (catches dynamic content
-    // written into the iframe after its document is ready)
-    if (doc.body) {
-      watchDocument(doc);
-    } else {
-      // Body not yet there — defer to readystate
-      doc.addEventListener?.('DOMContentLoaded', () => {
-        try { if (doc.body) { injectStylesInto(doc); scanForSignatures(doc.body); watchDocument(doc); } }
-        catch (e) {}
-      });
+    // Hook 3: body observer is attached by processFrameDocument() above; if the
+    // body is not there yet, defer to DOMContentLoaded.
+    if (!doc.body) {
+      doc.addEventListener?.('DOMContentLoaded', onFrameChange);
     }
 
-    // Hook 4: Polling fallback for the worst-case async writers
+    // Hook 4: polling fallback for the worst-case async writers — only when
+    // there is nothing in the body yet, with exponential backoff, and it stops
+    // as soon as the body observer is in place / content appeared / the frame
+    // got its own instance / the frame left the DOM (AP8-23).
+    if (bodyHasContent(doc)) return;
     let attempts = 0;
-    const poller = setInterval(() => {
+    let delay = IFRAME_POLL_INITIAL_MS;
+    const poll = () => {
       attempts++;
       let stillThere = false;
       try { stillThere = document.contains(iframe); } catch (e) {}
-      if (!stillThere || attempts > IFRAME_POLL_MAX_ATTEMPTS) {
-        clearInterval(poller);
-        return;
-      }
-      try {
-        const d = iframe.contentDocument;
-        if (!d || !d.body) return;
-        // Found content — scan + then stop polling once content is processed
-        const hasContent = (d.body.innerHTML || '').length > 0;
-        if (hasContent) {
-          injectStylesInto(d);
-          scanForSignatures(d.body);
-          watchDocument(d);
-          // If markers were found and turned into seals, we can stop.
-          const sealsNow = d.querySelectorAll(`.${SEAL_CLASS}`).length;
-          if (sealsNow > 0 || attempts >= IFRAME_POLL_MAX_ATTEMPTS) {
-            clearInterval(poller);
-          }
-        }
-      } catch (e) {
-        clearInterval(poller);
-      }
-    }, IFRAME_POLL_INTERVAL_MS);
+      if (!stillThere) return;
+      let d = null;
+      try { d = iframe.contentDocument; } catch (e) { return; }
+      if (!d || hasOwnInstance(d)) return;
+      if (watchedDocs.has(d) && d.body && d.body.isConnected) return;  // observer active
+      if (bodyHasContent(d)) { processFrameDocument(d); return; }
+      if (attempts >= IFRAME_POLL_MAX_ATTEMPTS) return;
+      delay = Math.min(delay * 2, IFRAME_POLL_MAX_MS);
+      setTimeout(poll, delay);
+    };
+    setTimeout(poll, delay);
   }
 
   function processTextNode(textNode) {
@@ -699,8 +707,16 @@
   const watchedDocs = new WeakSet();
   function watchDocument(doc) {
     if (!doc || watchedDocs.has(doc) || !doc.body) return;
+    if (doc !== document && hasOwnInstance(doc)) return;   // AP8-24
     watchedDocs.add(doc);
     const observer = new MutationObserver((records) => {
+      // A frame document we hooked as a fallback got its own instance in the
+      // meantime → hand over and stop duplicating its work (AP8-24).
+      if (doc !== document && hasOwnInstance(doc)) {
+        observer.disconnect();
+        watchedDocs.delete(doc);
+        return;
+      }
       for (const rec of records) {
         for (const node of rec.addedNodes) {
           if (node.nodeType === 1) {
@@ -877,6 +893,7 @@
 
   // ─── Boot ────────────────────────────────────────────────────────────────
   function boot() {
+    markOwnInstance();
     injectStyles();
     const meta = readMetaTags();
     if (meta.status) reportPageState(meta);

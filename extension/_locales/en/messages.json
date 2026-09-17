@@ -62,15 +62,6 @@
   "modeTextBoundDesc": {
     "message": "Binds the signature to the exact text. Editing breaks it."
   },
-  "quickAlphaStamp": {
-    "message": "Quick alpha stamp"
-  },
-  "toCopy": {
-    "message": "to copy"
-  },
-  "copyBtn": {
-    "message": "📋 Copy"
-  },
   "currentPage": {
     "message": "Current page"
   },
@@ -115,15 +106,6 @@
   },
   "copiedLabel": {
     "message": "Copied!"
-  },
-  "copiedCheck": {
-    "message": "✓ Copied!"
-  },
-  "copyToClipboard": {
-    "message": "📋 Copy to clipboard"
-  },
-  "copyBlocked": {
-    "message": "✗ Error — browser blocked clipboard"
   },
   "logoutConfirm": {
     "message": "Remove this identity?\n\nThe token will be revoked at the server and deleted from the browser. You will then need to log in again at hhttps.org."

@@ -62,15 +62,6 @@
   "modeTextBoundDesc": {
     "message": "Bindet die Signatur an den genauen Text. Edit bricht Signatur."
   },
-  "quickAlphaStamp": {
-    "message": "Schneller Alpha-Stempel"
-  },
-  "toCopy": {
-    "message": "zum Kopieren"
-  },
-  "copyBtn": {
-    "message": "📋 Kopieren"
-  },
   "currentPage": {
     "message": "Aktuelle Seite"
   },
@@ -115,15 +106,6 @@
   },
   "copiedLabel": {
     "message": "Kopiert!"
-  },
-  "copiedCheck": {
-    "message": "✓ Kopiert!"
-  },
-  "copyToClipboard": {
-    "message": "📋 In Zwischenablage kopieren"
-  },
-  "copyBlocked": {
-    "message": "✗ Fehler — Browser blockiert Zwischenablage"
   },
   "logoutConfirm": {
     "message": "Diese Identität entfernen?\n\nDer Token wird beim Server widerrufen und aus dem Browser gelöscht. Du musst dich danach neu bei hhttps.org einloggen."

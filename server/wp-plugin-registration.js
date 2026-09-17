@@ -27,6 +27,7 @@
 // (contact e-mail, domain, tokens). No end-user data is involved.
 
 import crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
 import { isValidEmail, normalizeEmail } from './identity.js';
 import { Resolver } from 'dns/promises';
 
@@ -78,15 +79,14 @@ function isValidRedirectUri(uri) {
   } catch { return false; }
 }
 
-// naive in-memory rate limit: 5 registrations per IP per hour
-const regHits = new Map();
-function rateLimited(ip) {
-  const now = Date.now();
-  const arr = (regHits.get(ip) || []).filter(t => now - t < 3600_000);
-  if (arr.length >= 5) { regHits.set(ip, arr); return true; }
-  arr.push(now); regHits.set(ip, arr);
-  return false;
-}
+// AP5-17: 5 registrations per IP per hour via express-rate-limit (keyed on
+// req.ip, which honours the app's `trust proxy` setting — the previous
+// hand-rolled map trusted a client-supplied X-Forwarded-For and never evicted).
+const registrationLimiter = rateLimit({
+  windowMs: 3600_000, limit: 5, standardHeaders: true, legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({ error: 'rate_limited',
+    message: 'Too many registrations from this address. Try again later.' })
+});
 
 /**
  * Mount the plugin-registration endpoints.
@@ -100,12 +100,7 @@ export function mountWpPluginRegistration(app, deps) {
   const { db, sendPlatformRegistrationEmail, BASE_URL } = deps;
 
   // ── POST /hhttps/plugin/register ───────────────────────────────────────
-  app.post('/hhttps/plugin/register', async (req, res) => {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
-    if (rateLimited(ip)) {
-      return res.status(429).json({ error: 'rate_limited',
-        message: 'Too many registrations from this address. Try again later.' });
-    }
+  app.post('/hhttps/plugin/register', registrationLimiter, async (req, res) => {
 
     const { site_name, homepage_url, redirect_uri, contact_email } = req.body || {};
 

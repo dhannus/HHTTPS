@@ -8,6 +8,7 @@
 --                  (psql runs BOTH sections; the DDL is idempotent).
 --
 -- Findings: AP5-16 / AP1-22 (webhooks bound to an owner, secrets never listed),
+--           AP2-01 / AP4-03 (refresh tokens bound to a platform),
 --           AP7 (Privacy-Pass module removed → its tables are dropped).
 -- ════════════════════════════ 1. BOOT-DDL ══════════════════════════════════
 
@@ -17,6 +18,11 @@
 -- see the OPERATOR section).
 ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS owner_user_id TEXT;
 CREATE INDEX IF NOT EXISTS webhooks_owner_idx ON webhooks(owner_user_id);
+
+-- AP2-01 / AP4-03: OAuth refresh tokens are bound to their platform so a
+-- "disconnect" can end exactly that chain; HHTTPS refresh tokens keep NULL.
+ALTER TABLE refresh_tokens ADD COLUMN IF NOT EXISTS client_id TEXT;
+CREATE INDEX IF NOT EXISTS refresh_tokens_user_client_idx ON refresh_tokens(user_id, client_id);
 
 -- >>> BOOT-DDL END
 -- ════════════════════════════ 2. OPERATOR ══════════════════════════════════

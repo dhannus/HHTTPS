@@ -138,3 +138,20 @@ test('#27 landing: inline scripts parse (new Function)', () => {
     assert.doesNotThrow(() => new Function(js), 'inline script compiles');
   }
 });
+
+// AP8-01 / AP8-41: /hhttps/role/declare answers `role: null` since v0.5, so the
+// success path of doDeclarRole() must never dereference `d.role.<x>` without
+// optional chaining — and there must be exactly one implementation (the former
+// `window.doDeclarRole = …` override that shadowed a dead original is gone).
+test('AP8-01 landing: doDeclarRole() is defined once and never reads d.role without `?.`', () => {
+  const js = scriptText(PAGES.landing);
+  const defs = js.match(/(?:async function doDeclarRole\s*\(|window\.doDeclarRole\s*=)/g) || [];
+  assert.equal(defs.length, 1, `doDeclarRole is defined exactly once (found ${defs.length})`);
+  assert.doesNotMatch(js, /origDeclare/, 'the dead origDeclare alias is gone');
+  const body = fnBody(js, 'doDeclarRole');
+  assert.doesNotMatch(body, /\bd\.role\.[A-Za-z_$]/, 'doDeclarRole never accesses d.role.<x> without `?.`');
+  assert.doesNotMatch(body, /\bd\.role\[/, 'doDeclarRole never indexes d.role without `?.`');
+  assert.ok(body.includes("'/hhttps/role/declare'"), 'doDeclarRole calls /hhttps/role/declare');
+  assert.match(body, /d\.(verification|hhttps)\?\./, 'doDeclarRole reads d.verification / d.hhttps null-safely');
+  assert.match(body, /setStep\(4\)/, 'success path reaches setStep(4)');
+});

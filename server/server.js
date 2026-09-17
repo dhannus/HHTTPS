@@ -56,7 +56,7 @@ import {
   resolveRole, resolveEsco, buildRoleClaim, sanitizeCustomRole,
   guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery, CUSTOM_ROLE_ID
 } from './roles.taxonomy.js';
-import { issueIamhmnCard } from './eudi-verifier/backend-client.js';
+import { issueIamhmnCard, warnIfPidTrustUnbound } from './eudi-verifier/backend-client.js';
 
 import { createEudiVerifierRouter } from './eudi-verifier/index.js';
 
@@ -683,7 +683,10 @@ async function issueRefreshToken(userId, credId, role, surface = {}) {
     ...(surface.emailDomain ? { emailDomain: surface.emailDomain } : {}),
     // AK-9 / D3: the account pseudonym travels in the refresh token so a refreshed
     // access token carries it without a session lookup.
-    ...(surface.pseudonym ? { pseudonym: surface.pseudonym } : {})
+    ...(surface.pseudonym ? { pseudonym: surface.pseudonym } : {}),
+    // AP4-02: verified age claims survive the access-token expiry too.
+    ...(surface.ageGroup ? { age_group: surface.ageGroup, age_verified: surface.ageVerified === true,
+                             age_verification_method: surface.ageVerificationMethod || null } : {})
     // `iat` is set automatically by jsonwebtoken (RFC 7519 standard claim).
   }, { expiresIn: REFRESH_TTL });
   await db.refreshTokens.create({
@@ -692,10 +695,13 @@ async function issueRefreshToken(userId, credId, role, surface = {}) {
   return tok;
 }
 
-async function checkTokenValid(token) {
+// AP5-01 / AP4-01: a refresh token is a credential for /hhttps/token/refresh
+// only. Every bearer-style check refuses it unless the caller opts in.
+async function checkTokenValid(token, { allowRefresh = false } = {}) {
   const decoded = verifyToken(token);
   if (await db.revokedTokens.has(decoded.jti)) throw new Error('Token revoked');
-  if (decoded.sub === 'refresh') {
+  if (decoded.sub === 'refresh' || decoded.sub === 'oauth_refresh') {
+    if (!allowRefresh) throw new Error('Refresh token not accepted as bearer token');
     if (!await db.refreshTokens.get(decoded.jti)) throw new Error('Refresh-Token nicht aktiv');
   } else {
     if (!await db.tokens.exists(decoded.jti)) throw new Error('Token nicht aktiv');
@@ -709,7 +715,8 @@ setInterval(async () => {
     const r = await db.cleanupExpired();
     const total = (r.deleted_tokens || 0) + (r.deleted_refresh || 0) +
                   (r.deleted_sessions || 0) + (r.deleted_challenges || 0) +
-                  (r.deleted_emails || 0);
+                  (r.deleted_emails || 0) + (r.deleted_claims_cache || 0) +
+                  (r.deleted_auth_codes || 0);
     if (total > 0) console.log(`[CLEANUP] removed ${total} expired records`);
   } catch (err) {
     console.error('[CLEANUP] failed:', err.message);
@@ -1666,6 +1673,11 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     if (!active) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
     }
+    // AP2-01: "disconnect platform" (/hhttps/oauth/revoke) must end the chain.
+    if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
+      await db.refreshTokens.delete(rd.jti);
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
+    }
 
     // Rotation: erst die neue jti anlegen, dann die alte entwerten — und
     // jeden Persistenzfehler sauber beantworten statt den Request hängen zu
@@ -1674,7 +1686,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     try {
       await db.refreshTokens.create({
         jti: newJti, userId: rd.ouid, credentialId: null,
-        role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
+        role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
       });
       await db.refreshTokens.delete(rd.jti);
     } catch (err) {
@@ -1875,7 +1887,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     const refreshJti = uuid();
     await db.refreshTokens.create({
       jti: refreshJti, userId: claimed.user_id, credentialId: null,
-      role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000
+      role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
     });
     oauthRefreshToken = signToken({
       sub: 'oauth_refresh', jti: refreshJti, client_id,
@@ -1946,8 +1958,12 @@ app.post('/hhttps/oauth/revoke', async (req, res) => {
 
   try {
     const d = await checkTokenValid(token);
-    await db.connectedPlatforms.revoke(d.uid || d.userId || d.sub, client_id);
-    return res.json({ status: 'revoked', client_id });
+    const uid = d.uid || d.userId || d.sub;
+    await db.connectedPlatforms.revoke(uid, client_id);
+    // AP2-01: the platform's OAuth refresh chain ends with the connection.
+    const ended = await db.refreshTokens.deleteByUser(uid, client_id);
+    for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'platform-disconnected');
+    return res.json({ status: 'revoked', client_id, refresh_tokens_revoked: ended.length });
   } catch (e) {
     return res.status(401).json({ error: e.message });
   }
@@ -2562,9 +2578,6 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     const resolved = resolvePasskeySession({ storedUserId: stored.userId, cred, prior });
     if (resolved.error) return res.status(401).json({ error: resolved.error });
     const { priorMerge } = resolved;
-    if (prior && Object.keys(priorMerge).length) {
-      try { await db.sessions.delete(priorId); } catch (e) {}
-    }
 
     // Create the (merged) verified session. TTL 30 min — long enough for the
     // user to think about pseudonym / role selection / age group.
@@ -2583,6 +2596,15 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       trustScore:   50,
       ...priorMerge,   // incl. the merged account pseudonym (D3) — written on INSERT
     }, 1800_000); // 30 min
+    // AP3-01: sessions.create writes only the base columns — the merged
+    // e-mail/GitHub verification has to be persisted explicitly, otherwise the
+    // e-mail-first gate refuses the very next role/declare with 403.
+    if (Object.keys(priorMerge).length) {
+      await db.sessions.update(sid, priorMerge);
+      // The e-mail session is consumed by the merge — remove it only now that
+      // the merged session exists (AP3-26: sessions.delete used to be missing).
+      if (prior) await db.sessions.delete(priorId);
+    }
     await db.stats.increment('verifications');
 
     res.json({
@@ -2617,6 +2639,9 @@ app.post('/hhttps/token/refresh', async (req, res) => {
     const trustScore = (typeof d.trustScore === 'number') ? d.trustScore : 20;  // email floor
     const domainVal  = d.emailDomain || null;
     const pseudonym  = d.pseudonym || null;
+    // AP4-02: verified age claims ride in the refresh token and come back out.
+    const ageCarry   = d.age_group ? { age_group: d.age_group, age_verified: d.age_verified === true,
+                                       age_verification_method: d.age_verification_method || null } : {};
 
     const { token: newAccess } = await issueAccessToken({
       userId:     stored.user_id,
@@ -2626,7 +2651,8 @@ app.post('/hhttps/token/refresh', async (req, res) => {
       trustScore,
       method:     'verification-methods',
       deviceType: cred?.deviceType || 'unknown',
-      ...tokenSurface({ emailDomain: domainVal }, { methods }, pseudonym)
+      ...tokenSurface({ emailDomain: domainVal }, { methods }, pseudonym),
+      ...ageCarry
     });
 
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
@@ -3309,10 +3335,15 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     let priorEudi = false;
     if (currentToken) {
       try {
-        const prev = verifyToken(currentToken);
-        priorEudi = prev?.eudi_verified === true ||
-                    (Array.isArray(prev?.verified_methods) && prev.verified_methods.includes('eudi'));
-      } catch (_) { /* invalid/expired — ignore */ }
+        // AP4-20: only a live token of THIS session's holder may carry claims over.
+        const prev = await checkTokenValid(currentToken);
+        if ((prev.userId || prev.uid) !== session.userId) {
+          console.warn(`[AGE-UPGRADE] currentToken belongs to another user — ignored (session ${String(sessionId).slice(0,8)}…)`);
+        } else {
+          priorEudi = prev?.eudi_verified === true ||
+                      (Array.isArray(prev?.verified_methods) && prev.verified_methods.includes('eudi'));
+        }
+      } catch (_) { /* invalid/expired/revoked — ignore */ }
     }
 
     // Reissue the holder's token with VERIFIED age claims. age_group lives in the
@@ -3341,9 +3372,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       trustScore: v.trust,                          // age added 0 — trust UNCHANGED by design
       method:     'verification-methods',
       deviceType: session.deviceType,
-      verified_methods:        v.methods,
-      verification_status:     'verified',
-      ...(session.emailDomain ? { domain_name: session.emailDomain } : {}),
+      // AP4-02: the same surface as role/declare and eid/upgrade (pseudonym,
+      // *_verified flags, domain_name) — not a hand-built subset.
+      ...tokenSurface(session, v),
       ...(priorEudi ? { eudi_verified: true } : {}),
       // verified age claims (orthogonal, trust-neutral):
       age_group:               ag.id,
@@ -3353,7 +3384,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     // Reissue the refresh token too, so the upgraded surface survives the 1h
     // access-token expiry (zero-PII — the surface rides in the signed token).
     const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
-      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null
+      verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null,
+      pseudonym: session.pseudonym || null,
+      ageGroup: ag.id, ageVerified: true, ageVerificationMethod: eudiMethod.id
     });
 
     // Mirror the verified age into the identity cookie. NOTE: this endpoint is
@@ -3515,15 +3548,18 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
     let ageCarry = {};
     if (currentToken) {
       try {
-        const prev = verifyToken(currentToken);
-        if (prev && prev.age_group) {
+        // AP4-20: only a live token of THIS session's holder may carry claims over.
+        const prev = await checkTokenValid(currentToken);
+        if ((prev.userId || prev.uid) !== session.userId) {
+          console.warn(`[EID-UPGRADE] currentToken belongs to another user — ignored (session ${String(sessionId).slice(0,8)}…)`);
+        } else if (prev.age_group) {
           ageCarry = {
             age_group:               prev.age_group,
             age_verified:            prev.age_verified === true,
             age_verification_method: prev.age_verification_method || null
           };
         }
-      } catch (_) { /* invalid/expired token — reissue without age */ }
+      } catch (_) { /* invalid/expired/revoked token — reissue without age */ }
     }
 
     // Recompute the verification surface with eudi now true → +40.
@@ -3554,7 +3590,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
     // Reissue the refresh token so the +40 survives the 1h access-token expiry.
     const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
       verifiedMethods: v.methods, trustScore: v.trust, emailDomain: session.emailDomain || null,
-      pseudonym: session.pseudonym || null
+      pseudonym: session.pseudonym || null,
+      ...(ageCarry.age_group ? { ageGroup: ageCarry.age_group, ageVerified: ageCarry.age_verified,
+                                 ageVerificationMethod: ageCarry.age_verification_method } : {})
     });
 
     // NOTE: server-to-server call — this Set-Cookie reaches the eudi-verifier, not
@@ -3615,20 +3653,24 @@ app.post('/hhttps/role/card', async (req, res) => {
       roleInput = { label: esco.label || null, isco08: esco.isco08 || null, escoUri: esco.escoUri || null };
       const g = guardReservedRole(esco.label || '', esco.isco08 || null);
       reservedKey = g.key;
-      if (g.reserved && !documentProvided) {
+      // AP4-21: `documentProvided` is a client flag — nobody has looked at a
+      // document. It must never unlock a protected profession.
+      if (g.reserved) {
         const hint = reservedKey && RESERVED_REGISTRY[reservedKey] ? RESERVED_REGISTRY[reservedKey].sourceHint : 'a qualified source';
         return res.status(400).json({
           error: `"${esco.label || esco.isco08}" is a protected profession. Self-declaration (RAL0) is not allowed.`,
           reason: 'reserved', reservedKey,
-          remedy: `Upload a document for RAL1, or present a qualified attestation from ${hint} (RAL2).`
+          remedy: `Present a qualified attestation from ${hint} (RAL2). Document upload (RAL1) is not available yet.`
         });
       }
     } else {
       return res.status(400).json({ error: 'Provide either an ESCO role or a customRole.' });
     }
 
-    const method = documentProvided ? 'document-checked' : 'self-declared';
-    const verificationStatus = documentProvided ? 'verified' : 'self-declared';
+    // AP4-21: until a real document review exists, a "document" is a
+    // self-assertion — labelled as such, RAL0, never `verified`.
+    const method = documentProvided ? 'self-asserted-document' : 'self-declared';
+    const verificationStatus = 'self-declared';
     const humanVerified = !!(session.hasPasskey || session.credentialId);
 
     const built = buildRoleClaim({ roleInput, custom, customLabel, verificationStatus, method, humanVerified });
@@ -3656,7 +3698,7 @@ app.post('/hhttps/role/card', async (req, res) => {
         role: built.role, ral: built.ral,
         ...(built.verification ? { verification: built.verification } : {}),
         note: documentProvided
-          ? 'Document accepted (pilot: self-asserted, verified against registers in live operation) → RAL1.'
+          ? 'Document noted as self-asserted (no review yet) → RAL0.'
           : 'Self-declared role → RAL0.'
       },
       offer: { uri: offer.uri, crossDeviceUri: offer.crossDeviceUri || offer.uri },
@@ -3679,6 +3721,13 @@ app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
     await db.revokedTokens.add(decoded.jti, decoded.role, 'user-requested');
     await db.tokens.delete(decoded.jti);
     await db.refreshTokens.delete(decoded.jti);
+    // AP4-03: "revoked" means the whole HHTTPS sign-in — every refresh token of
+    // the holder goes too, otherwise a stolen refresh token re-issues access.
+    const uid = decoded.userId || decoded.uid || null;
+    if (uid) {
+      const ended = await db.refreshTokens.deleteByUser(uid, null);
+      for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'user-requested');
+    }
     await db.stats.increment('tokens_revoked');
 
     console.log(`[REVOKE] jti=${decoded.jti.slice(0, 8)}... role=${decoded.role}`);
@@ -3715,13 +3764,17 @@ app.post('/hhttps/validate', async (req, res) => {
   const { token } = req.body;
   if (!token) return res.status(400).json({ error: 'token required' });
   try {
-    const d       = await checkTokenValid(token);
+    const d       = await checkTokenValid(token);   // refresh tokens → 401 (AP4-01)
     const roleDef = ROLES[d.role] || ROLES.citizen;
-    setHHTPPS(res, { status: 'valid', human: true, actorType: 'human', role: d.role,
+    // AP4-01: never hard-code the actor — a machine token (sub:'machine',
+    // human:false) is valid, but it is not a human.
+    const human     = d.sub === 'human-verified' && d.human !== false;
+    const actorType = d.actorType || (d.sub === 'machine' ? 'bot' : (human ? 'human' : 'unknown'));
+    setHHTPPS(res, { status: 'valid', human, actorType, role: d.role,
                      roleLevel: d.roleLevel, trustScore: d.trustScore,
                      token, method: d.method });
     res.json({
-      hhttps: { status: 'valid', human: true, actorType: 'human', version: '0.5.0' },
+      hhttps: { status: 'valid', human, actorType, version: '0.5.0' },
       claims: { role: d.role, roleLabel: roleDef.label, roleIcon: roleDef.icon,
                 roleLevel: d.roleLevel, trustScore: d.trustScore,
                 issuedAt: new Date(d.iat * 1000).toISOString(),
@@ -3746,6 +3799,11 @@ app.get('/hhttps/protected', async (req, res) => {
   }
   try {
     const d = await checkTokenValid(token);
+    // AP4-01: "for humans only" — a machine or refresh token is not a human proof.
+    if (d.sub !== 'human-verified' || d.human === false) {
+      setHHTPPS(res, { status: 'invalid', human: false, actorType: d.actorType || (d.sub === 'machine' ? 'bot' : 'unknown') });
+      return res.status(403).json({ hhttps: { status: 'human-required', human: false }, error: 'A human-verified HHTTPS token is required.' });
+    }
     setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
                      role: d.role, trustScore: d.trustScore, token, method: d.method });
     res.json({
@@ -4258,7 +4316,16 @@ app.get('/hhttps/developers/confirm-email', async (req, res) => {
     ));
   }
 
-  await db.oauthClients.confirmEmail(client.client_id);
+  const confirmed = await db.oauthClients.confirmEmail(client.client_id);
+  if (!confirmed) {
+    // AP5-02: token matched but the client is not awaiting confirmation —
+    // never show "confirmed" for a state that did not change.
+    return res.status(409).type('html').send(renderSimplePage(
+      'Nothing to confirm · Nichts zu bestätigen',
+      'This platform is not waiting for an e-mail confirmation (the address may have been confirmed already or changed since). Open the dashboard to check the current status.'
+      + '<br><br><span lang="de">Für diese Plattform steht keine E-Mail-Bestätigung aus (die Adresse wurde bereits bestätigt oder seitdem geändert). Prüfe den aktuellen Status im Dashboard.</span>'
+    ));
+  }
 
   // Platforms registered through a CMS plugin continue in the plugin's own
   // setup wizard, not in the developer portal.
@@ -4788,6 +4855,9 @@ async function main() {
 
   // 1. Init keys
   loadOrCreateKeys();
+
+  // 1b. AP4-18: PID issuer trust must be bound explicitly (operator step).
+  warnIfPidTrustUnbound();
 
   // 1c. Start cleanup of expired pending OAuth states (GitHub verify)
   startGithubVerifyCleanup();
