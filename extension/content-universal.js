@@ -68,6 +68,10 @@
   // Local cache: slug → result + timestamp (5 min)
   const slugCache = new Map();
   const CACHE_TTL = 5 * 60_000;
+  // AP8-27 (#206): a failed batch verify is cached too, but only briefly —
+  // long enough to stop every scan from re-sending the same doomed request,
+  // short enough to recover quickly once the server is reachable again.
+  const ERROR_TTL = 30_000;
 
   // Track scans for popup stats
   let scanCount = { slug: 0, legacy: 0 };
@@ -91,7 +95,12 @@
       status: m('status'), human: m('human'), role: m('role'),
       roleLabel: m('role-label'), roleIcon: m('role-icon'),
       trustScore: m('trust-score'), method: m('method'),
-      issuer: m('issuer'), version: m('version')
+      issuer: m('issuer'), version: m('version'),
+      // AP8-19 (#167): <meta name="hhttps-*"> lives in the page DOM. Anyone
+      // who can put markup on the page — including a user-generated comment —
+      // can write `verified` there. The value is passed on as a CLAIM, never
+      // as a verification, and the popup renders it neutrally.
+      source: 'meta', claimed: true
     };
   }
 
@@ -133,7 +142,7 @@
     const slugsToFetch = [];
     for (const slug of slugs) {
       const cached = slugCache.get(slug);
-      if (!cached || (Date.now() - cached.fetchedAt) > CACHE_TTL) {
+      if (!cached || (Date.now() - cached.fetchedAt) > (cached.ttl || CACHE_TTL)) {
         slugsToFetch.push(slug);
       }
     }
@@ -155,14 +164,18 @@
   function createMarkerWalker(root, doc) {
     return (doc || document).createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: (node) => {
-        if (!node.parentElement) return NodeFilter.FILTER_REJECT;
-        if (SKIP_TAGS.has(node.parentElement.tagName)) return NodeFilter.FILTER_REJECT;
-        if (node.parentElement.closest(`.${SEAL_WRAPPER}`)) return NodeFilter.FILTER_REJECT;
-        if (node.parentElement.closest('[contenteditable="true"]')) return NodeFilter.FILTER_REJECT;
+        // AP8-25 (#194): the text check is a substring scan on a string we
+        // already hold; the two closest() calls walk the ancestor chain. The
+        // overwhelming majority of text nodes carry no marker at all, so the
+        // cheap check runs FIRST and the DOM walks only for real candidates.
         const t = node.textContent;
         if (!t || (!t.includes('#hhttps:s:') &&
                    !t.includes('#hhttps:a:') &&
                    !t.includes('#hhttps:b:'))) return NodeFilter.FILTER_REJECT;
+        if (!node.parentElement) return NodeFilter.FILTER_REJECT;
+        if (SKIP_TAGS.has(node.parentElement.tagName)) return NodeFilter.FILTER_REJECT;
+        if (node.parentElement.closest(`.${SEAL_WRAPPER}`)) return NodeFilter.FILTER_REJECT;
+        if (node.parentElement.closest('[contenteditable="true"]')) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -467,9 +480,59 @@
   }
 
   // ─── Batch verify via server ─────────────────────────────────────────────
+  // Every document a seal can live in: the main one plus every iframe we can
+  // reach (cross-origin frames throw and are skipped).
+  function sealDocuments() {
+    const docs = [document];
+    try {
+      for (const iframe of document.querySelectorAll('iframe')) {
+        try { if (iframe.contentDocument) docs.push(iframe.contentDocument); }
+        catch (e) { /* cross-origin */ }
+      }
+    } catch (e) {}
+    return docs;
+  }
+
+  // AP8-27 (#206): remember that these slugs could not be verified and take
+  // their seals out of the endless `pending` state.
+  function cacheFailure(slugs) {
+    for (const slug of slugs) {
+      if (slugCache.has(slug) && !slugCache.get(slug).error) continue;  // keep a good result
+      slugCache.set(slug, { data: null, error: true, fetchedAt: Date.now(), ttl: ERROR_TTL });
+      for (const doc of sealDocuments()) {
+        doc.querySelectorAll(`.${SEAL_CLASS}[data-slug="${slug}"]`).forEach(renderSealUnavailable);
+      }
+    }
+  }
+
+  // AP8-27 (#206): the server was unreachable — this is explicitly NOT a
+  // verdict on the signature, so the seal must not read as invalid.
+  function renderSealUnavailable(sealEl) {
+    sealEl.setAttribute('data-state', 'unavailable');
+    sealEl.innerHTML = '<span class="hh-seal-icon">\u2014</span><span class="hh-seal-label"></span>';
+    sealEl.querySelector('.hh-seal-label').textContent = chrome.i18n.getMessage('sealUnavailable');
+    sealEl.setAttribute('title', chrome.i18n.getMessage('sealUnavailableTitle'));
+  }
+
+  // AP8-27 (#206): the server refuses more than 100 slugs per request
+  // (400 `too many slugs`), so the list is split into chunks of at most
+  // BATCH_MAX. Every chunk is fetched on its own; one failing chunk does not
+  // take the others down with it.
+  const BATCH_MAX = 100;
   async function batchVerifySlugs(slugs) {
+    const list = Array.from(new Set(slugs));
+    if (list.length <= BATCH_MAX) return batchVerifyChunk(list);
+    const chunks = [];
+    for (let i = 0; i < list.length; i += BATCH_MAX) chunks.push(list.slice(i, i + BATCH_MAX));
+    const done = await Promise.allSettled(chunks.map((c) => batchVerifyChunk(c)));
+    const failed = done.find((d) => d.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+
+  async function batchVerifyChunk(slugs) {
     const domain = getCurrentDomain();
     if (!domain) return;
+    if (!slugs.length) return;
 
     // We don't send text previews anymore — they're only useful for
     // `document` (Beta) bindings, which aren't user-facing yet. For Alpha
@@ -485,6 +548,11 @@
       });
       if (!r.ok) {
         console.warn('[HHTTPS] batch verify HTTP', r.status);
+        // AP8-27 (#206): without a cache entry the seals stay `pending`
+        // forever and every later scan re-sends the same failing request.
+        // A short negative entry makes the seal show `unknown` and lets the
+        // next scan retry after ERROR_TTL.
+        cacheFailure(slugs);
         return;
       }
       const data = await r.json();
@@ -493,21 +561,18 @@
       for (const [slug, result] of Object.entries(results)) {
         slugCache.set(slug, { data: result, fetchedAt: Date.now() });
         // Update pending seals in main doc AND in accessible iframes
-        const docs = [document];
-        try {
-          for (const iframe of document.querySelectorAll('iframe')) {
-            try { if (iframe.contentDocument) docs.push(iframe.contentDocument); }
-            catch (e) {}
-          }
-        } catch (e) {}
-        for (const doc of docs) {
+        for (const doc of sealDocuments()) {
           doc.querySelectorAll(`.${SEAL_CLASS}[data-slug="${slug}"]`).forEach(seal => {
             renderSealFromBatchResult(seal, result);
           });
         }
       }
+      // Slugs the server did not answer for at all: also take them out of
+      // `pending` so the seal does not spin forever (AP8-27 / #206).
+      cacheFailure(slugs.filter((sl) => !results[sl]));
     } catch (e) {
       console.warn('[HHTTPS] batch verify failed:', e);
+      cacheFailure(slugs);
     }
   }
 
@@ -609,6 +674,9 @@
         background: linear-gradient(135deg, #DDB4B0, #C97D5B);
         color: #FCFAF5;
       }
+      .${SEAL_CLASS}[data-state="unavailable"] {
+        background: #F3F3F1; color: #6B6B66; border-color: #D8D8D2;
+      }
       .${SEAL_CLASS}[data-state="legacy"] {
         background: linear-gradient(135deg, #C0B8AA, #9A9080);
         color: #FCFAF5;
@@ -709,29 +777,71 @@
     if (!doc || watchedDocs.has(doc) || !doc.body) return;
     if (doc !== document && hasOwnInstance(doc)) return;   // AP8-24
     watchedDocs.add(doc);
+
+    // AP8-26 (#201): mutations are COLLECTED, not processed inline. A chatty
+    // page (infinite scroll, a mail client re-rendering a thread) delivers
+    // hundreds of addedNodes per second, and every element used to trigger a
+    // full scanForSignatures() — including querySelectorAll('iframe') and a
+    // TreeWalker — synchronously inside the observer callback. Now the nodes
+    // are queued and drained once, in an idle slot.
+    //
+    // Our own seal wrappers are skipped before they enter the queue: writing
+    // them re-triggers the observer, and re-scanning them can never find
+    // anything (the walker rejects everything under SEAL_WRAPPER anyway).
+    let pending = [];
+    let drainHandle = null;
+    const idle = (fn) => (typeof requestIdleCallback === 'function'
+      ? requestIdleCallback(fn, { timeout: 500 })
+      : setTimeout(fn, 100));
+
+    function isOwnSealNode(node) {
+      try {
+        if (node.nodeType === 1) {
+          return node.classList?.contains(SEAL_WRAPPER)
+              || node.classList?.contains(SEAL_CLASS)
+              || !!node.closest?.(`.${SEAL_WRAPPER}`);
+        }
+        return !!node.parentElement?.closest?.(`.${SEAL_WRAPPER}`);
+      } catch (e) { return false; }
+    }
+
+    function drain() {
+      drainHandle = null;
+      const batch = pending;
+      pending = [];
+      for (const node of batch) {
+        if (!node.isConnected) continue;
+        if (node.nodeType === 1) {
+          // New element — scan it (recurses into nested iframes)
+          scanForSignatures(node);
+          // If the new element IS an iframe (e.g. mail viewer creating
+          // a new iframe per opened message), hook it explicitly
+          if (node.tagName === 'IFRAME') {
+            scanIframesIn(node);
+          }
+        } else if (node.nodeType === 3 && node.textContent.includes('#hhttps:')) {
+          processTextNode(node);
+        }
+      }
+    }
+
     const observer = new MutationObserver((records) => {
       // A frame document we hooked as a fallback got its own instance in the
       // meantime → hand over and stop duplicating its work (AP8-24).
       if (doc !== document && hasOwnInstance(doc)) {
         observer.disconnect();
         watchedDocs.delete(doc);
+        pending = [];
         return;
       }
       for (const rec of records) {
         for (const node of rec.addedNodes) {
-          if (node.nodeType === 1) {
-            // New element — scan it (recurses into nested iframes)
-            scanForSignatures(node);
-            // If the new element IS an iframe (e.g. mail viewer creating
-            // a new iframe per opened message), hook it explicitly
-            if (node.tagName === 'IFRAME') {
-              scanIframesIn(node);
-            }
-          } else if (node.nodeType === 3 && node.textContent.includes('#hhttps:')) {
-            processTextNode(node);
-          }
+          if (node.nodeType !== 1 && node.nodeType !== 3) continue;
+          if (isOwnSealNode(node)) continue;
+          pending.push(node);
         }
       }
+      if (pending.length && drainHandle === null) drainHandle = idle(drain);
     });
     observer.observe(doc.body, { childList: true, subtree: true });
   }
@@ -775,12 +885,18 @@
       return;
     }
     if (msg.type === 'GET_PAGE_STATE') {
+      // AP8-19 (#167): the header-derived state (from the origin's server)
+      // wins over the page's own <meta> tags — the meta tags used to be
+      // preferred, so a page could overrule its own server.
       const meta = readMetaTags();
-      const base = meta.status ? meta : (lastReportedSig ? JSON.parse(lastReportedSig) : { status: 'none' });
+      const reported = lastReportedSig ? JSON.parse(lastReportedSig) : null;
+      const base = (reported && reported.status) ? reported
+                 : (meta.status ? meta : { status: 'none' });
       sendResponse({
         ...base,
         human: base.human === 'true' || base.human === true,
         trustScore: parseInt(base.trustScore || '0'),
+        claimed: base.claimed !== false,
         sealCount: scanCount.slug + scanCount.legacy
       });
     }
@@ -864,7 +980,11 @@
       roleIcon: getter('HHTTPS-Role-Icon'),
       trustScore: getter('HHTTPS-Trust-Score'),
       method: getter('HHTTPS-Method'), issuer: getter('HHTTPS-Issuer'),
-      version: getter('HHTTPS-Protocol-Version')
+      version: getter('HHTTPS-Protocol-Version'),
+      // Response headers come from the origin's server, not from page markup
+      // (AP8-19 / #167) — still not cryptographically checked, but not
+      // injectable from the document itself.
+      source: 'header', claimed: false
     };
   }
   const origFetch = window.fetch;

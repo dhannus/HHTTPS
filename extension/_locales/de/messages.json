@@ -92,6 +92,9 @@
   "verifiedFallback": {
     "message": "verifiziert"
   },
+  "pageClaimsSupport": {
+    "message": "Seite behauptet HHTTPS-Unterstützung (ungeprüft)"
+  },
   "pageSupportedNotVerified": {
     "message": "HHTTPS unterstützt, nicht verifiziert"
   },
@@ -142,6 +145,12 @@
   },
   "sealChecking": {
     "message": "Prüfe…"
+  },
+  "sealUnavailable": {
+    "message": "Nicht prüfbar"
+  },
+  "sealUnavailableTitle": {
+    "message": "Der Signaturdienst war nicht erreichbar — die Signatur wurde weder bestätigt noch widerlegt."
   },
   "sealTextChanged": {
     "message": "Text geändert"
