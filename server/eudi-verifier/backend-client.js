@@ -13,15 +13,21 @@
 //
 // EUDIPLO does ALL the OpenID4VP 1.0 / DCQL / mso_mdoc / SessionTranscript /
 // JWE work and signs the request object with our German-Registrar access cert.
-// We only speak HTTP/JSON. The calls below (token, offer, config-create) are the
-// ones proven manually against the running instance; the two behaviours we could
-// NOT verify end-to-end are marked **CONFIRM** with the exact check to run.
+// We only speak HTTP/JSON. Token, offer and config-create are proven manually
+// against the running instance.
 //
 // EUDIPLO API surface used (all under the /api prefix):
-//   POST /api/oauth2/token      { client_id, client_secret } → { access_token, expires_in }
-//   POST /api/verifier/config   { id, dcql_query, ... }       → stored config (201)
-//   POST /api/verifier/offer    { response_type:'uri', requestId } → { uri, crossDeviceUri, session }
-//   GET  /api/<session-path>    (CONFIRM) → session/result with disclosed claims
+//   POST   /api/oauth2/token          { client_id, client_secret } → { access_token, expires_in }
+//   POST   /api/verifier/config       { id, dcql_query, ... }      → stored config (201)
+//   PATCH  /api/verifier/config/{id}  { description, dcql_query }  → updated config
+//   POST   /api/verifier/offer        { response_type:'uri', requestId } → { uri, crossDeviceUri, session }
+//   GET    /api/verifier/session/{id} → session/result with the disclosed claims
+//          (path pinnable via EUDIPLO_SESSION_PATH; legacy candidates are probed
+//           once per process — see pollWalletResponse / AP4-38)
+//   POST   /api/issuer/config, POST /api/issuer/offer → iamhmn-card issuance
+//
+// Every environment variable this module reads is documented in .env.example
+// under "EUDI / EUDIPLO" (AP4-52 #245).
 
 // EUDIPLO base URL — INCLUDES the /api prefix (confirmed: 404 on /oauth2/token,
 // 201 on /api/oauth2/token). EUDIPLO runs on the same box on :3002; talk to it
@@ -49,8 +55,10 @@ const CONFIG_PREFIX = process.env.EUDIPLO_CONFIG_PREFIX || 'age-over-';
 // request a single NON-identifying PID attribute purely to trigger a validated
 // presentation; the value is never read or stored (zero-PII). The proof is the
 // validated presentation itself. Both the config id and the claim are env-tunable.
-// **CONFIRM**: the exact minimal claim the German sandbox discloses — success
-// relies on the EUDIPLO session reaching a terminal state, not on the value.
+// TODO(#248): confirm on the live German sandbox which minimal PID claim is
+// actually disclosed, then pin EUDI_EID_CLAIM to it. Not blocking: success
+// depends on the EUDIPLO session reaching a POSITIVE terminal state (AP4-24),
+// never on the claim's value.
 const EID_CONFIG_ID = process.env.EUDIPLO_EID_CONFIG_ID || 'eid-identity';
 const EID_CLAIM     = process.env.EUDI_EID_CLAIM        || 'issuing_country';
 
@@ -154,66 +162,74 @@ export function buildDcqlQuery(minAge) {
 // Track configs we've ensured this process lifetime to avoid re-POSTing.
 const ensuredConfigs = new Set();
 
-// Ensure the verifier config `age-over-{minAge}` exists; return its id.
-// **CONFIRM**: re-creating an existing config wasn't tested — does EUDIPLO 409
-// or overwrite? We tolerate a conflict (treat "already exists" as success). If
-// your instance returns something else on duplicate, tighten the check below.
-async function ensureVerifierConfig(minAge) {
-  const id = `${CONFIG_PREFIX}${minAge}`;
+// AP4-51 (#242): EUDIPLO signals "this id already exists" as a 409 or as a
+// 400/422 whose body says so — one place that decides it, for verifier AND
+// issuer configs.
+function looksLikeDuplicate(status, text) {
+  return status === 409 || /exist|duplicate|already/i.test(text || '');
+}
+
+/**
+ * AP4-51 (#242) / AP4-15: ONE way to bring a verifier config into its desired
+ * shape. The three call sites used to differ in how they handled a conflict —
+ * PID and eID silently reused whatever was stored, only AV patched it.
+ *
+ * EUDIPLO PERSISTS configs: a config created by an older deploy keeps its old
+ * DCQL forever. That is how the `trusted_authorities` binding (AP4-18) silently
+ * went missing from live requests. Therefore an existing config is always
+ * PATCHed to the current description + DCQL, and a failed PATCH is an error —
+ * a stale query means "issuer trust is not validated", which must not pass
+ * unnoticed.
+ *
+ * @param {object}  cfg
+ * @param {string}  cfg.id           verifier-config id
+ * @param {string}  cfg.description  human-readable description
+ * @param {object}  cfg.dcqlQuery    the DCQL query to store
+ * @param {string}  cfg.label        error-message prefix ('' | 'AV ' | 'eid ')
+ * @returns {Promise<string>} the config id (= EUDIPLO's requestId)
+ */
+async function ensureConfig({ id, description, dcqlQuery, label = '' }) {
   if (ensuredConfigs.has(id)) return id;
 
   const r = await authed('/verifier/config', {
     method: 'POST',
-    body: JSON.stringify({
-      id,
-      description: `HHTTPS age verification (>=${minAge})`,
-      dcql_query: buildDcqlQuery(minAge)
-    })
+    body: JSON.stringify({ id, description, dcql_query: dcqlQuery })
   });
+  if (r.ok) { ensuredConfigs.add(id); return id; }
 
-  if (r.ok) {
-    ensuredConfigs.add(id);
-    return id;
-  }
-  // Tolerate "already exists": HTTP 409, or a 400/422 whose body mentions it —
-  // but then PATCH the stored DCQL (AP4-18: a config created by an older deploy
-  // keeps its old query, without the trust binding, forever).
   const text = await r.text().catch(() => '');
-  if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
-    await patchConfigDcql(id, buildDcqlQuery(minAge));
-    ensuredConfigs.add(id);
-    return id;
+  if (!looksLikeDuplicate(r.status, text))
+    throw new Error(`EUDIPLO ${label}config create failed (${r.status}): ${text.slice(0, 200)}`);
+
+  const u = await authed(`/verifier/config/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ description, dcql_query: dcqlQuery })
+  });
+  if (!u.ok) {
+    const utext = await u.text().catch(() => '');
+    throw new Error(`EUDIPLO ${label}config update failed (${u.status}): ${utext.slice(0, 200)}`);
   }
-  throw new Error(`EUDIPLO config create failed (${r.status}): ${text.slice(0, 200)}`);
+  ensuredConfigs.add(id);
+  return id;
 }
 
-// Best effort: update an existing verifier config's DCQL in place.
-async function patchConfigDcql(id, dcql_query) {
-  try {
-    const r = await authed(`/verifier/config/${encodeURIComponent(id)}`, {
-      method: 'PATCH', body: JSON.stringify({ dcql_query })
-    });
-    if (!r.ok) console.warn(`[EUDI] config ${id}: PATCH dcql_query → ${r.status} (stored query may be stale)`);
-  } catch (e) {
-    console.warn(`[EUDI] config ${id}: PATCH failed: ${e.message}`);
-  }
-}
-
-// ── 1. Init transaction = create an EUDIPLO presentation offer ───────────────
-
-// Returns the shape index.js expects. EUDIPLO's `session` is our transaction id;
-// it returns the full wallet-ready openid4vp:// URL, so there is no client_id /
-// request_uri assembly on our side. The OID4VP nonce is managed inside EUDIPLO.
-export async function initTransaction(minAge) {
-  const requestId = await ensureVerifierConfig(minAge);
-
+/**
+ * AP4-51 (#242): the three init*Transaction functions differed only in which
+ * config they ensure and in their error text. One offer call for all of them.
+ * @returns {Promise<{transaction_id:string, nonce:null, uri:string, crossDeviceUri:string}>}
+ *          the transaction shape index.js expects. EUDIPLO's `session` IS our
+ *          transaction id, and it returns the wallet-ready openid4vp:// URL, so
+ *          there is no client_id / request_uri assembly on our side. The OID4VP
+ *          nonce is managed inside EUDIPLO (hence `nonce: null`).
+ */
+async function createOffer(requestId, label = '') {
   const r = await authed('/verifier/offer', {
     method: 'POST',
     body: JSON.stringify({ response_type: 'uri', requestId })
   });
   if (!r.ok) {
     const text = await r.text().catch(() => '');
-    throw new Error(`EUDIPLO offer failed (${r.status}): ${text.slice(0, 200)}`);
+    throw new Error(`EUDIPLO ${label}offer failed (${r.status}): ${text.slice(0, 200)}`);
   }
   const data = await r.json(); // { uri, crossDeviceUri, session }
   return {
@@ -222,6 +238,18 @@ export async function initTransaction(minAge) {
     uri: data.uri,
     crossDeviceUri: data.crossDeviceUri
   };
+}
+
+// ── 1. Init transaction = create an EUDIPLO presentation offer ───────────────
+
+/** Age via PID: ensure the `age-over-{minAge}` verifier config, then offer. */
+export async function initTransaction(minAge) {
+  const requestId = await ensureConfig({
+    id:          `${CONFIG_PREFIX}${minAge}`,
+    description: `HHTTPS age verification (>=${minAge})`,
+    dcqlQuery:   buildDcqlQuery(minAge)
+  });
+  return createOffer(requestId);
 }
 
 // ── 1a. AV Profile transaction (EU Age Verification attestation, DIRECT) ─────
@@ -234,10 +262,11 @@ export async function initTransaction(minAge) {
 // namespace equals the doctype). EUDIPLO does presentation validation exactly
 // as for PID.
 //
-// **CONFIRM** on the live instance: EUDIPLO must know the AV trust anchors
-// (Commission AV Trusted List / eIDAS Dashboard) to validate eu.europa.ec.av.1
-// signatures — check EUDIPLO's trust-anchor config before go-live. Testing
-// needs the EU AV demo app (the SPRIND sandbox wallet presents PID, not AV).
+// TODO(#248) before go-live: EUDIPLO must know the AV trust anchors (Commission
+// AV Trusted List / eIDAS Dashboard) to validate eu.europa.ec.av.1 signatures.
+// The binding itself is enforced below via `trusted_authorities`; what is still
+// unverified end-to-end is the anchor set inside EUDIPLO. Testing needs the EU
+// AV demo app (the SPRIND sandbox wallet presents PID, not AV).
 const AV_PROFILE_DOCTYPE = process.env.EUDI_AV_PROFILE_DOCTYPE  || 'eu.europa.ec.av.1';
 const AV_CONFIG_PREFIX   = process.env.EUDIPLO_AV_CONFIG_PREFIX || 'av-age-over-';
 
@@ -250,8 +279,21 @@ const AV_CONFIG_PREFIX   = process.env.EUDIPLO_AV_CONFIG_PREFIX || 'av-age-over-
 // EUDIPLO at runtime to `${PUBLIC_URL}/issuers/${tenantId}`.
 // Escape hatch for local development WITHOUT trust validation:
 //   EUDI_AV_TRUST_LIST=off   (never use in production — fail-open)
-const AV_TRUST_LIST_URL = process.env.EUDI_AV_TRUST_LIST
-  || '<TENANT_URL>/trust-list/av-trusted-list';
+// AP4-35: `off` is a DEVELOPMENT escape hatch. In production it is ignored (the
+// default LoTE is used) and the attempt is logged loudly — a fail-open trust
+// setting must not be one environment variable away from a live deployment.
+const AV_TRUST_LIST_DEFAULT = '<TENANT_URL>/trust-list/av-trusted-list';
+const AV_TRUST_LIST_URL = (() => {
+  const configured = process.env.EUDI_AV_TRUST_LIST || AV_TRUST_LIST_DEFAULT;
+  if (configured !== 'off') return configured;
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[EUDI] EUDI_AV_TRUST_LIST=off is FAIL-OPEN and is IGNORED in production (AP4-35) — ' +
+                  `falling back to ${AV_TRUST_LIST_DEFAULT}. Unset the variable to silence this.`);
+    return AV_TRUST_LIST_DEFAULT;
+  }
+  console.warn('[EUDI] EUDI_AV_TRUST_LIST=off — AV attestations are accepted from ANY issuer (development only).');
+  return 'off';
+})();
 
 function buildAvDcqlQuery(minAge) {
   const credential = {
@@ -268,65 +310,17 @@ function buildAvDcqlQuery(minAge) {
   return { credentials: [credential] };
 }
 
-// Ensure the verifier config `av-age-over-{minAge}` exists AND is current.
-// EUDIPLO persists configs — a config created by an older deploy keeps its old
-// DCQL forever (this is how the trusted_authorities binding silently went
-// missing from live requests). Therefore: if the config already exists, PATCH
-// it with the current DCQL instead of silently reusing the stored one.
-async function ensureAvVerifierConfig(minAge) {
-  const id = `${AV_CONFIG_PREFIX}${minAge}`;
-  if (ensuredConfigs.has(id)) return id;
-
-  const desired = {
-    id,
-    description: `HHTTPS direct AV attestation (EU AV Profile, >=${minAge})`,
-    dcql_query: buildAvDcqlQuery(minAge)
-  };
-
-  const r = await authed('/verifier/config', {
-    method: 'POST',
-    body: JSON.stringify(desired)
-  });
-  if (r.ok) { ensuredConfigs.add(id); return id; }
-  const text = await r.text().catch(() => '');
-  if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
-    const u = await authed(`/verifier/config/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        description: desired.description,
-        dcql_query: desired.dcql_query
-      })
-    });
-    if (!u.ok) {
-      const utext = await u.text().catch(() => '');
-      throw new Error(`EUDIPLO AV config update failed (${u.status}): ${utext.slice(0, 200)}`);
-    }
-    ensuredConfigs.add(id);
-    return id;
-  }
-  throw new Error(`EUDIPLO AV config create failed (${r.status}): ${text.slice(0, 200)}`);
-}
-
 // Init a DIRECT AV Profile presentation. Same offer mechanism and return shape
 // as initTransaction; poll with the SAME pollWalletResponse / extractAgeClaims
 // (the defensive age_over_* scan is doctype-agnostic by design).
 export async function initAvTransaction(minAge) {
-  const requestId = await ensureAvVerifierConfig(minAge);
-  const r = await authed('/verifier/offer', {
-    method: 'POST',
-    body: JSON.stringify({ response_type: 'uri', requestId })
+  const requestId = await ensureConfig({
+    id:          `${AV_CONFIG_PREFIX}${minAge}`,
+    description: `HHTTPS direct AV attestation (EU AV Profile, >=${minAge})`,
+    dcqlQuery:   buildAvDcqlQuery(minAge),
+    label:       'AV '
   });
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`EUDIPLO AV offer failed (${r.status}): ${text.slice(0, 200)}`);
-  }
-  const data = await r.json(); // { uri, crossDeviceUri, session }
-  return {
-    transaction_id: data.session,
-    nonce: null,
-    uri: data.uri,
-    crossDeviceUri: data.crossDeviceUri
-  };
+  return createOffer(requestId, 'AV ');
 }
 
 // ── 1b. eID identity transaction (orthogonal PID presentation) ───────────────
@@ -345,46 +339,17 @@ export function buildPidDcqlQuery() {
   return { credentials: [credential] };
 }
 
-async function ensureEidConfig() {
-  const id = EID_CONFIG_ID;
-  if (ensuredConfigs.has(id)) return id;
-  const r = await authed('/verifier/config', {
-    method: 'POST',
-    body: JSON.stringify({
-      id,
-      description: 'HHTTPS EUDI identity (PID presentation)',
-      dcql_query: buildPidDcqlQuery()
-    })
-  });
-  if (r.ok) { ensuredConfigs.add(id); return id; }
-  const text = await r.text().catch(() => '');
-  if (r.status === 409 || /exist|duplicate|already/i.test(text)) {
-    await patchConfigDcql(id, buildPidDcqlQuery());   // AP4-18
-    ensuredConfigs.add(id); return id;
-  }
-  throw new Error(`EUDIPLO eid config create failed (${r.status}): ${text.slice(0, 200)}`);
-}
-
 // Init an eID identity presentation. Same offer mechanism as initTransaction;
-// poll the result with the SAME pollWalletResponse (a terminal session = a valid
-// PID presentation). Returns the index.js-compatible transaction shape.
+// poll the result with the SAME pollWalletResponse (a POSITIVE terminal session
+// = a valid PID presentation). Returns the index.js-compatible transaction shape.
 export async function initEidTransaction() {
-  const requestId = await ensureEidConfig();
-  const r = await authed('/verifier/offer', {
-    method: 'POST',
-    body: JSON.stringify({ response_type: 'uri', requestId })
+  const requestId = await ensureConfig({
+    id:          EID_CONFIG_ID,
+    description: 'HHTTPS EUDI identity (PID presentation)',
+    dcqlQuery:   buildPidDcqlQuery(),
+    label:       'eid '
   });
-  if (!r.ok) {
-    const text = await r.text().catch(() => '');
-    throw new Error(`EUDIPLO eid offer failed (${r.status}): ${text.slice(0, 200)}`);
-  }
-  const data = await r.json(); // { uri, crossDeviceUri, session }
-  return {
-    transaction_id: data.session,
-    nonce: null,
-    uri: data.uri,
-    crossDeviceUri: data.crossDeviceUri
-  };
+  return createOffer(requestId, 'eid ');
 }
 
 // ── 2. Wallet link ───────────────────────────────────────────────────────────
@@ -461,7 +426,7 @@ async function fetchSession(sessionId, tpl) {
 const seenSessions = new Set();
 export function forgetSession(transactionId) { seenSessions.delete(transactionId); }
 
-export async function pollWalletResponse(transactionId, _responseCode) {
+export async function pollWalletResponse(transactionId) {
   const tag = String(transactionId).slice(0, 8);
 
   // Resolve the session endpoint once (first 2xx wins, else first candidate on
@@ -515,8 +480,10 @@ export async function pollWalletResponse(transactionId, _responseCode) {
 // AP4-24 (#166): the claims the bridge acts on come from the session result's
 // disclosure fields (the data EUDIPLO validated). Only when the backend reports
 // an explicit positive terminal status and none of the known disclosure fields
-// is present do we fall back to the whole body (field naming is instance-
-// specific — see **CONFIRM** above).
+// is present do we fall back to the whole body.
+// TODO(#248): pin DISCLOSURE_FIELDS to the field EUDIPLO actually uses once it
+// is confirmed on the live instance; the fallback exists only because the
+// naming is instance-specific.
 export function extractVerifiedAgeClaims(sessionBody) {
   if (!sessionBody || typeof sessionBody !== 'object') return {};
   for (const f of DISCLOSURE_FIELDS) {
@@ -565,9 +532,10 @@ export function extractAgeClaims(walletResponse) {
 const CARD_CONFIG_ID = process.env.EUDIPLO_CARD_CONFIG_ID || 'iamhmn-card';
 let cardConfigEnsured = false;
 
-// Best-effort: ensure the issuer config exists with the hackathon-proven flags.
-// Tolerant of "already exists" exactly like ensureVerifierConfig. If your
-// instance manages the config out-of-band, this simply no-ops on conflict.
+// Best-effort: ensure the ISSUER config exists with the hackathon-proven flags.
+// Unlike the verifier configs (ensureConfig above) there is no DCQL to keep in
+// sync, so an existing config is simply accepted — many instances provision it
+// out-of-band. A network error is tolerated for the same reason.
 export async function ensureIamhmnCardConfig() {
   if (cardConfigEnsured) return CARD_CONFIG_ID;
   const r = await authed('/issuer/config', {
@@ -578,9 +546,9 @@ export async function ensureIamhmnCardConfig() {
       refreshTokenEnabled: false        // hackathon fix: avoid session.consumed on retry
     })
   }).catch(() => null);
-  if (r && (r.ok)) { cardConfigEnsured = true; return CARD_CONFIG_ID; }
+  if (r && r.ok) { cardConfigEnsured = true; return CARD_CONFIG_ID; }
   const text = r ? await r.text().catch(() => '') : '';
-  if (!r || r.status === 409 || /exist|duplicate|already/i.test(text)) {
+  if (!r || looksLikeDuplicate(r.status, text)) {
     cardConfigEnsured = true;            // assume pre-provisioned / present
     return CARD_CONFIG_ID;
   }

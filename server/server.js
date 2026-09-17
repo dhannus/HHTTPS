@@ -57,6 +57,9 @@ import {
   guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery, CUSTOM_ROLE_ID
 } from './roles.taxonomy.js';
 import { issueIamhmnCard, warnIfPidTrustUnbound } from './eudi-verifier/backend-client.js';
+// AP4-47 (#228): the internal verifier assertions — ONE canonical structure per
+// endpoint, shared with the signing side in eudi-verifier/index.js.
+import { verifyAssertion, ASSERTION_MAX_AGE_MS, ASSERTION_CLOCK_SKEW_MS } from './eudi-verifier/assertion.js';
 
 import { createEudiVerifierRouter } from './eudi-verifier/index.js';
 
@@ -3127,6 +3130,28 @@ function emailContextMatches(ctx, verification) {
   return h === verification.emailHash;
 }
 
+// ─── AP4-48 (#231): the verification flag-bag ────────────────────────────────
+// computeVerification() takes a flat bag of method flags. It used to be spelled
+// out at five call sites (role/declare, role/card, age/upgrade, eid/upgrade and
+// the e-mail anchor bind), word for word except for the one or two flags each
+// site actually knows better. ONE builder now derives the bag from the session;
+// `overrides` carries what the caller knows and the session does not yet (the
+// e-mail classification before the session row is updated, a verified age, an
+// eID proof that lives in the token rather than the session).
+function sessionFlags(session, overrides = {}) {
+  return {
+    email:       !!session.emailVerified,
+    passkey:     !!(session.hasPasskey || session.credentialId),
+    domain:      !!session.emailDomain,
+    domainTrust: session.emailTrustBonus || 0,
+    domainValue: session.emailDomain || null,
+    github:      !!session.githubVerified,
+    eudi:        !!session.eudiVerified,
+    age:         false,   // age is trust-neutral and never derived from the session
+    ...overrides
+  };
+}
+
 /**
  * @returns {{ userId, pseudonym, created, methods, trust }}
  * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
@@ -3170,15 +3195,14 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
     emailCategory:   verification.category,
   });
 
-  const v = computeVerification({
+  // The session row was just updated above, but `session` is the pre-update
+  // snapshot — the e-mail classification comes from `verification`.
+  const v = computeVerification(sessionFlags(session, {
     email:       true,
-    passkey:     !!(session.hasPasskey || session.credentialId),
     domain:      !!verification.domain,
     domainTrust: verification.trustBonus || 0,
-    domainValue: verification.domain || null,
-    github:      !!session.githubVerified,
-    eudi:        !!session.eudiVerified
-  });
+    domainValue: verification.domain || null
+  }));
 
   // P-3: the cache upsert and the removal of the consumed e-mail context are
   // independent writes — run them in parallel (one roundtrip less).
@@ -3522,6 +3546,24 @@ app.post('/hhttps/verify/github/status', async (req, res) => {
 });
 
 // ─── Role Declaration ─────────────────────────────────────────────────────────
+//
+// AP4-49 (#235) — the error contract of the identity routes below
+// (/role/declare, /role/card, /age/*, /eid/upgrade, /revoke*, /validate):
+//
+//   Body       always { error:<snake_case code>, detail?:<safe explanation> }.
+//               `detail` is for the user/operator, never a raw exception text
+//               (AP4-33) — exceptions go to the log.
+//   401        the CALLER is not (or no longer) authenticated: unknown/expired
+//               session on a browser-facing route, invalid token, bad assertion.
+//   403        authenticated, but a precondition is missing (email gate) or the
+//               caller is not internal (`internal_endpoint`).
+//   404        an INTERNAL verifier route was handed a sessionId that does not
+//               exist. These routes have no browser caller to re-authenticate,
+//               so "unknown session" is a lookup miss, not an auth failure —
+//               that is why they answer 404 where the browser routes answer 401.
+//   502        an upstream (EUDIPLO) call failed.
+//   503        this host is missing the configuration the route needs.
+//   500        anything unexpected — `{ error:'internal_error' }`, detail in the log.
 
 // AP4-05 (#64): the handler body runs under try/catch — a thrown error must
 // answer 500 instead of leaving the request hanging (no error middleware here).
@@ -3530,12 +3572,15 @@ app.post('/hhttps/role/declare', async (req, res) => {
     await roleDeclare(req, res);
   } catch (e) {
     console.error('[ROLE-DECLARE] error:', e.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Role declaration failed.' });
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
   }
 });
 
 async function roleDeclare(req, res) {
-  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body || {};
+  // v0.5: `role` and `verificationMethod` from the body are deliberately NOT
+  // read — a role arrives only as an EUDI (Q)EAA, and the method surface is
+  // derived from the session, never claimed by the client.
+  const { sessionId, verificationData, ageGroup } = req.body || {};
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
   // AK-13 / D4: email is the mandatory method — passkey/GitHub/EUDI alone no longer suffice.
@@ -3556,9 +3601,10 @@ async function roleDeclare(req, res) {
   // establishes a human identity. It is enforced below, after the verification
   // surface is computed (see "Sign-in gate" near computeVerification).
 
-  // Optional age_group (orthogonal to role). Phase 1: self-declared only —
-  // honestly labelled, low trust, age_verified:false. Phase 3 will set this
-  // from an EUDI Wallet PID presentation (age_over_NN) with method 'eudi-wallet'.
+  // Optional age_group (orthogonal to role). Here it is ALWAYS self-declared:
+  // honestly labelled, trust-neutral, age_verified:false. The cryptographically
+  // verified variant (method 'eudi-wallet', age_verified:true) is issued by
+  // /hhttps/age/upgrade from an EUDI Wallet presentation — never here.
   let ageClaims = null;
   if (ageGroup !== undefined && ageGroup !== null && ageGroup !== '') {
     // AP4-31 (#203): AGE_GROUPS is a plain object — an own-property check, not a
@@ -3581,18 +3627,10 @@ async function roleDeclare(req, res) {
   // additive, API-only trust + the official HHTTPS method headers + the badges.
   // Self-declared role picking and the typed-in role-ID honesty gate are gone;
   // the only role path is an EUDI (Q)EAA (handled by the eudi-verifier).
+  // Self-declared age is trust-neutral and never a "method" (AGE_VERIFICATION_
+  // METHODS['self-declared'].verified === false), so this stays false in Phase 1.
   const ageVerifiedFlag = !!(ageClaims && ageClaims.age_verified === true);
-  const flags = {
-    email:       !!session.emailVerified,
-    passkey:     !!(session.hasPasskey || session.credentialId),
-    domain:      !!session.emailDomain,
-    domainTrust: session.emailTrustBonus || 0,
-    domainValue: session.emailDomain || null,
-    github:      !!session.githubVerified,
-    eudi:        !!session.eudiVerified,           // set by the EUDI eID flow (eudi-verifier)
-    age:         ageVerifiedFlag                   // self-declared age is trust-neutral, not a "method"
-  };
-  const v = computeVerification(flags);
+  const v = computeVerification(sessionFlags(session, { age: ageVerifiedFlag }));
   const trustScore = v.trust;
 
   // Sign-in gate (v0.5, method-neutral): at least ONE genuinely verified method
@@ -3705,7 +3743,6 @@ function requireInternalCaller(req, res, tag) {
   }
   return true;
 }
-const INTERNAL_ASSERTION_WINDOW_MS = 300_000;
 const seenAssertionNonces = new Map();   // nonce → expiry (ms)
 function purgeAssertionNonces(now) {
   for (const [n, exp] of seenAssertionNonces) if (exp <= now) seenAssertionNonces.delete(n);
@@ -3716,29 +3753,61 @@ function checkAssertionFreshness(nonce, iat) {
   const now = Date.now();
   const ageMs = now - Number(iat);
   if (iat === undefined || iat === null || iat === '' || !Number.isFinite(ageMs)) return 'Assertion iat required.';
-  if (ageMs < -60_000 || ageMs > INTERNAL_ASSERTION_WINDOW_MS) return 'Assertion expired or clock skew too large.';
+  if (ageMs < -ASSERTION_CLOCK_SKEW_MS || ageMs > ASSERTION_MAX_AGE_MS) return 'Assertion expired or clock skew too large.';
   if (typeof nonce !== 'string' || !nonce || nonce.length > 128) return 'Assertion nonce required.';
   if (seenAssertionNonces.size > 10_000) purgeAssertionNonces(now);
   if (seenAssertionNonces.has(nonce) && seenAssertionNonces.get(nonce) > now) return 'Assertion replayed.';
-  seenAssertionNonces.set(nonce, now + INTERNAL_ASSERTION_WINDOW_MS + 60_000);
+  seenAssertionNonces.set(nonce, now + ASSERTION_MAX_AGE_MS + ASSERTION_CLOCK_SKEW_MS);
   return null;
 }
 setInterval(() => purgeAssertionNonces(Date.now()), 60_000).unref?.();
 
+// AP4-47 (#228): the full gate of an internal verifier call — shared secret
+// present, HMAC over the endpoint's OWN canonical structure (assertion.js)
+// valid in constant time, iat fresh, nonce unused. Each endpoint has a
+// DIFFERENT canonical, so an assertion can never be replayed across them.
+//
+// AP4-49 (#235): one error contract for the three internal endpoints —
+//   503 { error:'verifier_not_configured' }  no shared secret on this host
+//   401 { error:<reason> }                   bad signature / stale / replayed
+//   500 { error:'internal_error' }           anything unexpected (details → log)
+// Returns true when the request may proceed; otherwise it has been answered.
+function checkVerifierAssertion(kind, tag, res, { assertion, nonce, iat, ...payload }) {
+  const secret = process.env.EUDI_VERIFIER_SECRET;
+  if (!secret) {
+    console.error(`[${tag}] EUDI_VERIFIER_SECRET not configured — refusing.`);
+    res.status(503).json({ error: 'verifier_not_configured' });
+    return false;
+  }
+  if (!verifyAssertion(kind, secret, { ...payload, nonce, iat }, assertion)) {
+    console.warn(`[${tag}] invalid assertion — rejected.`);
+    res.status(401).json({ error: 'Invalid verifier assertion.' });
+    return false;
+  }
+  // AP4-27: iat mandatory, 5-min window, nonce single-use.
+  const stale = checkAssertionFreshness(nonce, iat);
+  if (stale) { res.status(401).json({ error: stale }); return false; }
+  return true;
+}
+
 // ─── EUDI age upgrade (Phase 3) ───────────────────────────────────────────────
 //
-// INTERNAL endpoint. Called only by the eudi-verifier service (port 3002) after a
-// successful OpenID4VP age presentation. Lifts a self-declared age_group to a
+// INTERNAL endpoint. Called only by the in-process eudi-verifier router (mounted
+// at /eudi in this same server, see createEudiVerifierRouter) over
+// http://127.0.0.1 after a successful OpenID4VP age presentation. Port 3002 is
+// EUDIPLO — the upstream the verifier talks to, never the caller of this route. Lifts a self-declared age_group to a
 // cryptographically verified one (age_verified:true, method:eudi-wallet, trust 99)
 // by reissuing the holder's token with the verified age claims.
 //
-// SECURITY — defence in depth (single-server setup, no mTLS needed):
+// SECURITY — defence in depth (single-host setup, no mTLS needed):
 //   1. nginx MUST NOT expose this path externally (allow 127.0.0.1; deny all).
-//   2. The request MUST carry a valid HMAC-SHA256 assertion signed with the
+//   2. requireInternalCaller: loopback peer AND no X-Forwarded-For (AP4-27).
+//   3. The request MUST carry a valid HMAC-SHA256 assertion signed with the
 //      shared EUDI_VERIFIER_SECRET. Without the secret, a caller cannot forge an
 //      upgrade — so even if the path were reachable, age_over_18:true can't be
 //      injected. The assertion binds {sessionId, ageOver, nonce, iat} so it
-//      can't be replayed onto another session.
+//      can't be replayed onto another session or onto /hhttps/age/direct
+//      (different canonical — see eudi-verifier/assertion.js).
 //
 // Body: {
 //   sessionId,                       // the holder's active hhttps session
@@ -3754,36 +3823,10 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       return res.status(400).json({ error: 'sessionId, ageOver and assertion are required.' });
     }
 
-    const secret = process.env.EUDI_VERIFIER_SECRET;
-    if (!secret) {
-      console.error('[AGE-UPGRADE] EUDI_VERIFIER_SECRET not configured — refusing.');
-      return res.status(503).json({ error: 'Age verification not configured.' });
-    }
-
-    // Recompute the HMAC over a canonical, sorted representation and compare in
-    // constant time. The verifier must sign exactly this structure.
-    const canonical = JSON.stringify({
-      sessionId,
-      ageOver: {
-        age_over_14: ageOver.age_over_14 === true,
-        age_over_16: ageOver.age_over_16 === true,
-        age_over_18: ageOver.age_over_18 === true
-      },
-      nonce: nonce || null,
-      iat:   iat   || null
-    });
-    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-
-    const a = Buffer.from(String(assertion), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      console.warn(`[AGE-UPGRADE] invalid assertion for session ${String(sessionId).slice(0,8)}…`);
-      return res.status(401).json({ error: 'Invalid verifier assertion.' });
-    }
-
-    // AP4-27: iat mandatory, 5-min window, nonce single-use.
-    const stale = checkAssertionFreshness(nonce, iat);
-    if (stale) return res.status(401).json({ error: stale });
+    // AP4-47: HMAC over the age/upgrade canonical, freshness and single-use
+    // nonce — the shared gate; the canonical itself lives in assertion.js.
+    if (!checkVerifierAssertion('age/upgrade', 'AGE-UPGRADE', res,
+                                { sessionId, ageOver, assertion, nonce, iat })) return;
 
     // Session must exist and be a verified human session.
     const session = await db.sessions.get(sessionId);
@@ -3794,7 +3837,16 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     // (same position as in /hhttps/eid/upgrade: after the assertion, before any token).
     if (!requireEmailVerified(session, res)) return;
 
-    // Map the disclosed EUDI booleans to the narrowest age band (Phase 3 bridge).
+    // AP4-13: at least ONE disclosed boolean must be true. A presentation where
+    // every age_over_NN is false proves nothing — it used to be mapped to the
+    // narrowest band (minor_under_14) and then issued with age_verified:true,
+    // i.e. a cryptographically "verified" age that the wallet never attested.
+    if (!Object.values(ageOver).some(v => v === true)) {
+      return res.status(400).json({ error: 'no_age_claim_disclosed',
+        detail: 'At least one age_over_NN must be true.' });
+    }
+
+    // Map the disclosed EUDI booleans to the narrowest age band.
     const ageGroupId = ageGroupFromEudiClaims(ageOver);
     const ag = AGE_GROUPS[ageGroupId];
     const eudiMethod = AGE_VERIFICATION_METHODS['eudi-wallet'];
@@ -3813,7 +3865,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
           priorEudi = prev?.eudi_verified === true ||
                       (Array.isArray(prev?.verified_methods) && prev.verified_methods.includes('eudi'));
         }
-      } catch (_) { /* invalid/expired/revoked — ignore */ }
+      } catch { /* invalid/expired/revoked — ignore */ }
     }
 
     // Reissue the holder's token with VERIFIED age claims. age_group lives in the
@@ -3822,17 +3874,8 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     // Age is TRUST-NEUTRAL (contributesToTrust:false): this flips HHTTPS-Age-Verified
     // to true and adds 'age' to verified_methods, but the trust score is UNCHANGED.
     // No role (EUDI EAA only). No age_trust / no "99".
-    const flags = {
-      email:       !!session.emailVerified,
-      passkey:     !!(session.hasPasskey || session.credentialId),
-      domain:      !!session.emailDomain,
-      domainTrust: session.emailTrustBonus || 0,
-      domainValue: session.emailDomain || null,
-      github:      !!session.githubVerified,
-      eudi:        priorEudi,
-      age:         true
-    };
-    const v = computeVerification(flags);
+    // eudi lives in the TOKEN, not the session — carry it from the prior token.
+    const v = computeVerification(sessionFlags(session, { eudi: priorEudi, age: true }));
 
     const { token } = await issueAccessToken({
       userId:     session.userId,
@@ -3880,8 +3923,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       message: `✓ Age verified: ${ag.label} (EUDI Wallet)`
     });
   } catch (e) {
+    // AP4-49 (#235) / AP4-33: a generic code to the caller, the detail to the log.
     console.error('[AGE-UPGRADE] error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
@@ -3913,36 +3957,10 @@ app.post('/hhttps/age/direct', async (req, res) => {
       return res.status(400).json({ error: 'ageOver and assertion are required.' });
     }
 
-    const secret = process.env.EUDI_VERIFIER_SECRET;
-    if (!secret) {
-      console.error('[AGE-DIRECT] EUDI_VERIFIER_SECRET not configured — refusing.');
-      return res.status(503).json({ error: 'Age verification not configured.' });
-    }
-
-    // Recompute the HMAC over the canonical, sorted representation (constant-
-    // time compare). MUST match callAgeDirect in eudi-verifier/index.js exactly.
-    const canonical = JSON.stringify({
-      direct: true,
-      ageOver: {
-        age_over_14: ageOver.age_over_14 === true,
-        age_over_16: ageOver.age_over_16 === true,
-        age_over_18: ageOver.age_over_18 === true
-      },
-      nonce: nonce || null,
-      iat:   iat   || null
-    });
-    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-
-    const a = Buffer.from(String(assertion), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      console.warn('[AGE-DIRECT] invalid assertion — rejected.');
-      return res.status(401).json({ error: 'Invalid verifier assertion.' });
-    }
-
-    // AP4-27: iat mandatory, 5-min window, nonce single-use.
-    const stale = checkAssertionFreshness(nonce, iat);
-    if (stale) return res.status(401).json({ error: stale });
+    // AP4-47: the age/direct canonical carries `direct:true` INSTEAD of a
+    // sessionId, so an upgrade assertion can never be replayed here.
+    if (!checkVerifierAssertion('age/direct', 'AGE-DIRECT', res,
+                                { ageOver, assertion, nonce, iat })) return;
 
     // AK-28: no session-less age bootstrap. The assertion was valid, but an age
     // proof requires a session with a verified email → /hhttps/age/upgrade.
@@ -3952,8 +3970,9 @@ app.post('/hhttps/age/direct', async (req, res) => {
       detail: 'Age proof requires a session with a verified email. Use /hhttps/age/upgrade.'
     });
   } catch (e) {
+    // AP4-49 (#235) / AP4-33: a generic code to the caller, the detail to the log.
     console.error('[AGE-DIRECT] error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
@@ -3977,26 +3996,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       return res.status(400).json({ error: 'sessionId and assertion are required.' });
     }
 
-    const secret = process.env.EUDI_VERIFIER_SECRET;
-    if (!secret) {
-      console.error('[EID-UPGRADE] EUDI_VERIFIER_SECRET not configured — refusing.');
-      return res.status(503).json({ error: 'EUDI verification not configured.' });
-    }
-
-    const canonical = JSON.stringify({
-      sessionId, eidVerified: true, nonce: nonce || null, iat: iat || null
-    });
-    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-    const a = Buffer.from(String(assertion), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      console.warn(`[EID-UPGRADE] invalid assertion for session ${String(sessionId).slice(0,8)}…`);
-      return res.status(401).json({ error: 'Invalid verifier assertion.' });
-    }
-
-    // AP4-27: iat mandatory, 5-min window, nonce single-use.
-    const stale = checkAssertionFreshness(nonce, iat);
-    if (stale) return res.status(401).json({ error: stale });
+    // AP4-47: HMAC over the eid/upgrade canonical ({sessionId, eidVerified:true}).
+    if (!checkVerifierAssertion('eid/upgrade', 'EID-UPGRADE', res,
+                                { sessionId, assertion, nonce, iat })) return;
 
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) {
@@ -4024,21 +4026,13 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
             age_verification_method: prev.age_verification_method || null
           };
         }
-      } catch (_) { /* invalid/expired/revoked token — reissue without age */ }
+      } catch { /* invalid/expired/revoked token — reissue without age */ }
     }
 
     // Recompute the verification surface with eudi now true → +40.
-    const flags = {
-      email:       !!session.emailVerified,
-      passkey:     !!(session.hasPasskey || session.credentialId),
-      domain:      !!session.emailDomain,
-      domainTrust: session.emailTrustBonus || 0,
-      domainValue: session.emailDomain || null,
-      github:      !!session.githubVerified,
-      eudi:        true,
-      age:         ageCarry.age_verified === true
-    };
-    const v = computeVerification(flags);
+    const v = computeVerification(sessionFlags(session, {
+      eudi: true, age: ageCarry.age_verified === true
+    }));
 
     const { token } = await issueAccessToken({
       userId:     session.userId,
@@ -4075,8 +4069,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       message: '✓ EUDI verified (eID)'
     });
   } catch (e) {
+    // AP4-49 (#235) / AP4-33: a generic code to the caller, the detail to the log.
     console.error('[EID-UPGRADE] error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
@@ -4100,20 +4095,14 @@ app.post('/hhttps/role/card', async (req, res) => {
     const documentProvided = req.body?.documentProvided === true;
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
-    // AP4-06 (#71) / AK-13: the confirmed e-mail is the mandatory method — the
-    // same gate as /hhttps/role/declare (the old ||-chain also read session
-    // fields that sessions._normalize never sets).
+    // AP4-06 (#71) / AK-13: the confirmed e-mail is the mandatory method. This
+    // IS the same gate as /hhttps/role/declare now — before AP4-06 it was an
+    // ad-hoc ||-chain that also read session fields sessions._normalize never
+    // sets, so it let e-mail-less sessions through.
     if (!requireEmailVerified(session, res)) return;
     // Human = at least one genuinely verified method on the session (the same
     // surface the sign-in gate in role/declare uses), not "has a passkey".
-    const v = computeVerification({
-      email:       !!session.emailVerified,
-      passkey:     !!session.credentialId,
-      domain:      !!session.emailDomain,
-      domainTrust: session.emailTrustBonus || 0,
-      domainValue: session.emailDomain || null,
-      github:      !!session.githubVerified
-    });
+    const v = computeVerification(sessionFlags(session));
     const humanVerified = v.methods.filter(m => m !== 'age').length > 0;
 
     let roleInput = null, custom = false, customLabel = null, reservedKey = null;
@@ -4184,7 +4173,8 @@ app.post('/hhttps/role/card', async (req, res) => {
     });
   } catch (e) {
     console.error('[ROLE-CARD] error:', e.message);
-    res.status(502).json({ error: 'Card issuance failed.', detail: e.message });
+    res.status(502).json({ error: 'card_issuance_failed',
+                           detail: 'The wallet card could not be issued. Please try again later.' });
   }
 });
 
@@ -4261,7 +4251,7 @@ app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
     res.json({ hhttps: { status: 'revoked' }, revoked: true, jti, ...(expired ? { expired: true } : {}) });
   } catch (e) {
     console.error('[REVOKE] error:', e.message);
-    res.status(500).json({ error: 'Revocation failed.' });
+    res.status(500).json({ error: 'internal_error', detail: 'Revocation failed.' });
   }
 });
 
@@ -4270,12 +4260,15 @@ app.get('/hhttps/revoke/status', async (req, res) => {
   const jti = typeof req.query.jti === 'string' ? req.query.jti : null;
   if (!jti) return res.status(400).json({ error: 'jti required' });
   try {
-    const revoked = await db.revokedTokens.has(jti);
-    const active  = await db.tokens.exists(jti);
+    // AP4-41: independent lookups — one roundtrip instead of two sequential ones.
+    const [revoked, active] = await Promise.all([
+      db.revokedTokens.has(jti),
+      db.tokens.exists(jti),
+    ]);
     res.json({ jti, revoked, active: active && !revoked });
   } catch (e) {
     console.error('[REVOKE-STATUS] error:', e.message);
-    res.status(500).json({ error: 'Lookup failed.' });
+    res.status(500).json({ error: 'internal_error', detail: 'Lookup failed.' });
   }
 });
 
