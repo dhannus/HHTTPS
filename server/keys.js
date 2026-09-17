@@ -104,6 +104,11 @@ export function loadOrCreateKeys() {
   }
 }
 
+// AP1-41 (#220): /.well-known/jwks.json is polled by every relying party, and
+// the answer only changes on rotation — `export({format:'jwk'})` per key per
+// request was pure waste. Memoized; rotateKeys()/forgetRetiredKey() invalidate.
+let _jwksCache = null;
+
 // ─── Rotate: mint a new active key, retire the current public key ─────────────
 // After rotation, new tokens are signed with the new key while tokens signed
 // with the previous key still verify (its public key moves to keys/retired/ and
@@ -133,19 +138,26 @@ export function rotateKeys() {
   _privateKey = createPrivateKey(privateKey);
   _publicKey  = createPublicKey(publicKey);
   _kid        = newKid;
+  _jwksCache  = null;                  // AP1-41: the published set changed
 
   console.log(`   Key rotated: ${oldKid} → ${newKid} (old key retired, still in JWKS)`);
   return { oldKid, newKid };
 }
 
-// ─── Permanently drop a retired key from the JWKS ─────────────────────────────
+// ─── Stop publishing a retired key in the JWKS (this process only) ────────────
 // Call only once no outstanding token signed with this kid can still be valid
 // (i.e. after at least one full token-TTL has elapsed since rotation).
+//
+// AP1-12 (#220): this is NOT restart-safe and never claimed to delete anything.
+// The PEM stays in RETIRED_DIR, so loadOrCreateKeys() picks it up again on the
+// next boot and the key reappears in the JWKS. To drop a key for good, the
+// operator moves or deletes `retired/<kid>.pem` — we do not touch an operator's
+// key material on their behalf.
 export function forgetRetiredKey(kid) {
   const file = join(RETIRED_DIR, `${kid}.pem`);
   if (existsSync(file)) {
-    // We do not delete on the operator's behalf; we only stop publishing it.
     _retired.delete(kid);
+    _jwksCache = null;                 // AP1-41: the published set changed
     return true;
   }
   return false;
@@ -182,6 +194,8 @@ export function verifyToken(token, options = {}) {
 // grace period, so third-party verifiers can validate tokens signed before the
 // most recent rotation (RFC 7517).
 export function getJWKS() {
+  if (_jwksCache) return _jwksCache;
+
   const toJwk = (pubKey, kid) => ({
     ...pubKey.export({ format: 'jwk' }),
     use: 'sig',
@@ -193,7 +207,8 @@ export function getJWKS() {
   for (const [kid, pubKey] of _retired) {
     keys.push(toJwk(pubKey, kid));
   }
-  return { keys };
+  _jwksCache = { keys };
+  return _jwksCache;
 }
 
 export function getPublicKey()  { return _publicKey; }

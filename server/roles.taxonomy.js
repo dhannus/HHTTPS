@@ -1,8 +1,10 @@
 /**
  * HHTTPS Role Taxonomy & Assurance — v0.5 (ESCO-only, enum-free)
  *
- * CANONICAL LANGUAGE: English. German display strings live in
- * ./roles.taxonomy.i18n.js (one-way import).
+ * CANONICAL LANGUAGE: English. Labels are returned as ESCO supplies them for
+ * the requested language (see searchEsco/resolveEsco) — there is no separate
+ * translation catalogue for this module. (AP1-53, #204: roles.taxonomy.i18n.js
+ * had no importer and translated `kind` values resolveRole never produces.)
  *
  * MODEL (v0.5, corrected): there is NO fixed list of professions. A role is
  * whatever (a) an EUDI (Q)EAA attests, or (b) the user defines and HHTTPS issues
@@ -189,18 +191,44 @@ export function sanitizeCustomRole(freeText) {
 // ─── ESCO resolver (runtime, never fabricated) ────────────────────────────────
 export const ESCO_API = 'https://ec.europa.eu/esco/api/search';
 
-export async function resolveEsco(text, { language = 'de', fetchImpl = globalThis.fetch } = {}) {
-  if (!text || typeof fetchImpl !== 'function') return null;
+/**
+ * AP1-46 (#176): the raw ESCO occupation search. server.js's typeahead proxy
+ * used to build this URL and unwrap `_embedded.results` a second time by hand,
+ * so the two copies could (and did) drift on limit, timeout and error handling.
+ *
+ * @param {string} text
+ * @param {object} [opts]
+ * @param {string}   [opts.language='de']
+ * @param {number}   [opts.limit=1]
+ * @param {number}   [opts.timeoutMs] abort the upstream call after N ms
+ * @param {Function} [opts.fetchImpl]
+ * @returns {Promise<Array<{escoUri:string|null, isco08:string|null, prefLabel:string}>>}
+ *          [] on any failure — ESCO is a suggestion source, never a hard dependency.
+ */
+export async function searchEsco(text, { language = 'de', limit = 1, timeoutMs = null,
+                                         fetchImpl = globalThis.fetch } = {}) {
+  if (!text || typeof fetchImpl !== 'function') return [];
   const url = `${ESCO_API}?type=occupation&language=${encodeURIComponent(language)}` +
-              `&text=${encodeURIComponent(text)}&full=false&limit=1`;
+              `&text=${encodeURIComponent(text)}&full=false&limit=${encodeURIComponent(limit)}`;
   try {
-    const r = await fetchImpl(url, { headers: { accept: 'application/json' } });
-    if (!r.ok) return null;
+    const init = { headers: { accept: 'application/json' } };
+    if (timeoutMs) init.signal = AbortSignal.timeout(timeoutMs);
+    const r = await fetchImpl(url, init);
+    if (!r.ok) return [];
     const j = await r.json();
-    const hit = j?._embedded?.results?.[0];
-    if (!hit?.uri) return null;
-    return { escoUri: hit.uri, isco08: hit.code || null, prefLabel: hit.title || hit.preferredLabel || null };
-  } catch { return null; }
+    const hits = j?._embedded?.results || [];
+    return hits.map(h => ({
+      escoUri:   h.uri || null,
+      isco08:    h.code || null,
+      prefLabel: h.title || h.preferredLabel || ''
+    }));
+  } catch { return []; }
+}
+
+/** Single best ESCO match, or null. Thin wrapper over {@link searchEsco}. */
+export async function resolveEsco(text, opts = {}) {
+  const [hit] = await searchEsco(text, { ...opts, limit: 1 });
+  return hit?.escoUri ? hit : null;
 }
 
 // ─── Dynamic role resolver (replaces the old fixed 15-role table) ─────────────
