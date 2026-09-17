@@ -1,71 +1,118 @@
 -- ============================================================================
--- HHTTPS — Migration Phase 10 (Projekt-Review 2026-09, Welle 2)
+-- HHTTPS — Migration Phase 10 (Projekt-Review 2026-09, Welle 2 / AP6)
 -- ============================================================================
--- Two sections (same convention as phase 8 / 9):
+-- Two sections (same convention as phase 8 and 9):
 --   1. BOOT-DDL  — idempotent DDL, applied by the server at boot when the
---                  applied-check fails (cleanup_expired() has fewer than 7
---                  output columns). Wiring: db.js BOOT_DDL_FILES + scripts/migrate.js.
+--                  applied-check (db.js: phase10SchemaApplied) fails.
 --   2. OPERATOR  — run manually:  psql -U hhttps -d hhttps -f <this file>
---                  (psql runs BOTH sections; everything here is idempotent).
+--                  (psql runs BOTH sections; the DDL is idempotent).
 --
 -- Findings:
---   AP1-34 (#132) revoked_tokens was read on every check but never cleaned —
---                 a jti older than REFRESH_TTL (7 d) can no longer belong to
---                 a verifiable token.
---   AP1-35 (#139) webhook_deliveries grew by one row per delivery attempt
---                 with no retention.
---   AP3-24 (#128) consumed email_verifications rows were never deleted
---                 (cleanup ran with `used = FALSE`) and the hot lookups had
---                 no index.
---   AP5-29 (#179) unauthenticated plugin registrations left `email_pending`
---                 oauth_clients drafts behind that are never confirmed.
--- All of it goes into cleanup_expired() (called every 5 minutes by server.js).
--- The RETURNS TABLE signature gains columns, so the function is dropped and
--- re-created (CREATE OR REPLACE cannot change a return type).
+--   AP6-06 (#73)  email_verifications.code was created only by a
+--                 fire-and-forget ALTER on module import — it is now part of
+--                 schema.sql and of the boot DDL.
+--   AP6-03 (#58)  cleanup_expired() only removed rows with used = FALSE, so
+--                 every sign-in left at least one row behind forever. The hot
+--                 path filters on session_id (+ code), never on `email`.
+--   AP6-15 (#107) oauth_clients.email_token now holds sha256(token); the
+--                 outstanding plaintext tokens can never match again and are
+--                 nulled in the OPERATOR section.
+--   AP1 (Welle 2) cleanup_expired() also applies a retention to revoked_tokens
+--                 and webhook_deliveries, which grew without bound.
+--   AP5-29        … and removes platform drafts whose contact address was
+--                 never confirmed.
+--   AP5 (Welle 2) the workload-identity module was deleted in this wave; its
+--                 table is dropped in the OPERATOR section.
+--
+-- Run AS THE APP USER (hhttps), not as postgres. If an older install has
+-- postgres-owned tables (the former superuser fallback, AP6-08 / #85), first
+-- run server/sql/ownership-hhttps.sql as postgres — otherwise the statements
+-- below fail with "must be owner of …".
 -- ════════════════════════════ 1. BOOT-DDL ══════════════════════════════════
 
--- AP3-24: the two lookups on this table filter by session_id resp.
--- (code, session_id) — getAndConsumeByCode() and invalidateForSession() used
--- to run a seq scan over every verification row ever written.
-CREATE INDEX IF NOT EXISTS email_verifications_session_idx
-  ON email_verifications(session_id);
-CREATE INDEX IF NOT EXISTS email_verifications_code_session_idx
-  ON email_verifications(code, session_id);
+-- ─── AP6-06: the `code` column is part of the schema ────────────────────────
+-- Holds the sha256 of the 6-digit code the user types into the original tab.
+ALTER TABLE email_verifications ADD COLUMN IF NOT EXISTS code TEXT;
 
+-- ─── AP6-03: index the hot path, drop the unused one ────────────────────────
+-- getAndConsumeByCode / invalidateForSession filter on session_id; `email`
+-- holds a sha256 and is never used as a lookup key.
+CREATE INDEX IF NOT EXISTS email_verifications_session_id_idx ON email_verifications(session_id);
+-- AP3-24: getAndConsumeByCode() filters on (code, session_id) together.
+CREATE INDEX IF NOT EXISTS email_verifications_code_session_idx ON email_verifications(code, session_id);
+DROP INDEX IF EXISTS email_verifications_email_idx;
+
+-- ─── AP6-03 / AP1 / AP5-29: what cleanup_expired() removes ──────────────────
+-- Identical body to the one in schema.sql — keep the two in sync.
+-- The RETURNS TABLE signature gains columns, which CREATE OR REPLACE cannot
+-- do — drop the old function first (nothing but db.js calls it).
 DROP FUNCTION IF EXISTS cleanup_expired();
-CREATE FUNCTION cleanup_expired() RETURNS TABLE(
+CREATE OR REPLACE FUNCTION cleanup_expired() RETURNS TABLE(
   deleted_tokens INT, deleted_refresh INT, deleted_sessions INT,
   deleted_challenges INT, deleted_emails INT,
-  deleted_revoked INT, deleted_webhook_deliveries INT, deleted_client_drafts INT
+  deleted_revoked INT, deleted_webhook_deliveries INT, deleted_stale_clients INT
 ) AS $$
 DECLARE
-  t INT; r INT; s INT; c INT; e INT; v INT; w INT; d INT;
+  t INT; r INT; s INT; c INT; e INT; v INT; w INT; p INT;
 BEGIN
   DELETE FROM tokens             WHERE expires_at < NOW();           GET DIAGNOSTICS t = ROW_COUNT;
   DELETE FROM refresh_tokens     WHERE expires_at < NOW();           GET DIAGNOSTICS r = ROW_COUNT;
   DELETE FROM sessions           WHERE expires_at < NOW();           GET DIAGNOSTICS s = ROW_COUNT;
   DELETE FROM challenges         WHERE expires_at < NOW();           GET DIAGNOSTICS c = ROW_COUNT;
-  -- AP3-24: an expired row is worthless whether it was used or not.
-  DELETE FROM email_verifications WHERE expires_at < NOW();          GET DIAGNOSTICS e = ROW_COUNT;
-  DELETE FROM revoked_tokens     WHERE revoked_at < NOW() - INTERVAL '8 days';     GET DIAGNOSTICS v = ROW_COUNT;
-  DELETE FROM webhook_deliveries WHERE delivered_at < NOW() - INTERVAL '30 days';  GET DIAGNOSTICS w = ROW_COUNT;
-  -- AP5-29: plugin drafts nobody ever confirmed (the token is long expired).
-  DELETE FROM oauth_clients      WHERE verification_status = 'email_pending'
-                                   AND email_verified_at IS NULL
-                                   AND email_token_expires_at < NOW() - INTERVAL '7 days';
-  GET DIAGNOSTICS d = ROW_COUNT;
-  RETURN QUERY SELECT t, r, s, c, e, v, w, d;
+  -- AP6-03: expired rows go regardless of `used` (both consume paths require
+  -- expires_at > NOW(), so an expired row can never be redeemed); consumed
+  -- rows are kept for 24 h so an operator can still inspect a fresh sign-in.
+  DELETE FROM email_verifications
+   WHERE expires_at < NOW()
+      OR (used = TRUE AND created_at < NOW() - INTERVAL '24 hours');
+  GET DIAGNOSTICS e = ROW_COUNT;
+  -- AP1 (Welle 2): the revocation list was "permanent". A jti is only ever
+  -- checked while the token could still be presented, so 90 days is far past
+  -- the longest token lifetime.
+  DELETE FROM revoked_tokens     WHERE revoked_at < NOW() - INTERVAL '90 days';
+  GET DIAGNOSTICS v = ROW_COUNT;
+  -- AP1 (Welle 2): the delivery log is an audit trail, not storage.
+  DELETE FROM webhook_deliveries WHERE delivered_at < NOW() - INTERVAL '30 days';
+  GET DIAGNOSTICS w = ROW_COUNT;
+  -- AP5-29: platform drafts whose contact address was never confirmed.
+  DELETE FROM oauth_clients
+   WHERE verification_status = 'email_pending'
+     AND email_token_expires_at < NOW() - INTERVAL '7 days';
+  GET DIAGNOSTICS p = ROW_COUNT;
+  RETURN QUERY SELECT t, r, s, c, e, v, w, p;
 END;
 $$ LANGUAGE plpgsql;
 
 -- >>> BOOT-DDL END
+-- Everything below this marker is NEVER executed by the server: db.js reads
+-- the file only up to this line (BOOT_DDL_FILES in db.js).
 -- ════════════════════════════ 2. OPERATOR ══════════════════════════════════
 
--- One-off backfill so the first periodic run does not delete a huge batch in
--- one transaction on a long-running installation (all idempotent).
-DELETE FROM email_verifications WHERE expires_at   < NOW();
-DELETE FROM revoked_tokens      WHERE revoked_at   < NOW() - INTERVAL '8 days';
-DELETE FROM webhook_deliveries  WHERE delivered_at < NOW() - INTERVAL '30 days';
-DELETE FROM oauth_clients       WHERE verification_status = 'email_pending'
-                                  AND email_verified_at IS NULL
-                                  AND email_token_expires_at < NOW() - INTERVAL '7 days';
+-- ─── AP6-15: invalidate plaintext e-mail confirmation tokens ────────────────
+-- db.js now stores sha256(token) (64 hex chars) and looks tokens up by hash.
+-- A row that still holds a plaintext token (base64url, 32 chars) can never be
+-- matched again: null it, so the dashboard offers "resend" instead of showing
+-- a link that silently never confirms. Already-hashed rows are untouched.
+UPDATE oauth_clients
+   SET email_token = NULL,
+       email_token_expires_at = NULL
+ WHERE email_token IS NOT NULL
+   AND email_token !~ '^[0-9a-f]{64}$';
+
+-- ─── AP5 (Welle 2): drop the workload-identity table ────────────────────────
+-- server/workload-identity.js was removed in this review wave, so nothing
+-- reads or writes `workload_identities` any more. The table holds only
+-- bindings (provider, repository, operator_id) — no user data that would have
+-- to be preserved, and a binding is re-created by one API call.
+--
+-- migration-phase-6-workload-identity.sql deliberately STAYS in the chain:
+-- the ledger (schema_migrations) must keep recording the history a database
+-- actually went through, and a fresh install still replays phase 6 before
+-- this file drops the table again. The drop lives here, in the OPERATOR
+-- section, so the server never does it on its own at boot.
+DROP TABLE IF EXISTS workload_identities;
+
+-- ─── AP6-08: table ownership ────────────────────────────────────────────────
+-- Not part of this file (it needs superuser rights): see
+-- server/sql/ownership-hhttps.sql, which install-pg.sh and scripts/deploy-all.sh
+-- run as postgres before the migration chain.

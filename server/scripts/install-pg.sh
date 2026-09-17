@@ -69,20 +69,64 @@ sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_
 sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL ON SCHEMA public TO ${DB_USER};" >/dev/null
 ok "Berechtigungen erteilt"
 
-# 6. Apply the full migration chain (AP6-01: schema.sql alone leaves the DB
+ENV_FILE="${INSTALL_DIR}/.env"
+
+# Read ONE key from the .env as data. Never `source` it (AP6-17 / #118):
+# unquoted values with spaces would be executed as commands and every secret
+# would end up exported into this shell (and into everything it starts).
+env_get() {
+  local line value
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?${1}[[:space:]]*=" "${ENV_FILE}" 2>/dev/null | tail -1 || true)"
+  [[ -z "${line}" ]] && return 0
+  value="${line#*=}"
+  value="${value%$'\r'}"
+  value="${value#"${value%%[![:space:]]*}"}"
+  case "${value}" in
+    \"*) value="${value#\"}"; value="${value%%\"*}" ;;
+    \'*) value="${value#\'}"; value="${value%%\'*}" ;;
+    *)   value="${value%%[[:space:]]#*}"
+         value="${value%"${value##*[![:space:]]}"}" ;;
+  esac
+  printf '%s' "${value}"
+}
+
+# 6. Repair object ownership (AP6-08 / #85). Older installs applied the schema
+#    through a silent `sudo -u postgres` fallback, which left postgres as the
+#    owner of every table; the app user then failed on the boot DDL with
+#    "must be owner of table". Idempotent, a no-op on a clean install. Runs as
+#    postgres, errors are NOT suppressed.
+OWNERSHIP_FILE="${INSTALL_DIR}/sql/ownership-hhttps.sql"
+if [[ -f "${OWNERSHIP_FILE}" ]]; then
+  sudo -u postgres psql -d "${DB_NAME}" -v ON_ERROR_STOP=1 -v owner_role="${DB_USER}" -q \
+    -f "${OWNERSHIP_FILE}" >/dev/null \
+    || { err "Ownership-Reparatur fehlgeschlagen — siehe Fehler oben"; exit 1; }
+  ok "Objekt-Eigentümer: ${DB_USER}"
+else
+  warn "Ownership-Datei fehlt: ${OWNERSHIP_FILE}"
+fi
+
+# 7. Apply the full migration chain (AP6-01: schema.sql alone leaves the DB
 #    without authorization_codes & Co. and the server refuses to boot).
 #    scripts/migrate.js keeps a ledger (schema_migrations) and is idempotent.
+#    It always runs AS THE APP USER — there is deliberately no superuser
+#    fallback (AP6-08): that fallback made postgres the owner of everything
+#    while this script still reported success.
 if [[ ! -f "${INSTALL_DIR}/scripts/migrate.js" ]]; then
   err "Migrationsläufer nicht gefunden: ${INSTALL_DIR}/scripts/migrate.js"
   exit 1
 fi
+MIGRATE_PW="${DB_PASSWORD}"
+[[ -n "${MIGRATE_PW}" ]] || MIGRATE_PW="$(env_get DB_PASSWORD)"
+if [[ -z "${MIGRATE_PW}" ]]; then
+  err "DB_PASSWORD unbekannt (weder neu gesetzt noch in ${ENV_FILE}) — Skript erneut starten und 'Passwort neu setzen? y' wählen"
+  exit 1
+fi
 (cd "${INSTALL_DIR}" && \
-  DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${DB_PASSWORD:-}" \
+  DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${MIGRATE_PW}" \
   node scripts/migrate.js) || { err "Migration fehlgeschlagen"; exit 1; }
-ok "Migrationen angewendet (schema.sql + Phasen 2.5 … 9)"
+ok "Migrationen angewendet als ${DB_USER} (schema.sql + Phasen 2.5 … 10)"
 
-# 7. Update .env (only if we set a new password)
-ENV_FILE="${INSTALL_DIR}/.env"
+# 8. Update .env (only if we set a new password)
 if [[ -n "${DB_PASSWORD}" ]]; then
   if [[ -f "${ENV_FILE}" ]]; then
     # Remove old DB_* lines
@@ -103,7 +147,7 @@ EOF
   ok ".env aktualisiert mit DB-Credentials"
 fi
 
-# 8. Verify
+# 9. Verify
 TABLES=$(sudo -u postgres psql -d "${DB_NAME}" -tAc \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public'")
 ok "Verifikation: ${TABLES} Tabellen in ${DB_NAME}"

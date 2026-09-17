@@ -103,8 +103,9 @@ CREATE INDEX IF NOT EXISTS revoked_tokens_revoked_at_idx ON revoked_tokens(revok
 
 -- ─── Email verifications (15-min TTL) ───────────────────────────────────────
 CREATE TABLE IF NOT EXISTS email_verifications (
-  token              TEXT PRIMARY KEY,
-  email              TEXT NOT NULL,
+  token              TEXT PRIMARY KEY,            -- sha256 of the magic-link token
+  code               TEXT,                        -- sha256 of the 6-digit code (AP6-06)
+  email              TEXT NOT NULL,               -- sha256 of the lowercased address
   domain             TEXT NOT NULL,
   level              TEXT,
   trust_bonus        INT,
@@ -116,7 +117,9 @@ CREATE TABLE IF NOT EXISTS email_verifications (
 );
 
 CREATE INDEX IF NOT EXISTS email_verifications_expires_at_idx ON email_verifications(expires_at);
-CREATE INDEX IF NOT EXISTS email_verifications_email_idx      ON email_verifications(email);
+-- AP6-03: consume/invalidate filter on session_id; `email` holds a sha256 and
+-- is never used as a lookup key.
+CREATE INDEX IF NOT EXISTS email_verifications_session_id_idx ON email_verifications(session_id);
 
 -- ─── Role declarations (persistent user → role mapping) ─────────────────────
 CREATE TABLE IF NOT EXISTS roles_declared (
@@ -189,30 +192,39 @@ INSERT INTO stats (metric, value) VALUES
 ON CONFLICT (metric) DO NOTHING;
 
 -- ─── Cleanup function (called every 5 minutes by application) ───────────────
--- Review 2026-09 Welle 2 (AP1-34 / AP1-35): revoked_tokens and
--- webhook_deliveries get a retention. A revoked jti is meaningless once the
--- longest token it could belong to (REFRESH_TTL, 7 d) has expired — 8 days
--- keeps a safety margin; delivery audit rows are kept for 30 days.
--- The return signature changed (two new columns), hence DROP + CREATE (Postgres
--- refuses CREATE OR REPLACE with a different RETURNS TABLE). Existing
--- installations: sql/migration-phase-10-review-welle-2.sql (same body).
-DROP FUNCTION IF EXISTS cleanup_expired();
-CREATE FUNCTION cleanup_expired() RETURNS TABLE(
+CREATE OR REPLACE FUNCTION cleanup_expired() RETURNS TABLE(
   deleted_tokens INT, deleted_refresh INT, deleted_sessions INT,
   deleted_challenges INT, deleted_emails INT,
-  deleted_revoked INT, deleted_webhook_deliveries INT
+  deleted_revoked INT, deleted_webhook_deliveries INT, deleted_stale_clients INT
 ) AS $$
 DECLARE
-  t INT; r INT; s INT; c INT; e INT; v INT; w INT;
+  t INT; r INT; s INT; c INT; e INT; v INT; w INT; p INT;
 BEGIN
   DELETE FROM tokens             WHERE expires_at < NOW();           GET DIAGNOSTICS t = ROW_COUNT;
   DELETE FROM refresh_tokens     WHERE expires_at < NOW();           GET DIAGNOSTICS r = ROW_COUNT;
   DELETE FROM sessions           WHERE expires_at < NOW();           GET DIAGNOSTICS s = ROW_COUNT;
   DELETE FROM challenges         WHERE expires_at < NOW();           GET DIAGNOSTICS c = ROW_COUNT;
-  DELETE FROM email_verifications WHERE expires_at < NOW() AND used = FALSE;  GET DIAGNOSTICS e = ROW_COUNT;
-  DELETE FROM revoked_tokens     WHERE revoked_at < NOW() - INTERVAL '8 days';     GET DIAGNOSTICS v = ROW_COUNT;
-  DELETE FROM webhook_deliveries WHERE delivered_at < NOW() - INTERVAL '30 days';  GET DIAGNOSTICS w = ROW_COUNT;
-  RETURN QUERY SELECT t, r, s, c, e, v, w;
+  -- AP6-03: expired rows go regardless of `used` (both consume paths require
+  -- expires_at > NOW(), so an expired row can never be redeemed); consumed
+  -- rows are kept for 24 h so an operator can still inspect a fresh sign-in.
+  DELETE FROM email_verifications
+   WHERE expires_at < NOW()
+      OR (used = TRUE AND created_at < NOW() - INTERVAL '24 hours');
+  GET DIAGNOSTICS e = ROW_COUNT;
+  -- AP1 (Welle 2): the revocation list was "permanent". A jti is only ever
+  -- checked while the token could still be presented, so 90 days is far past
+  -- the longest token lifetime.
+  DELETE FROM revoked_tokens     WHERE revoked_at < NOW() - INTERVAL '90 days';
+  GET DIAGNOSTICS v = ROW_COUNT;
+  -- AP1 (Welle 2): the delivery log is an audit trail, not storage.
+  DELETE FROM webhook_deliveries WHERE delivered_at < NOW() - INTERVAL '30 days';
+  GET DIAGNOSTICS w = ROW_COUNT;
+  -- AP5-29: platform drafts whose contact address was never confirmed.
+  DELETE FROM oauth_clients
+   WHERE verification_status = 'email_pending'
+     AND email_token_expires_at < NOW() - INTERVAL '7 days';
+  GET DIAGNOSTICS p = ROW_COUNT;
+  RETURN QUERY SELECT t, r, s, c, e, v, w, p;
 END;
 $$ LANGUAGE plpgsql;
 
