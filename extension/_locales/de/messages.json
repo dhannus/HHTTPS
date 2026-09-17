@@ -125,11 +125,8 @@
   "badgeTitleLoggedOut": {
     "message": "HHTTPS — Nicht eingeloggt. Klick zum Verifizieren."
   },
-  "ctxSignAlpha": {
-    "message": "Mit HHTTPS signieren (Identität)"
-  },
-  "ctxSignBeta": {
-    "message": "Mit HHTTPS signieren (Identität + Text)"
+  "ctxSign": {
+    "message": "Mit HHTTPS signieren"
   },
   "errNoIdentityStored": {
     "message": "Keine Identität gespeichert"

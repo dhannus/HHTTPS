@@ -1,5 +1,5 @@
 /**
- * HHTTPS Extension Popup v1.2.0
+ * HHTTPS Extension Popup
  *
  * Identity-first: show the user's verified identity prominently,
  * page state secondarily. Provides actions: refresh, copy token,
@@ -61,6 +61,11 @@ async function init() {
 
   // Sign-mode preference: load current, persist on change
   await initSignModeSwitch();
+
+  // AP8-48 (#249): the version was hard-coded in six places and stale in five.
+  // The manifest is the only source now.
+  const v = el('version');
+  if (v) v.textContent = 'v' + chrome.runtime.getManifest().version;
 }
 
 async function initSignModeSwitch() {

@@ -1,5 +1,5 @@
 /**
- * HHTTPS Extension — Universal Content Script v1.4.0
+ * HHTTPS Extension — Universal Content Script
  *
  * Phase 2.5: Slug-based signatures with domain binding.
  *
@@ -21,6 +21,14 @@
 
 (function () {
   'use strict';
+
+  // AP8-22 (#249): the content script used to log slug lists and page details
+  // into every visited page's console. Set `localStorage.hhttpsDebug = '1'` on
+  // a page to get them back while debugging.
+  const DEBUG = (() => {
+    try { return localStorage.getItem('hhttpsDebug') === '1'; } catch (e) { return false; }
+  })();
+  const debug = (...a) => { if (DEBUG) console.log('[HHTTPS]', ...a); };
 
   // ─── Instance marker (AP8-24) ────────────────────────────────────────────
   // The manifest injects this script into EVERY frame (all_frames +
@@ -77,14 +85,19 @@
   let scanCount = { slug: 0, legacy: 0 };
   let lastFocusedEditable = null;
 
-  // ─── Page state reading (carried over) ───────────────────────────────────
-  let lastReportedSig = null;
-  function reportPageState(state) {
+  // ─── Page state reading ──────────────────────────────────────────────────
+  // AP8-45 (#240): the state used to be pushed to the service worker as
+  // PAGE_STATE and cached there per tab — which nothing read, because the
+  // popup asks this tab directly (GET_PAGE_STATE). It is kept here instead.
+  // The fetch/XHR header sniffer that used to feed it was removed with it: a
+  // content script lives in the isolated world and never sees the page's own
+  // requests, so it only ever observed our own fetch.
+  // AP8-19 (#167): what is left comes from the page's <meta> tags, which is a
+  // CLAIM (claimed: true) and must be rendered as such by the popup.
+  let pageState = null;
+  function setPageState(state) {
     if (!state || !state.status) return;
-    const sig = JSON.stringify(state);
-    if (sig === lastReportedSig) return;
-    lastReportedSig = sig;
-    try { chrome.runtime.sendMessage({ type: 'PAGE_STATE', state }); } catch (e) {}
+    pageState = state;
   }
   function readMetaTags() {
     const m = (n) => {
@@ -147,7 +160,7 @@
       }
     }
     if (slugs.size > 0) {
-      console.log('[HHTTPS] found slugs to verify:', Array.from(slugs), 'to fetch:', slugsToFetch.length);
+      debug('found slugs to verify:', slugs.size, '· to fetch:', slugsToFetch.length);
     }
     if (slugsToFetch.length > 0) {
       batchVerifySlugs(slugsToFetch).catch((e) => console.warn('[HHTTPS] batch failed:', e));
@@ -557,7 +570,7 @@
       }
       const data = await r.json();
       const results = data.results || {};
-      console.log('[HHTTPS] batch verify response:', Object.keys(results).length, 'results');
+      debug('batch verify response:', Object.keys(results).length, 'results');
       for (const [slug, result] of Object.entries(results)) {
         slugCache.set(slug, { data: result, fetchedAt: Date.now() });
         // Update pending seals in main doc AND in accessible iframes
@@ -576,33 +589,6 @@
     }
   }
 
-  // Collect surrounding text for a slug occurrence (for text tampering check).
-  // Looks in the main document and all accessible iframes — the marker often
-  // lives in an email body iframe etc.
-  function collectContextForSlug(slug) {
-    const needle = `#hhttps:s:${slug}`;
-    const searchTexts = [document.body?.innerText || ''];
-    try {
-      const iframes = document.querySelectorAll('iframe');
-      for (const iframe of iframes) {
-        try {
-          const body = iframe.contentDocument?.body;
-          if (body) searchTexts.push(body.innerText || '');
-        } catch (e) { /* cross-origin */ }
-      }
-    } catch (e) {}
-
-    for (const allText of searchTexts) {
-      const idx = allText.indexOf(needle);
-      if (idx < 0) continue;
-      const start = Math.max(0, idx - 200);
-      const end   = Math.min(allText.length, idx + 200);
-      const windowText = allText.slice(start, end);
-      return windowText.replace(new RegExp(`#hhttps:s:${slug}`, 'g'), '').trim();
-    }
-    return null;
-  }
-
   // ─── HTML escape + date format ───────────────────────────────────────────
   function escapeHtml(s) {
     if (s == null) return '';
@@ -614,7 +600,7 @@
     if (!iso) return '';
     try {
       const d = new Date(iso);
-      return d.toLocaleDateString('de-DE', { day: '2-digit', month: 'short', year: 'numeric' });
+      return d.toLocaleDateString(chrome.i18n.getUILanguage(), { day: '2-digit', month: 'short', year: 'numeric' });
     } catch (e) { return iso; }
   }
 
@@ -889,8 +875,7 @@
       // wins over the page's own <meta> tags — the meta tags used to be
       // preferred, so a page could overrule its own server.
       const meta = readMetaTags();
-      const reported = lastReportedSig ? JSON.parse(lastReportedSig) : null;
-      const base = (reported && reported.status) ? reported
+      const base = (pageState && pageState.status) ? pageState
                  : (meta.status ? meta : { status: 'none' });
       sendResponse({
         ...base,
@@ -972,51 +957,12 @@
     setTimeout(() => t.remove(), 3500);
   }
 
-  // ─── Fetch/XHR header sniffer (passive) ──────────────────────────────────
-  function extractHeaders(getter) {
-    return {
-      status: getter('HHTTPS-Status'), human: getter('HHTTPS-Human'),
-      role: getter('HHTTPS-Role'), roleLabel: getter('HHTTPS-Role-Label'),
-      roleIcon: getter('HHTTPS-Role-Icon'),
-      trustScore: getter('HHTTPS-Trust-Score'),
-      method: getter('HHTTPS-Method'), issuer: getter('HHTTPS-Issuer'),
-      version: getter('HHTTPS-Protocol-Version'),
-      // Response headers come from the origin's server, not from page markup
-      // (AP8-19 / #167) — still not cryptographically checked, but not
-      // injectable from the document itself.
-      source: 'header', claimed: false
-    };
-  }
-  const origFetch = window.fetch;
-  if (origFetch) {
-    window.fetch = async function (...args) {
-      const r = await origFetch.apply(this, args);
-      try {
-        const c = r.clone();
-        const state = extractHeaders(h => c.headers.get(h));
-        if (state.status) reportPageState(state);
-      } catch (e) {}
-      return r;
-    };
-  }
-  const X = XMLHttpRequest.prototype;
-  const origSend = X.send;
-  X.send = function (...args) {
-    this.addEventListener('load', () => {
-      try {
-        const state = extractHeaders(h => this.getResponseHeader(h));
-        if (state.status) reportPageState(state);
-      } catch (e) {}
-    });
-    return origSend.apply(this, args);
-  };
-
   // ─── Boot ────────────────────────────────────────────────────────────────
   function boot() {
     markOwnInstance();
     injectStyles();
     const meta = readMetaTags();
-    if (meta.status) reportPageState(meta);
+    if (meta.status) setPageState(meta);
     if (document.body) scanForSignatures(document.body);
     watchMutations();
   }

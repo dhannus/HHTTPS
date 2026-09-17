@@ -11,12 +11,21 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { storableRefreshToken, resolveReturnTo }
+  from '../../public/js/signin/identity.js';
+// AP8-47 (#246): the extension's pure logic moved into extension/lib/identity.js
+// so it can be imported instead of cut out of the service worker with a regex.
+import { computeIdentityId, applyRefresh } from '../../../extension/lib/identity.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '../../..');
 const read = (rel) => readFileSync(join(repo, rel), 'utf8');
 
 const SIGNIN    = read('server/public/index.html');
+// AP8-34 (#215): the sign-in page's script now lives in ES modules under
+// public/js/signin/. Findings about its LOGIC read (or import) those modules;
+// findings about the MARKUP keep reading index.html.
+const SIGNIN_JS = read('server/public/js/signin/app.js');
 const LANDING   = read('sites/hhttps.html');
 const BG        = read('extension/background.js');
 const CONTENT   = read('extension/content-universal.js');
@@ -70,17 +79,11 @@ test('AP8-04: storeIdentity() returns the enriched identity and the caller sched
     'the raw page object (which has no id) is not scheduled any more');
 });
 
-/** computeIdentityId() + its decodeJwtPayload() dependency, executed for real. */
-function loadComputeIdentityId() {
-  const src = `${fnSource(BG, 'decodeJwtPayload')}\n${fnSource(BG, 'computeIdentityId')}\nreturn computeIdentityId;`;
-  return new Function(src)();
-}
 const jwt = (payload) =>
   'eyJhbGciOiJIUzI1NiJ9.' +
   Buffer.from(JSON.stringify(payload)).toString('base64url') + '.sig';
 
 test('AP8-05: human and machine identities no longer collapse onto one id', () => {
-  const computeIdentityId = loadComputeIdentityId();
   const human = {
     issuer: 'hhttps://hhttps.org', role: null,
     token: jwt({ sub: 'human-verified', actorType: 'human', userId: 'u-123' })
@@ -106,37 +109,38 @@ test('AP8-05: human and machine identities no longer collapse onto one id', () =
 
 // ── AP8-06 (#90): a consumed e-mail code is not re-sent ────────────────────
 test('AP8-06: machineRun() confirms the code once and shows the server detail', () => {
-  const js = scriptText(SIGNIN);
-  const run = fnSource(js, 'machineRun');
-  assert.match(run, /if\(MACHINE_STEP==='code'\)\{/,
+  const run = fnSource(SIGNIN_JS, 'machineRun');
+  assert.match(run, /if \(MACHINE_STEP === 'code'\) \{/,
     'confirm-code only runs while the step is still "code"');
-  assert.match(run, /MACHINE_STEP='confirmed'/,
+  assert.match(run, /MACHINE_STEP = 'confirmed'/,
     'a successful confirm-code advances the step');
-  assert.doesNotMatch(run, /if\(!r\.ok\)throw 0/,
+  assert.doesNotMatch(run, /if \(!r\.ok\) throw 0/,
     'register/token failures no longer throw away the server answer');
-  assert.match(run, /d\.detail\|\|d\.error/,
+  assert.match(run, /d\.detail \|\| d\.error/,
     'the server error detail is surfaced');
 });
 
 // ── AP8-07 (#98): polling with terminal states, backoff, no double start ───
 test('AP8-07: one poller with terminal states, growing interval and a generation counter', () => {
-  const js = scriptText(SIGNIN);
-  const poll = fnSource(js, 'pollStatus');
-  assert.match(poll, /POLL_GEN\[kind\]!==gen/, 'a newer run cancels the older one');
-  assert.match(poll, /d\.status==='failed'\|\|d\.status==='expired'/, 'failed/expired end the loop');
-  assert.match(poll, /r\.status>=400/, 'an HTTP error ends the loop');
+  // The loop itself is exercised for real in signin-page.test.mjs (poll.js is
+  // imported and driven with a stub clock); here only the wiring is checked.
+  const poll = read('server/public/js/signin/poll.js');
+  assert.match(poll, /generations\[kind\] !== gen/, 'a newer run cancels the older one');
+  assert.match(poll, /d\.status === 'failed' \|\| d\.status === 'expired'/, 'failed/expired end the loop');
+  assert.match(poll, /r\.status >= 400/, 'an HTTP error ends the loop');
   assert.match(poll, /document\.hidden/, 'a hidden tab does not burn the poll budget');
-  assert.match(poll, /delay=Math\.min\(/, 'the interval grows (backoff)');
+  assert.match(poll, /Math\.min\(/, 'the interval grows (backoff)');
   assert.match(poll, /poll\.timeout/, 'the budget running out is reported');
 
   for (const fn of ['pollEudi', 'pollAge', 'pollGithub']) {
-    const body = fnSource(js, fn);
-    assert.match(body, /return pollStatus\(/, `${fn}() delegates to the shared poller`);
-    assert.doesNotMatch(body, /for\(let i=0;i<80;i\+\+\)/, `${fn}() has no hand-rolled loop left`);
+    const body = fnSource(SIGNIN_JS, fn);
+    assert.match(body, /return poller\.poll\(/, `${fn}() delegates to the shared poller`);
+    assert.doesNotMatch(body, /for \(let/, `${fn}() has no hand-rolled loop left`);
   }
   assert.match(SIGNIN, /id="githubHint"/, 'the GitHub panel has a hint element to report into');
+  const i18n = read('server/public/js/signin/i18n.js');
   for (const key of ['poll.failed', 'poll.expired', 'poll.timeout']) {
-    assert.ok(SIGNIN.split(`'${key}'`).length - 1 >= 2, `'${key}' is translated in both languages`);
+    assert.ok(i18n.split(`'${key}'`).length - 1 >= 2, `'${key}' is translated in both languages`);
   }
 });
 
@@ -176,9 +180,13 @@ function loadResolveReturnTo(html) {
   return new Function(src)();
 }
 
-for (const [name, html] of [['sign-in page', SIGNIN], ['landing page', LANDING]]) {
+for (const [name, load] of [
+  // AP8-34 (#215): the sign-in page uses the shared helper from identity.js.
+  ['sign-in page', () => resolveReturnTo],
+  ['landing page', () => loadResolveReturnTo(LANDING)]
+]) {
   test(`AP8-17: ${name} only accepts a same-origin returnTo`, () => {
-    const resolveReturnTo = loadResolveReturnTo(html);
+    const resolveReturnTo = load();
     const origin = 'https://hhttps.org';
 
     // Accepted: relative paths and same-origin absolute URLs.
@@ -205,8 +213,7 @@ for (const [name, html] of [['sign-in page', SIGNIN], ['landing page', LANDING]]
 }
 
 test('AP8-17: no page redirects to the raw returnTo parameter any more', () => {
-  for (const [name, html] of [['sign-in page', SIGNIN], ['landing page', LANDING]]) {
-    const js = scriptText(html);
+  for (const [name, js] of [['sign-in page', SIGNIN_JS], ['landing page', scriptText(LANDING)]]) {
     assert.doesNotMatch(js, /window\.location\.href\s*=\s*returnTo\b/,
       `${name} never assigns the unvalidated returnTo`);
   }
@@ -216,10 +223,10 @@ test('AP8-17: no page redirects to the raw returnTo parameter any more', () => {
 test('AP8-19: meta-derived page state is marked as claimed and rendered neutrally', () => {
   const meta = fnSource(CONTENT, 'readMetaTags');
   assert.match(meta, /claimed:\s*true/, 'meta tags are flagged as a claim');
-  const headers = CONTENT.match(/extractHeaders[\s\S]{0,900}?claimed:\s*false/);
-  assert.ok(headers, 'the header-derived state is flagged as not-claimed');
-  assert.match(CONTENT, /const base = \(reported && reported\.status\) \? reported/,
-    'the server-sent state wins over the page\'s own meta tags');
+  // AP8-45 (#240): the header-derived path went away with the fetch/XHR
+  // sniffer, which could never see a page request from the isolated world.
+  // The <meta> claim is now the only source, and it stays a CLAIM.
+  assert.doesNotMatch(CONTENT, /claimed:\s*false/, 'nothing pretends to be verified any more');
   assert.match(POPUP, /if \(state\.claimed\)/, 'the popup branches on the claim flag');
   assert.match(POPUP, /pageClaimsSupport/, 'a claimed state gets the neutral wording');
   const verified = POPUP.match(/state\.status === 'verified'[\s\S]{0,200}/);
@@ -230,20 +237,26 @@ test('AP8-19: meta-derived page state is marked as claimed and rendered neutrall
     assert.ok(msgs.sealUnavailable?.message,   `sealUnavailable is translated (${lang})`);
   }
 });
-
 // ── AP8-20 (#173): the refresh token never leaves the issuer origin ────────
-for (const [name, html] of [['sign-in page', SIGNIN], ['landing page', LANDING]]) {
+function landingStorableRefreshToken(host) {
+  const js = scriptText(LANDING);
+  const hosts = js.match(/const ISSUER_HOSTS=\[[^\]]*\];/);
+  assert.ok(hosts, 'the issuer host list is defined');
+  const factory = new Function('window', `
+    ${hosts[0]}
+    ${fnSource(js, 'isIssuerOrigin')}
+    ${fnSource(js, 'storableRefreshToken')}
+    return storableRefreshToken;`);
+  return factory({ location: { hostname: host } });
+}
+for (const [name, on, publisher] of [
+  // AP8-34 (#215) / AP8-36 (#223): the sign-in page takes the host as an
+  // argument instead of reading window.location itself.
+  ['sign-in page', (host) => (tok, exp) => storableRefreshToken(tok, exp, host), () => SIGNIN_JS],
+  ['landing page', landingStorableRefreshToken, () => scriptText(LANDING)]
+]) {
   test(`AP8-20: ${name} stores a refresh token only on the issuer origin`, () => {
-    const js = scriptText(html);
-    // isIssuerOrigin() reads window.location.hostname — provide a stub.
-    const hosts = js.match(/const ISSUER_HOSTS=\[[^\]]*\];/);
-    assert.ok(hosts, 'the issuer host list is defined');
-    const factory = new Function('window', `
-      ${hosts[0]}
-      ${fnSource(js, 'isIssuerOrigin')}
-      ${fnSource(js, 'storableRefreshToken')}
-      return storableRefreshToken;`);
-    const on = (host) => factory({ location: { hostname: host } });
+    const js = publisher();
 
     assert.equal(on('hhttps.org')('rt-1', null), 'rt-1', 'kept on the issuer origin');
     assert.equal(on('localhost')('rt-1', null), 'rt-1', 'kept in local development');
@@ -252,7 +265,7 @@ for (const [name, html] of [['sign-in page', SIGNIN], ['landing page', LANDING]]
       'an already expired refresh token is dropped');
     assert.equal(on('hhttps.org')(null, null), null, 'no token, no storage');
 
-    assert.match(js, /refreshToken:\s*storableRefreshToken\(/,
+    assert.match(js, /(?:refreshToken:|=)\s*storableRefreshToken\(/,
       'publishIdentity() runs the refresh token through the guard');
   });
 }
@@ -318,29 +331,34 @@ test('AP8-27: a failed batch is cached and the seals leave the pending state', (
 
 // ── AP3-18 (#116): the refresh token rotates — the client has to keep it ───
 test('AP3-18: the silent refresh adopts the rotated refresh token', () => {
-  const js = scriptText(SIGNIN);
-  const restore = fnSource(js, 'restoreIdentity');
-  assert.match(restore, /identity\.token=d\.token/, 'the new access token is stored');
-  assert.match(restore, /if\(d\.refreshToken\)\{/,
+  const restore = fnSource(SIGNIN_JS, 'restoreIdentity');
+  assert.match(restore, /identity\.token = d\.token/, 'the new access token is stored');
+  assert.match(restore, /if \(d\.refreshToken\) \{/,
     'the answer is checked for a rotated refresh token');
-  assert.match(restore, /identity\.refreshToken=storableRefreshToken\(d\.refreshToken/,
+  assert.match(restore, /identity\.refreshToken = storableRefreshToken\(d\.refreshToken/,
     'the rotated refresh token replaces the used one (through the AP8-20 guard)');
-  assert.match(restore, /identity\.refreshExpiresAt=d\.refreshExpiresAt/,
+  assert.match(restore, /identity\.refreshExpiresAt = d\.refreshExpiresAt/,
     'the new refresh expiry is carried over, so canRefresh stays correct');
   // The store must happen AFTER the refresh token was updated, otherwise the
   // invalidated one is persisted and the next refresh trips reuse detection.
-  const rotateAt = restore.indexOf('identity.refreshToken=storableRefreshToken(');
-  const storeAt  = restore.indexOf("localStorage.setItem('hhttps_identity'", rotateAt);
+  const rotateAt = restore.indexOf('identity.refreshToken = storableRefreshToken(');
+  const storeAt  = restore.indexOf('localStorage.setItem(STORAGE_KEY', rotateAt);
   assert.ok(rotateAt > 0 && storeAt > rotateAt, 'localStorage is written after the rotation');
 });
 
 // The extension refreshes on its own schedule — same requirement there.
 test('AP3-18: the extension keeps the rotated refresh token too', () => {
-  const refresh = fnSource(BG, 'refreshIdentity');
-  assert.match(refresh, /refreshToken:\s*data\.refreshToken \|\| ident\.refreshToken/,
-    'a rotated refresh token replaces the stored one');
-  assert.match(refresh, /refreshExpiresAt:\s*data\.refreshExpiresAt \|\| ident\.refreshExpiresAt/,
-    'the new refresh expiry is carried over');
+  // AP8-47 (#246): the merge is applyRefresh() in extension/lib/identity.js now,
+  // so it is called here instead of being matched as source text.
+  const ident = { token: 'old', refreshToken: 'r-old', refreshExpiresAt: '2030-01-01T00:00:00Z' };
+  const rotated = applyRefresh(ident, { token: 'new', refreshToken: 'r-new',
+    refreshExpiresAt: '2030-06-01T00:00:00Z' });
+  assert.equal(rotated.refreshToken, 'r-new', 'a rotated refresh token replaces the stored one');
+  assert.equal(rotated.refreshExpiresAt, '2030-06-01T00:00:00Z', 'the new refresh expiry is carried over');
+  assert.equal(applyRefresh(ident, { token: 'new' }).refreshToken, 'r-old',
+    'without rotation the stored one survives');
+  assert.match(fnSource(BG, 'refreshIdentity'), /applyRefresh\(ident, data\)/,
+    'the service worker goes through it');
 });
 
 // The landing page has no refresh path of its own — it must not grow one
@@ -350,35 +368,8 @@ test('AP3-18: the landing page does not call /hhttps/token/refresh', () => {
     'sites/hhttps.html has no refresh logic that could drop the rotated token');
 });
 
-// ── AP1-06 (client side): the card issuer's reserved-profession matching ────
-// server/public/iamhmn-card-issuer.js keeps its own copy of the reserved
-// stems. It used a plain includes() and therefore produced exactly the false
-// positives that were fixed server side in roles.taxonomy.js: English words
-// now match on word boundaries, German compounds still as substrings, a short
-// exclusion list is blanked out first and the longest match wins.
-test('AP1-06: the card issuer matches reserved professions like the server does', () => {
-  const src = read('server/public/iamhmn-card-issuer.js');
-  const head = src.slice(0, src.indexOf('const T = {'));
-  assert.doesNotMatch(head, /RESERVED_STEMS\.find\(st=>n\.includes\(st\)\)/,
-    'the naive includes() matcher is gone');
-  const reservedHit = new Function(`${head}\nreturn reservedHit;`)();
-
-  for (const reserved of [
-    'Ärztin', 'Fachärztin für Innere Medizin', 'Rechtsanwältin', 'Krankenpfleger',
-    'Altenpflegerin', 'Staatsanwältin', 'Notar', 'Polizistin', 'Richterin',
-    'nurse', 'Registered Nurse', 'judge', 'police officer', 'attorney at law'
-  ]) {
-    assert.ok(reservedHit(reserved), `reserved: ${reserved}`);
-  }
-
-  for (const free of [
-    'nursery teacher', 'doctoral student', 'Tierpfleger', 'Tischler',
-    'carpenter', 'software developer', 'Einrichter', ''
-  ]) {
-    assert.equal(reservedHit(free), null, `not reserved: ${free}`);
-  }
-
-  // Longest match wins — the same tie-break the server uses.
-  assert.equal(reservedHit('Staatsanwältin'), 'staatsanwaelt', 'prosecutor beats "anwaelt"');
-  assert.equal(reservedHit('Notarzt'), 'notarzt', 'emergency doctor beats "notar"');
-});
+// AP8-37 (#226): the client-side reserved-profession matcher used to live in
+// server/public/iamhmn-card-issuer.js — a web component that nothing ever
+// loaded. The file was deleted in review wave 3; the sign-in page relies on
+// the `reserved` flag that GET /hhttps/esco/suggest returns, so the server's
+// roles.taxonomy.js matcher (covered by its own tests) is the only one left.

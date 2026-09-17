@@ -16,7 +16,13 @@
 (function () {
   'use strict';
 
-  console.log('[HHTTPS Extension] Issuer content script active on', location.host);
+  // AP8-22 (#249): debug logging is opt-in per page
+  // (`localStorage.hhttpsDebug = '1'`), like in content-universal.js.
+  const DEBUG = (() => {
+    try { return localStorage.getItem('hhttpsDebug') === '1'; } catch { return false; }
+  })();
+  const debug = (...a) => { if (DEBUG) console.log('[HHTTPS Extension]', ...a); };
+  debug('issuer content script active on', location.host);
 
   // ─── 1) Live capture via postMessage ─────────────────────────────────────
   window.addEventListener('message', (event) => {
@@ -25,8 +31,8 @@
     if (!event.data || event.data.source !== 'hhttps-org') return;
 
     if (event.data.type === 'identity-issued' && event.data.payload?.token) {
-      console.log('[HHTTPS Extension] Identity captured via postMessage');
-      forwardToBackground(event.data.payload);
+      debug('identity captured via postMessage');
+      forwardToBackground(event.data.payload, 'postMessage');
     }
   });
 
@@ -37,8 +43,8 @@
     if (raw) {
       const identity = JSON.parse(raw);
       if (identity?.token) {
-        console.log('[HHTTPS Extension] Identity found in localStorage');
-        forwardToBackground(identity);
+        debug('identity found in localStorage');
+        forwardToBackground(identity, 'storage');
       }
     }
   } catch (e) {
@@ -46,7 +52,9 @@
   }
 
   // ─── Forward to background service worker ────────────────────────────────
-  function forwardToBackground(identity) {
+  // `source` is 'postMessage' (a token was JUST issued on this page) or
+  // 'storage' (an identity from an earlier visit, picked up on load).
+  function forwardToBackground(identity, source) {
     try {
       chrome.runtime.sendMessage(
         { type: 'IDENTITY_CAPTURED', identity },
@@ -56,9 +64,9 @@
             // will be re-attempted on next page load
             return;
           }
-          if (response?.ok) {
+          if (response?.ok && source === 'postMessage') {
             // Small subtle indicator that the extension picked up the identity
-            // (only shown on hhttps.org so it doesn't clutter other pages)
+            // (only shown on hhttps.org so it doesn't clutter other pages).
             showCapturedToast(identity);
           }
         }
@@ -69,12 +77,12 @@
   }
 
   function showCapturedToast(identity) {
-    // Don't show toast on initial load — only after explicit issuance
-    // (avoids "captured" message every single time the page loads)
-    if (!window.__hhttpsToastShown && document.readyState === 'complete') {
-      // skip on already-loaded page (would be the localStorage pickup)
-      return;
-    }
+    // Once per page, no matter how many identity-issued events arrive.
+    // AP8-52 (#249): whether this is a FRESH issuance is decided by the caller
+    // now (source === 'postMessage'). It used to be guessed from the document's
+    // load state, so the toast fired on a slow load and stayed silent on a fast
+    // one — the opposite of what the comment next to it claimed.
+    if (window.__hhttpsToastShown) return;
     window.__hhttpsToastShown = true;
 
     const t = document.createElement('div');
