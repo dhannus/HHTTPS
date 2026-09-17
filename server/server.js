@@ -3688,9 +3688,18 @@ function isLoopbackAddress(addr) {
   const a = String(addr || '');
   return a === '::1' || a === '::ffff:127.0.0.1' || a.startsWith('127.') || a.startsWith('::ffff:127.');
 }
+// A loopback peer alone is NOT enough behind a reverse proxy: nginx runs on
+// the same host, so an external request proxied to :3000 also arrives from
+// 127.0.0.1. nginx always appends `X-Forwarded-For`
+// (proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for), the in-process
+// verifier's direct fetch to http://127.0.0.1:3000 never sets it. Both
+// conditions together identify a genuinely internal call. The deploy also
+// blocks these three paths in nginx (`deny all`) — this is the second line.
 function requireInternalCaller(req, res, tag) {
-  if (!isLoopbackAddress(req.socket?.remoteAddress)) {
-    console.warn(`[${tag}] refused: non-loopback caller ${req.socket?.remoteAddress}`);
+  const peer = req.socket?.remoteAddress;
+  const forwarded = req.headers['x-forwarded-for'];
+  if (!isLoopbackAddress(peer) || forwarded) {
+    console.warn(`[${tag}] refused: caller ${peer}${forwarded ? ` via proxy (xff=${String(forwarded).slice(0, 64)})` : ''}`);
     res.status(403).json({ error: 'internal_endpoint' });
     return false;
   }

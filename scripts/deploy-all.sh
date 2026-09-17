@@ -325,6 +325,15 @@ server {
     }
     location = /spec.html { return 301 /spec; }
 
+    # AP4-27 (Review 2026-09): the three verifier endpoints are called ONLY by
+    # the in-process EUDI verifier over http://127.0.0.1:3000, which bypasses
+    # nginx entirely. Nothing from the outside has any business here — and a
+    # loopback check inside the app cannot tell an external proxied request
+    # apart on its own, because nginx runs on this very host.
+    location ~ ^/hhttps/(age/upgrade|age/direct|eid/upgrade)$ {
+        deny all;
+    }
+
     location ~ ^/hhttps/webauthn/ {
         limit_req zone=hhttps_webauthn burst=5 nodelay;
         proxy_pass http://127.0.0.1:3000;

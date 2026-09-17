@@ -125,9 +125,9 @@ test('AP4-27: the internal age upgrade needs a fresh, single-use nonce and a man
   const nonce = rnd(); const iat = Date.now();
   const body = { sessionId, ageOver: AGE_OVER, nonce, iat, assertion: ageAssertion(sessionId, nonce, iat) };
 
-  // The check reads the TCP peer, not req.ip — a forwarded header changes nothing.
-  const first = await srv.api('/hhttps/age/upgrade', { method: 'POST', body,
-    headers: { 'x-forwarded-for': '203.0.113.9' } });
+  // A genuinely internal call: loopback peer AND no X-Forwarded-For (the
+  // proxied variant is covered by the separate AP4-27 test at the end).
+  const first = await srv.api('/hhttps/age/upgrade', { method: 'POST', body });
   assert.equal(first.status, 200, first.text);
 
   const replay = await srv.api('/hhttps/age/upgrade', { method: 'POST', body });
@@ -178,4 +178,20 @@ test('AP4-07/AP4-29: documentProvided is strict, `human` mirrors the surface, th
   assert.ok(!JSON.stringify(claims).includes(userId), 'the userId appears nowhere in the card');
   assert.equal(claims.human, 'true',
     'AP4-07: an e-mail-verified session is human, even without a passkey');
+});
+
+// AP4-27 follow-up (Welle-2-Zusammenführung): a loopback peer alone does not
+// prove an internal caller — nginx sits on the same host. A request that
+// carries X-Forwarded-For came through the proxy and is refused.
+test('AP4-27: an X-Forwarded-For header marks the caller as external (403)', { skip }, async () => {
+  for (const path of ['/hhttps/age/upgrade', '/hhttps/age/direct', '/hhttps/eid/upgrade']) {
+    const r = await srv.api(path, {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '203.0.113.7' },
+      body: { sessionId: 'x', nonce: 'n', iat: Date.now(), assertion: 'a',
+              ageOver: { age_over_18: true } }
+    });
+    assert.equal(r.status, 403, `${path}: ${r.text}`);
+    assert.equal(r.json?.error, 'internal_endpoint');
+  }
 });

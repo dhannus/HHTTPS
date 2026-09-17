@@ -69,8 +69,32 @@ psql -U hhttps -d hhttps -c "SELECT name FROM schema_migrations ORDER BY name;"
 | Punkt | Aktion |
 |---|---|
 | `PAIRWISE_SECRET` **(Pflicht)** | Neu erzwungen: ohne die Variable startet der Server in `production` nicht. **Einmalig festlegen und sichern** — der Wert bestimmt die pairwise `sub` jeder Plattform; eine spätere Änderung lässt jeden Nutzer für jede Plattform wie ein neuer Account aussehen. `echo "PAIRWISE_SECRET=$(openssl rand -hex 32)" >> /var/www/hhttps/.env` **vor** dem Neustart. |
+| nginx: interne Endpunkte sperren | `/hhttps/age/upgrade`, `/hhttps/age/direct` und `/hhttps/eid/upgrade` werden ausschließlich vom EUDI-Verifier über `http://127.0.0.1:3000` gerufen, also an nginx vorbei. Der Server weist proxied Aufrufe jetzt ab (Loopback-Peer **und** kein `X-Forwarded-For`), nginx soll sie gar nicht erst durchreichen. In die Server-Config aufnehmen (macht `deploy-all.sh` künftig selbst): `location ~ ^/hhttps/(age/upgrade\|age/direct\|eid/upgrade)$ { deny all; }` |
+| nginx: Security-Header | `add_header` in einem `location`-Block verwirft die serverweiten Header. Die neue Config zieht sie über `include snippets/hhttps-security-headers.conf` in jeden Block; bestehende Configs bitte angleichen (AP6-18). |
+| Refresh-Token-Rotation | `/hhttps/token/refresh` gibt ab jetzt bei jedem Aufruf einen neuen Refresh-Token zurück und entwertet den alten; ein zweiter Gebrauch des alten entwertet die ganze Kette (Reuse-Erkennung). Eigene Integrationen müssen den neuen Token übernehmen — Sign-in-Seite, Consent-Seite, Extension und SDK tun das bereits. |
+| E-Mail-Bestätigungstoken der Plattformen | Werden nur noch als SHA-256 gespeichert. Bestehende Klartext-Token werden von der OPERATOR-Sektion entwertet; betroffene Plattformen klicken im Dashboard auf „Link erneut senden". |
+| `npm audit` in CI | Der neue Workflow lässt `high` nicht mehr durch. Aktueller Stand nach dem nodemailer-Update: 2 Schwachstellen (1 low, 1 moderate), beide in Codepfaden, die dieses Projekt nicht benutzt. |
+| GitHub-Actions-Pinning | Die Actions sind auf unveränderliche Patch-Versionen gepinnt; das Nachziehen auf Commit-SHAs steht als `TODO(ops)` im Workflow (in der Sandbox war github.com nicht erreichbar). |
 
-Weitere Punkte werden ergänzt, sobald Welle 2 abgeschlossen ist.
+**Migration (nach dem Deploy, einmalig)**
+
+```bash
+# BOOT-DDL (Indexe, code-Spalte, neue cleanup_expired) spielt der Server selbst ein.
+# OPERATOR-Sektion manuell — entwertet Klartext-Token, droppt workload_identities,
+# räumt Altbestände auf:
+psql -U hhttps -d hhttps -f /var/www/hhttps/sql/migration-phase-10-review-welle-2.sql
+```
+
+Falls eine ältere Installation noch `postgres`-eigene Tabellen hat (früherer Superuser-Fallback),
+vorher **als postgres**: `psql -d hhttps -f /var/www/hhttps/sql/ownership-hhttps.sql`.
+
+**Prüfen**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://hhttps.org/hhttps/age/upgrade -X POST   # 403 (nginx: 403)
+psql -U hhttps -d hhttps -c "SELECT * FROM cleanup_expired();"                            # 8 Spalten
+pm2 logs hhttps-v4 --lines 30 | grep -E 'CLEANUP|PAIRWISE|EUDI_PID'
+```
 
 ## Welle 3 — Wartbarkeit (PR folgt)
 

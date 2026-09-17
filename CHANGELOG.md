@@ -5,6 +5,50 @@ All notable changes to the HHTTPS protocol and reference implementation are docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Review 2026-09, Welle 2 (Betrieb und Härtung)
+
+94 verifizierte Findings aus AP1–AP6 und AP8. Sieben Arbeitspakete parallel, danach zusammengeführt.
+
+### Security
+- **Interne Verifier-Endpunkte sind wirklich intern** (AP4-27): `/hhttps/age/upgrade`, `/age/direct` und `/eid/upgrade` verlangen einen Loopback-Peer **ohne** `X-Forwarded-For` (nginx läuft auf demselben Host, ein reiner Loopback-Check hätte proxied Requests durchgelassen) sowie zwingend `nonce` (einmalig) und `iat`. nginx sperrt die drei Pfade zusätzlich.
+- **`PAIRWISE_SECRET` ist in Produktion Pflicht** (AP2-15) — vorher gab es einen öffentlichen deterministischen Fallback für die pairwise `sub`.
+- **Refresh-Token-Rotation mit Reuse-Erkennung** (AP3-18); Sign-in-Seite, Consent-Seite, Extension und SDK übernehmen den rotierten Token.
+- **`/oauth/userinfo` akzeptiert nur Access-Tokens** (AP2-10), nicht mehr jedes serversignierte JWT mit `client_id`.
+- **E-Mail-Bestätigungstoken der Plattformen werden gehasht gespeichert** (AP6-15); Klartext-Token werden durch die Migration entwertet.
+- **HTML-Injection in Plattform-Mails geschlossen** (AP3-15), Dev-Mode-Versand nur noch mit `EMAIL_DEV_MODE=1` (AP3-16), Code-Eingabe mit Fehlversuchszähler (AP3-19).
+- **Identity-Cookie** wird wie jeder Bearer geprüft: Positivliste plus Revocation (AP1-17 / AP3-08).
+- **GitHub-Anker-Übernahme verhindert** (AP3-09 / AP4-11), Karten enthalten die stabile `userId` nicht mehr im Klartext (AP4-29), `ageGroup` wird prototypensicher validiert (AP4-31).
+- **Maschinen-Token sind keine Portal-Identität** (AP5-21), PoP prüft Revocation (AP5-05), PoP-Nonce wird atomar verbraucht (AP5-04).
+- **Wallet-Präsentationen**: Trust-Entscheidung nicht mehr heuristisch aus Status-Strings (AP4-24), `EUDI_DEBUG` protokolliert keine Wallet-Antworten mehr (AP4-28).
+- **Deploy und CI**: `.env` wird nicht mehr als Shell gesourct (AP6-17), nginx-Security-Header überleben `location`-Blöcke (AP6-18), `make-admin.sh` validiert die `USER_ID` (AP6-14), CI prüft jetzt Tests, Lint und `npm audit` (AP6-19).
+- **nodemailer 6 → 10** (12 Advisories, darunter SMTP-Injection) und `npm audit fix` für qs/express: von 5 auf 2 Schwachstellen, beide in ungenutzten Codepfaden.
+
+### Fixed
+- **`POST /hhttps/signatures` war seit v0.5 vollständig kaputt**: der Handler schrieb `role: d.role`, Access-Tokens tragen aber keine Rolle mehr — die `NOT NULL`-Verletzung kam als irreführendes 401 zurück. Beim Schreiben der fehlenden Tests zu AP1-09 gefunden.
+- Async-Handler ohne `try/catch` ließen Requests hängen statt 5xx zu antworten (AP1-02, AP3-03, AP3-04, AP4-05, AP5-09).
+- `/hhttps/role/card` umging das E-Mail-Gate (AP4-06) und wertete `documentProvided` inkonsistent (AP4-07).
+- Reserved-Rollen-Erkennung mit Wortgrenzen statt Substring, server- und clientseitig (AP1-06).
+- Developer-Portal: „Delete" für `unverified` (AP5-06), leerbare Felder (AP5-07), serverseitige Zustandsmaschine für `reject`/`suspend`/`PATCH` (AP5-08, AP5-20), URL-Validierung (AP5-23).
+- Frontend: Polling mit terminalen Zuständen, Backoff und Abbruch statt fester 80×2,5 s (AP8-07, AP8-29), Maschinen-Flow hängt nicht mehr nach verbrauchtem Code (AP8-06), gecachte `hhttps_uid` überspringt den E-Mail-Schritt nicht mehr (AP8-08), Open Redirect über `returnTo` geschlossen (AP8-17).
+- Extension: Auto-Refresh wird wieder geplant (AP8-04), Identitäts-IDs kollidieren nicht mehr (AP8-05), Seiten-Metatags gelten als „behauptet", nicht als geprüft (AP8-19), Batch-Verify chunked mit Fehler-Cache (AP8-27).
+- Frische Installationen: `email_verifications.code` ist Teil des Schemas (AP6-06), Ownership-Fallback repariert (AP6-08), Rollback-Befehl im Deploy-Skript funktioniert (AP6-09).
+
+### Performance
+- `cleanup_expired()` räumt zusätzlich `revoked_tokens` (90 Tage — der längste Token im System ist der 30-Tage-OAuth-Refresh), `webhook_deliveries` (30 Tage), verbrauchte `email_verifications` und nie bestätigte Plattform-Drafts (AP1-34, AP1-35, AP3-24, AP6-03, AP5-29).
+- `/hhttps/info` und `/hhttps/stats` werden gecacht, Zähler laufen fire-and-forget statt synchron im Request (AP1-32, AP1-33, AP5-30, AP6-29).
+- Indexe für die E-Mail-Verifikationspfade (AP3-24), SMTP-Transport wird wiederverwendet und hat Timeouts (AP3-25), Pool mit `statement_timeout` (AP6-33).
+- EUDI: Polling mit In-Flight-Sperre (AP4-08), terminale Fehlzustände (AP4-09), Token-Cache-Invalidierung bei 401 (AP4-10), Kapazitätsgrenze vor dem Upstream-Call (AP4-37), keine wiederholte Pfad-Autodiscovery (AP4-38), `fetch` mit Timeout (AP4-39).
+- DNS-Lookups mit Timeout und Limit (AP5-31), Plugin-Drafts pro Apex begrenzt (AP5-29).
+
+### Removed
+- `server/workload-identity.js` und `server/public/workload.html` (AP5-03, AP8-03): das Modul war nie gemountet, die Seite rief Routen, die es nie gab. Die Tabelle `workload_identities` wird von der OPERATOR-Sektion der Phase-10-Migration gedroppt.
+
+### Bewusst nicht geändert
+- **AP8-18** (`login_hint` löst den Code-Versand automatisch aus): gewünschtes Verhalten aus AK-31 (Songbird-Integration).
+- **AP4-32** (Cross-Device-Bindung Session ↔ Wallet): serverseitig allein nicht lösbar, braucht einen Transaktionscode im Wallet-Request. Teilentschärft durch AP4-37 und AP4-27.
+- **AP4-18** (PID-Trust-Liste): Code vorbereitet, Aktivierung nach dem EUDIPLO-Update.
+- **AP4-23** (Keystore-Passwort): manuell, siehe #32.
+
 ## [Unreleased] — Review 2026-09, Welle 1 (Kernflow)
 
 ### Fixed
