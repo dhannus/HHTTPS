@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#F9F9F8">
 <title>iamhmn — Beweise, dass du ein Mensch bist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -195,7 +197,7 @@ a{color:inherit}
 <div class="wrap">
   <div class="top">
     <div class="brand"><span class="dot"></span><span class="v">iamhmn</span></div>
-    <button class="lang" id="langBtn" onclick="toggleLang()" aria-label="Sprache wechseln">EN</button>
+    <button class="lang" id="langBtn" aria-label="Sprache wechseln">EN</button>
   </div>
 
   <div class="layout">
@@ -211,7 +213,7 @@ a{color:inherit}
   </div>
 
   <div class="methods" id="methods">
-    <button class="m-btn" id="m-email" onclick="pick('email')">
+    <button class="m-btn" id="m-email">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/></svg></span>
       <span class="lbl"><span data-i18n="m.email"></span><span class="sub" data-i18n="m.email.sub"></span></span>
       <span class="state" id="st-email"></span>
@@ -219,26 +221,26 @@ a{color:inherit}
     <div class="panel hidden" id="panel-email">
       <input class="field" id="emailInput" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" aria-label="E-Mail">
       <input class="field" id="pseudoInput" type="text" maxlength="32" autocomplete="nickname" data-i18n-ph="email.pseudo.ph" aria-label="Pseudonym" style="margin-top:10px">
-      <div class="row"><button class="go" id="emailSend" onclick="emailStart()" style="flex:1" data-i18n="email.send"></button></div>
+      <div class="row"><button class="go" id="emailSend" style="flex:1" data-i18n="email.send"></button></div>
       <div class="hidden" id="emailCodeRow">
         <input class="field" id="emailCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="••••••" aria-label="Code" style="margin-top:10px">
-        <div class="row"><button class="go" id="emailVerify" onclick="emailConfirm()" style="flex:1" data-i18n="email.verify"></button></div>
+        <div class="row"><button class="go" id="emailVerify" style="flex:1" data-i18n="email.verify"></button></div>
       </div>
       <div class="hint" id="emailHint"></div>
     </div>
 
-    <button class="m-btn" id="m-passkey" onclick="pick('passkey')" disabled data-requires-email="true">
+    <button class="m-btn" id="m-passkey" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="8" cy="10" r="4"/><path d="M8 14v6m0-3h3m8-7-4 4m0 0 2 2m-2-2 2-2"/></svg></span>
       <span class="lbl"><span data-i18n="m.passkey"></span><span class="sub" data-i18n="m.passkey.sub"></span></span>
       <span class="state" id="st-passkey"></span>
     </button>
     <div class="panel hidden" id="panel-passkey">
       <div class="hint" data-i18n="passkey.hint"></div>
-      <div class="row"><button class="go" id="passkeyGo" onclick="passkeyRun()" style="flex:1" data-i18n="passkey.go"></button></div>
+      <div class="row"><button class="go" id="passkeyGo" style="flex:1" data-i18n="passkey.go"></button></div>
       <div class="hint" id="passkeyHint"></div>
     </div>
 
-    <button class="m-btn" id="m-eudi" onclick="pick('eudi')" disabled data-requires-email="true">
+    <button class="m-btn" id="m-eudi" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18M16 14.5h2"/></svg></span>
       <span class="lbl"><span data-i18n="m.eudi"></span><span class="sub" data-i18n="m.eudi.sub"></span></span>
       <span class="state" id="st-eudi"></span>
@@ -253,12 +255,12 @@ a{color:inherit}
         <a class="go ghost" id="eudiLink" href="#" style="text-decoration:none" data-i18n="eudi.open"></a>
       </div>
       <div id="eudiStartRow">
-        <button class="go" id="eudiGo" onclick="eudiRun()" style="width:100%" data-i18n="eudi.go"></button>
+        <button class="go" id="eudiGo" style="width:100%" data-i18n="eudi.go"></button>
       </div>
       <div class="hint" id="eudiHint"></div>
     </div>
 
-    <button class="m-btn" id="m-age" onclick="pick('age')" disabled data-requires-email="true">
+    <button class="m-btn" id="m-age" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 4.5 5 .7-3.6 3.5.85 4.95L12 14.8l-4.45 2.35.85-4.95L4.8 8.2l5-.7L12 3Z"/><path d="M6.5 20.5h11"/></svg></span>
       <span class="lbl"><span data-i18n="m.age"></span><span class="sub" data-i18n="m.age.sub"></span></span>
       <span class="state" id="st-age"></span>
@@ -273,27 +275,27 @@ a{color:inherit}
         <a class="go ghost" id="ageLink" href="#" style="text-decoration:none" data-i18n="eudi.open"></a>
       </div>
       <div id="ageStartRow" style="display:flex;gap:8px">
-        <button class="go ghost" onclick="ageRun(14)" style="flex:1" data-i18n="age.14"></button>
-        <button class="go ghost" onclick="ageRun(16)" style="flex:1" data-i18n="age.16"></button>
-        <button class="go" onclick="ageRun(18)" style="flex:1" data-i18n="age.18"></button>
+        <button class="go ghost" id="age14" style="flex:1" data-i18n="age.14"></button>
+        <button class="go ghost" id="age16" style="flex:1" data-i18n="age.16"></button>
+        <button class="go" id="age18" style="flex:1" data-i18n="age.18"></button>
       </div>
       <div class="hint" id="ageHint"></div>
     </div>
 
-    <button class="m-btn" id="m-github" onclick="pick('github')" disabled data-requires-email="true">
+    <button class="m-btn" id="m-github" disabled data-requires-email="true">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24" stroke-width="0"><path fill="#0A0A0A" d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.46-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.3 9.3 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.48-.01 2.82 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg></span>
       <span class="lbl"><span data-i18n="m.github"></span><span class="sub" data-i18n="m.github.sub"></span></span>
       <span class="state" id="st-github"></span>
     </button>
     <div class="panel hidden" id="panel-github">
       <div class="hint" data-i18n="github.hint"></div>
-      <div class="row"><button class="go" id="githubGo" onclick="githubRun()" style="flex:1" data-i18n="github.go"></button></div>
+      <div class="row"><button class="go" id="githubGo" style="flex:1" data-i18n="github.go"></button></div>
       <!-- AP8-07 (#98): the GitHub poller needs somewhere to report a terminal
            state (failed / expired / HTTP error); it had no hint element at all. -->
       <div class="hint" id="githubHint"></div>
     </div>
 
-    <button class="m-btn" id="m-machine" onclick="pick('machine')">
+    <button class="m-btn" id="m-machine">
       <span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4m-1.5 0h3M8.5 13h.01M15.5 13h.01M9.5 16h5"/><path d="M2 13v2m20-2v2"/></svg></span>
       <span class="lbl"><span data-i18n="m.machine"></span><span class="sub" data-i18n="m.machine.sub"></span></span>
       <span class="state" id="st-machine"></span>
@@ -305,7 +307,7 @@ a{color:inherit}
         <input class="field" id="machineCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="••••••" aria-label="Code" style="margin-top:10px">
       </div>
       <input class="field" id="machineRole" type="text" autocomplete="off" aria-label="Rolle / Aufgabe" style="margin-top:4px">
-      <div class="row"><button class="go" id="machineGo" onclick="machineRun()" style="flex:1" data-i18n="machine.go"></button></div>
+      <div class="row"><button class="go" id="machineGo" style="flex:1" data-i18n="machine.go"></button></div>
       <div class="hint" id="machineHint"></div>
       <div class="hint" id="machineKey" style="display:none;font-family:var(--font-mono);word-break:break-all"></div>
     </div>
@@ -313,7 +315,7 @@ a{color:inherit}
   </div>
 
   <div class="issue-wrap">
-    <button class="issue" id="issueBtn" onclick="issueToken()" disabled data-i18n="issue.btn"></button>
+    <button class="issue" id="issueBtn" disabled data-i18n="issue.btn"></button>
     <div class="tokenCard hidden" id="tokenCard">
       <div class="h"><svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg><span data-i18n="token.done"></span></div>
       <div id="tokenMethods" style="font-size:14px;color:var(--ink-2)"></div>
@@ -332,11 +334,11 @@ a{color:inherit}
       <h2><span data-i18n="role.h2a"></span> <span class="em" data-i18n="role.h2em"></span></h2>
       <p class="sub" data-i18n="role.sub"></p>
       <div class="role-btns">
-        <button class="role-btn" id="rb-self" onclick="rolePick('self')">
+        <button class="role-btn" id="rb-self">
           <span class="rt" data-i18n="role.self"></span>
           <span class="rd" data-i18n="role.self.sub"></span>
         </button>
-        <button class="role-btn" id="rb-qual" onclick="rolePick('qual')">
+        <button class="role-btn" id="rb-qual">
           <span class="rt" data-i18n="role.qual"></span>
           <span class="rd" data-i18n="role.qual.sub"></span>
         </button>
@@ -345,15 +347,15 @@ a{color:inherit}
       <div class="role-panel hidden" id="rolep-self">
         <label data-i18n="role.search.label"></label>
         <div class="esco-wrap">
-          <input class="esco-input" id="escoInput" autocomplete="off" oninput="escoSuggest(this.value)" onblur="setTimeout(escoHide,180)">
+          <input class="esco-input" id="escoInput" autocomplete="off">
           <div class="esco-list hidden" id="escoList"></div>
         </div>
         <div class="file-row">
           <label class="file-btn" for="roleFile" data-i18n="role.file"></label>
-          <input type="file" id="roleFile" accept="image/*,.pdf" onchange="roleFile('self',this)">
+          <input type="file" id="roleFile" accept="image/*,.pdf">
           <span id="roleFileName" data-i18n="role.file.none"></span>
         </div>
-        <button class="role-go" id="roleGoSelf" onclick="roleIssue('self')" disabled data-i18n="role.issue"></button>
+        <button class="role-go" id="roleGoSelf" disabled data-i18n="role.issue"></button>
         <div class="role-warn" id="roleWarnSelf" hidden></div>
         <div class="role-hint" data-i18n="role.hint.self"></div>
         <div class="role-result" id="roleResultSelf"></div>
@@ -364,10 +366,10 @@ a{color:inherit}
         <div class="role-chips" id="qualChips"></div>
         <div class="file-row">
           <label class="file-btn" for="qualFile" data-i18n="role.file.req"></label>
-          <input type="file" id="qualFile" accept="image/*,.pdf" onchange="roleFile('qual',this)">
+          <input type="file" id="qualFile" accept="image/*,.pdf">
           <span id="qualFileName" data-i18n="role.file.none"></span>
         </div>
-        <button class="role-go" id="roleGoQual" onclick="roleIssue('qual')" disabled data-i18n="role.issue"></button>
+        <button class="role-go" id="roleGoQual" disabled data-i18n="role.issue"></button>
         <div class="role-warn" id="roleWarnQual" hidden></div>
         <div class="role-hint" data-i18n="role.hint.qual"></div>
         <div class="role-result" id="roleResultQual"></div>
@@ -382,759 +384,12 @@ a{color:inherit}
   </div>
 </div>
 
-<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js"></script>
-<script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js"></script>
-<script>
-/* iamhmn sign-in — World-ID-inspired. EMAIL FIRST, then the other methods:
-   the confirmed e-mail is the identity anchor (AK-14); passkey, EUDI, GitHub
-   and age stay disabled until it is confirmed. The machine path is separate.
-   CREDIBILITY RULE: a method is marked "confirmed" only after it REALLY
-   completes against the server. Completing one OFFERS the others — never
-   auto-credits them. The trust score is never shown (API/token only).
-   Endpoints marked //VERIFY should be checked against server.js. */
-const API='';
-let sessionId=null;
-let LANG=(localStorage.getItem('iamhmn-lang')||'de');
-const confirmed={email:false,passkey:false,eudi:false,github:false,machine:false,age:false};
-const ORDER=['email','passkey','eudi','github'];
-
-const T={
- de:{'hero.a':'Beweise, dass du ein','hero.em':'Mensch','hero.b':' oder KI-Bot bist.',
-   'hero.p':'Gleiche Rechte für alle — pseudonym verifiziert, deine Person bleibt anonym. Menschen und KIs legen ihre Rolle genauso offen wie nachvollziehbar dar.',
-   'm.email':'Mit E-Mail fortfahren','m.email.sub':'Code per E-Mail · weltweit',
-   'm.passkey':'Mit Passkey fortfahren','m.passkey.sub':'Fingerabdruck / Face ID · passwortlos',
-   'm.eudi':'Mit EUDI-Wallet fortfahren','m.eudi.sub':'EU-Identitätswallet · staatlich',
-   'm.age':'Mit EUDI-Wallet Alter verifizieren','m.age.sub':'Über 14 · 16 · 18 — pseudonym',
-   'age.hint':'Wähle die Altersgrenze, die du nachweisen möchtest. Bestätigt wird nur „über N" — dein genaues Geburtsdatum bleibt verborgen.',
-   'age.14':'Über 14','age.16':'Über 16','age.18':'Über 18',
-   'age.waiting':'Warte auf Bestätigung im Wallet …','age.done':'✓ Alter bestätigt: über {n}',
-   'm.github':'Mit GitHub fortfahren','m.github.sub':'Für Entwickler',
-   'm.machine':'Als KI / Bot fortfahren','m.machine.sub':'Ehrlich als Maschine deklariert · gleichberechtigt',
-   'machine.hint':'Transparenz statt Tarnung: Lege deine Rolle oder Aufgabe offen — genauso nachvollziehbar wie ein verifizierter Mensch. Du wirst klar als Maschine ausgewiesen (🤖), nie als Mensch.',
-   'machine.go':'Als Maschine registrieren','machine.role.ph':'z. B. Recherche-Assistent, Support-Bot …',
-   'machine.email.ph':'Betreiber-E-Mail (Pflicht)','machine.email.err':'Bitte eine gültige Betreiber-E-Mail angeben.',
-   'machine.codeSent':'Code an die Betreiber-E-Mail gesendet — bitte hier eingeben.',
-   'machine.codeErr':'Code ungültig oder abgelaufen — bitte prüfen.',
-   'machine.go2':'Code bestätigen & registrieren',
-   'machine.locked':'Maschinen-Identität aktiv — menschliche Methoden sind gesperrt.',
-   'token.done.machine':'Du bist als Maschine deklariert \u2713',
-   'machine.done':'Als Maschine deklariert','machine.key':'Dein Maschinen-Schlüssel (sicher speichern):',
-   'email.send':'Code senden','email.verify':'Bestätigen','email.pseudo.ph':'Pseudonym (optional)',
-   'email.first':'Zuerst E-Mail bestätigen — dann werden die weiteren Methoden freigeschaltet.',
-   'email.done':'E-Mail bestätigt · Pseudonym: {p}',
-   'passkey.hint':'Dein Gerät fragt nach Fingerabdruck, Gesicht oder Geräte-PIN. Es verlässt nichts dein Gerät.','passkey.go':'Passkey verwenden','passkey.existing':'Passkey erkannt — bitte bestätigen',
-   'eudi.hint':'Scanne den Code mit deinem EUDI-Wallet oder öffne es auf diesem Gerät.','eudi.go':'Identität bestätigen','eudi.age':'Alter bestätigen (18+)','eudi.ageDone':'✓ Alter bestätigt (18+)','eudi.open':'Im Wallet öffnen',
-   'github.hint':'Du wirst kurz zu GitHub weitergeleitet und kommst bestätigt zurück.','github.go':'Weiter zu GitHub',
-   'issue.btn':'Token ausstellen →','token.done':'Du bist als Mensch bestätigt',
-   'privacy':'Nur das, was du erlaubst, wird in deiner Rolle freigeschaltet — alles andere bleibt lokal.',
-   'role.h2a':'Zeig deine','role.h2em':'berufliche Rolle.',
-   'role.sub':'Optional. Verknüpfe einen Beruf mit deiner Rolle — selbst angegeben oder mit Nachweis. Die Karte landet in deinem EUDI-Wallet, deine Person bleibt pseudonym.',
-   'role.self':'Mit Beruf anmelden','role.self.sub':'Selbst angegeben, optional mit Zertifikats-Upload',
-   'role.qual':'Qualifikation abfragen','role.qual.sub':'Geschützte Berufe: Arzt, Anwalt, Pflege …',
-   'role.search.label':'Beruf suchen (ESCO)','role.search.ph':'z. B. Softwareentwickler, Journalistin …',
-   'role.file':'Nachweis anhängen (optional)','role.file.req':'Nachweis anhängen (erforderlich)','role.file.none':'Keine Datei gewählt',
-   'role.issue':'iamhmn-Karte erstellen','role.qual.pick':'Geschützten Beruf wählen',
-   'role.hint.self':'Ohne Nachweis: selbst angegeben (RAL 0). Mit Nachweis: RAL 1 — im Pilot Selbstangabe, live gegen Register geprüft.',
-   'role.hint.qual':'Geschützte Berufe können nicht selbst angegeben werden. Mit Nachweis → RAL 1. Live-Ziel ist die qualifizierte (Q)EAA bzw. Kammer-Registerprüfung (RAL 2).',
-   'role.needmethod':'Bitte verifiziere dich zuerst oben mit mindestens einer Methode.',
-   'role.ready':'Karte bereit — in dein EUDI-Wallet laden.','role.open':'Im Wallet öffnen',
-   'role.ral0':'Selbst angegeben (RAL 0) · von keiner Stelle geprüft',
-   'role.ral1':'Mit Nachweis (RAL 1) · im Pilot Selbstangabe, live gegen Register geprüft',
-   'foot.about':'Über iamhmn','foot.proto':'Protokoll',
-   'progress.one':'1 Weg bestätigt','progress.more':' Wege bestätigt','codeSent':'Code gesendet — prüfe dein Postfach.','email.hintAuto':'E-Mail übernommen — Code wird gesendet …','err':'Hat nicht geklappt — bitte erneut versuchen.',
-   'poll.failed':'Bestätigung fehlgeschlagen — bitte erneut starten.','poll.expired':'Anfrage abgelaufen — bitte erneut starten.','poll.timeout':'Keine Bestätigung erhalten — bitte erneut starten.'},
- en:{'hero.a':'Prove you are a','hero.em':'human','hero.b':' or AI bot.',
-   'hero.p':'Equal rights for everyone — pseudonymously verified, your person stays anonymous. Humans and AIs declare their role just as openly and accountably.',
-   'm.email':'Continue with email','m.email.sub':'Code by email · worldwide',
-   'm.passkey':'Continue with a passkey','m.passkey.sub':'Fingerprint / Face ID · passwordless',
-   'm.eudi':'Continue with EUDI Wallet','m.eudi.sub':'EU identity wallet · state-grade',
-   'm.age':'Verify age with EUDI Wallet','m.age.sub':'Over 14 · 16 · 18 — pseudonymous',
-   'age.hint':'Choose the age threshold you want to prove. Only “over N” is confirmed — your exact date of birth stays hidden.',
-   'age.14':'Over 14','age.16':'Over 16','age.18':'Over 18',
-   'age.waiting':'Waiting for confirmation in your wallet …','age.done':'✓ Age confirmed: over {n}',
-   'm.github':'Continue with GitHub','m.github.sub':'For developers',
-   'm.machine':'Continue as AI / bot','m.machine.sub':'Honestly declared as a machine · as an equal',
-   'machine.hint':'Transparency, not disguise: declare your role or task — just as accountably as a verified human. You are clearly marked as a machine (🤖), never as a human.',
-   'machine.go':'Register as a machine','machine.role.ph':'e.g. research assistant, support bot …',
-   'machine.email.ph':'Operator e-mail (required)','machine.email.err':'Please enter a valid operator e-mail.',
-   'machine.codeSent':'Code sent to the operator e-mail — enter it here.',
-   'machine.codeErr':'Code invalid or expired — please check.',
-   'machine.go2':'Confirm code & register',
-   'machine.locked':'Machine identity active — human methods are locked.',
-   'token.done.machine':'You are declared as a machine \u2713',
-   'machine.done':'Declared as a machine','machine.key':'Your machine key (store it safely):',
-   'email.send':'Send code','email.verify':'Confirm','email.pseudo.ph':'Pseudonym (optional)',
-   'email.first':'Confirm your email first — the other methods unlock afterwards.',
-   'email.done':'Email confirmed · pseudonym: {p}',
-   'passkey.hint':'Your device asks for fingerprint, face or device PIN. Nothing leaves your device.','passkey.go':'Use passkey','passkey.existing':'Passkey found — please confirm',
-   'eudi.hint':'Scan the code with your EUDI Wallet, or open it on this device.','eudi.go':'Confirm identity','eudi.age':'Confirm age (18+)','eudi.ageDone':'✓ Age confirmed (18+)','eudi.open':'Open in wallet',
-   'github.hint':'You will be briefly redirected to GitHub and return confirmed.','github.go':'Continue to GitHub',
-   'issue.btn':'Issue token →','token.done':'You are confirmed as human',
-   'privacy':'Only what you allow is unlocked in your role — everything else stays local.',
-   'role.h2a':'Show your','role.h2em':'professional role.',
-   'role.sub':'Optional. Link an occupation to your role — self-declared or with proof. The card lands in your EUDI Wallet; your person stays pseudonymous.',
-   'role.self':'Register a profession','role.self.sub':'Self-declared, optionally with a certificate upload',
-   'role.qual':'Request a qualification','role.qual.sub':'Protected professions: doctor, lawyer, nurse …',
-   'role.search.label':'Search occupation (ESCO)','role.search.ph':'e.g. software developer, journalist …',
-   'role.file':'Attach proof (optional)','role.file.req':'Attach proof (required)','role.file.none':'No file selected',
-   'role.issue':'Create iamhmn card','role.qual.pick':'Choose a protected profession',
-   'role.hint.self':'Without proof: self-declared (RAL 0). With proof: RAL 1 — pilot: self-asserted, verified against registers in production.',
-   'role.hint.qual':'Protected professions cannot be self-declared. With proof → RAL 1. The live target is a qualified (Q)EAA or chamber-register check (RAL 2).',
-   'role.needmethod':'Please verify yourself with at least one method above first.',
-   'role.ready':'Card ready — load it into your EUDI Wallet.','role.open':'Open in wallet',
-   'role.ral0':'Self-declared (RAL 0) · not checked by any authority',
-   'role.ral1':'With proof (RAL 1) · pilot: self-asserted, verified against registers in production',
-   'foot.about':'About iamhmn','foot.proto':'Protocol',
-   'progress.one':'1 way confirmed','progress.more':' ways confirmed','codeSent':'Code sent — check your inbox.','email.hintAuto':'Email taken over — sending code …','err':'That did not work — please try again.',
-   'poll.failed':'Confirmation failed — please start again.','poll.expired':'Request expired — please start again.','poll.timeout':'No confirmation received — please start again.'}
-};
-function tr(k){return (T[LANG]&&T[LANG][k])||k}
-function applyLang(){
-  document.documentElement.lang=LANG;
-  document.getElementById('langBtn').textContent=LANG==='de'?'EN':'DE';
-  document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.getAttribute('data-i18n'))});
-  document.querySelector('.hero h1').innerHTML=tr('hero.a')+' <span class="em">'+tr('hero.em')+'</span>'+tr('hero.b');
-  const mr=document.getElementById('machineRole'); if(mr) mr.placeholder=tr('machine.role.ph');
-  const pi=document.getElementById('pseudoInput'); if(pi) pi.placeholder=tr('email.pseudo.ph');
-  const me=document.getElementById('machineEmail'); if(me) me.placeholder=tr('machine.email.ph');
-  const ei=document.getElementById('escoInput'); if(ei) ei.placeholder=tr('role.search.ph');
-  renderQualChips();
-  renderProgress();
-}
-function toggleLang(){LANG=LANG==='de'?'en':'de';localStorage.setItem('iamhmn-lang',LANG);applyLang()}
-
-const PANELS=['email','passkey','eudi','github','machine','age'];
-function pick(m){
-  if(MACHINE_IDENTITY&&m!=='machine'){
-    try{document.getElementById('machineHint').textContent=tr('machine.locked');}catch(e){}
-    return;
-  }
-  if(confirmed[m])return;
-  const btn=document.getElementById('m-'+m);
-  if(btn&&btn.disabled){
-    /* AK-14: email first. The other human methods stay locked until the
-       email is confirmed (the server enforces the same rule with 403). */
-    try{document.getElementById('emailHint').textContent=tr('email.first');}catch(e){}
-    return;
-  }
-  PANELS.forEach(x=>{const p=document.getElementById('panel-'+x);if(p)p.classList.toggle('hidden',x!==m)});
-  const f=document.querySelector('#panel-'+m+' .field, #panel-'+m+' .go');if(f)setTimeout(()=>f.focus(),60);
-}
-function renderProgress(){
-  const n=ORDER.filter(m=>confirmed[m]).length;
-  const prog=document.getElementById('progress'),ticks=document.getElementById('ticks'),label=document.getElementById('progressLabel');
-  if(n===0){prog.classList.add('hidden');return}
-  prog.classList.remove('hidden');
-  label.textContent=n===1?tr('progress.one'):(n+tr('progress.more'));
-  ticks.innerHTML=ORDER.map(m=>`<span class="tick ${confirmed[m]?'on':''}"></span>`).join('');
-}
-function markConfirmed(m){
-  confirmed[m]=true;
-  document.getElementById('m-'+m).classList.add('done');
-  document.getElementById('panel-'+m)?.classList.add('hidden');
-  document.getElementById('st-'+m).innerHTML='<span class="check"><svg viewBox="0 0 24 24" fill="none"><path d="m5 13 4 4L19 7" stroke="currentColor" stroke-width="2.4"/></svg></span>';
-  document.getElementById('issueBtn').disabled=false;
-  if(m==='email')unlockMethods();
-  renderProgress();
-}
-/* AK-14: once the email is confirmed, enable every gated method button and
-   drop the persistent "email first" hint. */
-function unlockMethods(){
-  document.querySelectorAll('[data-requires-email]').forEach(b=>{b.removeAttribute('disabled');});
-  const h=document.getElementById('emailFirstHint'); if(h)h.hidden=true;
-}
-
-/* ── Session bootstrap ─────────────────────────────────────────────────────
-   Email is always first (AK-14). session/start mints a method-neutral session;
-   every other method needs that session (and a confirmed email) to exist. */
-let pkUserId=null;
-async function ensureSession(){
-  if(sessionId) return sessionId;
-  const r=await fetch(API+'/hhttps/session/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})});
-  const d=await r.json(); if(!r.ok)throw 0;
-  sessionId=d.sessionId; return sessionId;
-}
-
-/* EMAIL — ensureSession -> email/send -> email/confirm-code */
-async function emailStart(){
-  const email=document.getElementById('emailInput').value.trim();
-  const hint=document.getElementById('emailHint');
-  if(!/.+@.+\..+/.test(email)){hint.textContent=tr('err');return}
-  try{
-    await ensureSession();
-    const pseudonym=(document.getElementById('pseudoInput')?.value||'').trim();
-    const r=await fetch(API+'/hhttps/email/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(pseudonym?{sessionId,email,pseudonym}:{sessionId,email})});
-    const d=await r.json(); if(!r.ok)throw 0;
-    document.getElementById('emailCodeRow').classList.remove('hidden');
-    hint.textContent=tr('codeSent'); document.getElementById('emailCode').focus();
-  }catch(e){hint.textContent=tr('err')}
-}
-async function emailConfirm(){
-  const code=document.getElementById('emailCode').value.trim().replace(/[\s-]/g,'');
-  const hint=document.getElementById('emailHint');
-  try{
-    const r=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
-    const d=await r.json(); if(!r.ok)throw 0;
-    markConfirmed('email');
-    /* AK-8/AK-15: the server-assigned pseudonym is display-only. */
-    const pseudonym=(d.pseudonym||'').toString();
-    if(pseudonym){
-      const st=document.getElementById('st-email');
-      const sp=document.createElement('span'); sp.className='pseudo'; sp.textContent=pseudonym;
-      st.appendChild(document.createTextNode(' ')); st.appendChild(sp);
-      hint.textContent=tr('email.done').replace('{p}',pseudonym);
-    }
-  }catch(e){hint.textContent=tr('err')}
-}
-
-/* PASSKEY — register(start->finish) then auth(start->finish). auth/finish
-   creates the session and merges our prior one via priorSessionId.
-   K-4: a RETURNING user (same email => same stable userId) already has a
-   credential; register/start then lists it in excludeCredentials and the
-   authenticator would refuse with InvalidStateError. In that case we skip
-   registration and go straight to auth/start. */
-async function passkeyRun(){
-  const hint=document.getElementById('passkeyHint');
-  const L=window.SimpleWebAuthnBrowser;
-  if(!L){hint.textContent='WebAuthn lib missing';return}
-  try{
-    await ensureSession();
-    /* D4: the user handle is the session's stable userId; the server answers
-       403 email_verification_required until the email is confirmed. */
-    const rs=await fetch(API+'/hhttps/webauthn/register/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})});
-    const ro=await rs.json(); if(!rs.ok)throw 0;
-    pkUserId=ro.userId;
-    const excl=(ro.options&&ro.options.excludeCredentials)||[];
-    let hasPasskey=excl.length>0;
-    if(!hasPasskey){
-      try{
-        const regResp=await L.startRegistration(ro.options);
-        const rf=await fetch(API+'/hhttps/webauthn/register/finish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId,response:regResp,sessionId})});
-        if(!rf.ok)throw 0;
-      }catch(e){
-        /* The authenticator already holds a credential for this user handle
-           (e.g. registered on this device before the server knew about it). */
-        if(e&&e.name==='InvalidStateError')hasPasskey=true; else throw e;
-      }
-    }
-    if(hasPasskey)hint.textContent=tr('passkey.existing');
-    const as=await fetch(API+'/hhttps/webauthn/auth/start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({userId:pkUserId})});
-    const ao=await as.json(); if(!as.ok)throw 0;
-    const authResp=await L.startAuthentication(ao.options);
-    const af=await fetch(API+'/hhttps/webauthn/auth/finish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:ao.sessionId,response:authResp,priorSessionId:sessionId})});
-    const d=await af.json(); if(!af.ok)throw 0;
-    sessionId=d.sessionId;
-    markConfirmed('passkey');
-  }catch(e){hint.textContent=tr('err')}
-}
-
-/* EUDI — needs a session; eid/request -> poll eid/status/:requestId */
-async function eudiRun(){
-  const hint=document.getElementById('eudiHint');
-  try{
-    await ensureSession();
-    const r=await fetch(API+'/eudi/eid/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hhttpsSession:sessionId})});
-    const d=await r.json(); if(!r.ok||!d.deepLink)throw 0;
-    const qr=qrcode(0,'L');qr.addData(d.deepLink);qr.make();
-    document.getElementById('eudiQr').src=qr.createDataURL(4,8);
-    document.getElementById('eudiLink').href=d.deepLink;
-    document.getElementById('eudiQrWrap').style.display='flex';
-    document.getElementById('eudiStartRow').style.display='none';
-    pollEudi(d.requestId);
-  }catch(e){hint.textContent=tr('err')}
-}
-/* AP8-07 (#98): one poller for EUDI / age / GitHub.
-   - terminal states end the loop: verified, the e-mail gate
-     (status:error + email_verification_required), failed, expired, HTTP >= 400
-   - the interval grows 2.5 s -> 10 s (x1.5), max 80 polls, then a timeout hint
-   - a new run for the same method cancels the previous one (generation counter)
-   - hidden tabs pause the requests (they do not count against the budget) */
-const POLL_GEN={};
-function pollCancel(kind){return (POLL_GEN[kind]=(POLL_GEN[kind]||0)+1);}
-async function pollStatus(kind,hintId,fetchOnce,isVerified,onVerified){
-  const gen=pollCancel(kind);
-  const hint=document.getElementById(hintId);
-  let delay=2500;
-  for(let n=0;n<80;){
-    await new Promise(r=>setTimeout(r,delay));
-    if(POLL_GEN[kind]!==gen)return;
-    if(document.hidden)continue;
-    n++;
-    let r=null,d=null;
-    try{r=await fetchOnce();d=await r.json();}catch(e){d=null;}
-    if(POLL_GEN[kind]!==gen)return;
-    if(d&&isVerified(d)){onVerified(d);return}
-    if(d&&d.status==='error'&&d.error==='email_verification_required'){if(hint)hint.textContent=tr('email.first');return}
-    if(d&&(d.status==='failed'||d.status==='expired')){if(hint)hint.textContent=tr(d.status==='expired'?'poll.expired':'poll.failed');return}
-    if(r&&r.status>=400){if(hint)hint.textContent=tr('poll.failed');return}
-    delay=Math.min(Math.round(delay*1.5),10000);
-  }
-  if(hint)hint.textContent=tr('poll.timeout');
-}
-async function pollEudi(requestId){
-  return pollStatus('eudi','eudiHint',
-    ()=>fetch(API+'/eudi/eid/status/'+encodeURIComponent(requestId)),
-    d=>d.status==='verified', ()=>markConfirmed('eudi'));
-}
-
-/* AGE — equal 6th entry. Some users only want to prove their age. EUDI Wallet
-   age_over_NN, minAge in {14,16,18}. Orthogonal & trust-neutral: confirming an
-   age threshold does NOT mint a human token on its own (matches the backend). */
-async function ageRun(minAge){
-  const hint=document.getElementById('ageHint');
-  try{
-    await ensureSession();
-    const r=await fetch(API+'/eudi/age/request',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({hhttpsSession:sessionId,minAge})});
-    const d=await r.json(); if(!r.ok||!d.deepLink)throw 0;
-    const qr=qrcode(0,'L');qr.addData(d.deepLink);qr.make();
-    document.getElementById('ageQr').src=qr.createDataURL(4,8);
-    document.getElementById('ageLink').href=d.deepLink;
-    document.getElementById('ageQrWrap').style.display='flex';
-    document.getElementById('ageStartRow').style.display='none';
-    hint.textContent=tr('age.waiting');
-    pollAge(d.requestId,minAge);
-  }catch(e){hint.textContent=tr('err')}
-}
-async function pollAge(requestId,minAge){
-  return pollStatus('age','ageHint',
-    ()=>fetch(API+'/eudi/age/status/'+encodeURIComponent(requestId)),
-    d=>d.status==='verified', ()=>ageConfirmed(minAge));
-}
-function ageConfirmed(minAge){
-  confirmed.age=true;
-  document.getElementById('m-age').classList.add('done');
-  document.getElementById('st-age').textContent='✓ '+minAge+'+';
-  document.getElementById('ageHint').textContent=tr('age.done').replace('{n}',minAge);
-}
-
-/* GITHUB — needs a session; popup verify/github/start?session=, poll status */
-async function githubRun(){
-  try{
-    await ensureSession();
-    window.open(API+'/hhttps/verify/github/start?session='+encodeURIComponent(sessionId),'_blank','width=600,height=720');
-    pollGithub();
-  }catch(e){}
-}
-async function pollGithub(){
-  return pollStatus('github','githubHint',
-    ()=>fetch(API+'/hhttps/verify/github/status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})}),
-    d=>d.verified===true, ()=>markConfirmed('github'));
-}
-
-/* MACHINE — honest bot declaration -> machine apiKey (NOT a human token) */
-let MACHINE_IDENTITY=false;
-let MACHINE_STEP='email';
-
-async function machineRun(){
-  const role=document.getElementById('machineRole').value.trim();
-  const email=(document.getElementById('machineEmail').value||'').trim();
-  const hint=document.getElementById('machineHint');
-  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){hint.textContent=tr('machine.email.err');return;}
-
-  /* Step A: send the confirmation code to the operator e-mail. Reuses the
-     human code-mail flow — confirmation only, ZERO trust for machines. */
-  if(MACHINE_STEP==='email'){
-    try{
-      await ensureSession();
-      const rs=await fetch(API+'/hhttps/email/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,email})});
-      if(!rs.ok)throw 0;
-      MACHINE_STEP='code';
-      document.getElementById('machineCodeRow').classList.remove('hidden');
-      document.getElementById('machineEmail').readOnly=true;
-      const gb=document.getElementById('machineGo');
-      if(gb){gb.setAttribute('data-i18n','machine.go2');gb.textContent=tr('machine.go2');}
-      hint.textContent=tr('machine.codeSent');
-      document.getElementById('machineCode').focus();
-    }catch(e){hint.textContent=tr('err')}
-    return;
-  }
-
-  /* Step B: confirm the code ONCE (the server consumes it), then register +
-     issue the machine token. AP8-06 (#90): after a successful confirm-code the
-     step advances to 'confirmed', so a failing register/token call can simply
-     be retried without re-sending the consumed code; the server's error
-     detail is shown instead of the generic text. */
-  if(MACHINE_STEP==='code'){
-    const code=(document.getElementById('machineCode').value||'').trim().replace(/[\s-]/g,'');
-    try{
-      const rc=await fetch(API+'/hhttps/email/confirm-code',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId,code})});
-      if(!rc.ok){hint.textContent=tr('machine.codeErr');return;}
-    }catch(e){hint.textContent=tr('err');return;}
-    MACHINE_STEP='confirmed';
-    var mcr0=document.getElementById('machineCodeRow'); if(mcr0) mcr0.classList.add('hidden');
-  }
-  const machineErr=(d,r)=>{const det=(d&&(d.detail||d.error))||'';hint.textContent=tr('err')+(det?' ('+det+(r&&r.status===429?' · 429':'')+')':'');};
-  try{
-    /* WIMSE preparation, in the background: generate a P-256 keypair and send
-       the PUBLIC JWK with the registration. The server binds it in a later
-       phase (cnf/jkt); today it is stored client-visible only. The PRIVATE
-       JWK is shown once to the operator next to the API key. */
-    let pubJwk=null, privJwk=null;
-    try{
-      const kp=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);
-      pubJwk=await crypto.subtle.exportKey('jwk',kp.publicKey);
-      privJwk=await crypto.subtle.exportKey('jwk',kp.privateKey);
-    }catch(e){}
-
-    const r=await fetch(API+'/hhttps/machine/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorName:role||'AI agent',purpose:role||'AI/bot identity declaration',role:role||undefined,contactEmail:email,sessionId,publicKeyJwk:pubJwk||undefined})});
-    const d=await r.json().catch(()=>({})); if(!r.ok){machineErr(d,r);return;}
-
-    /* The machine path is SELF-CONTAINED: issue the machine token right away —
-       it never goes through the human role/declare flow. */
-    const r2=await fetch(API+'/hhttps/machine/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({operatorId:d.operatorId,apiKey:d.apiKey})});
-    const td=await r2.json().catch(()=>({})); if(!r2.ok||!td.token){machineErr(td,r2);return;}
-
-    confirmed.machine=true; MACHINE_IDENTITY=true;
-    document.getElementById('m-machine').classList.add('done');
-    document.getElementById('st-machine').textContent='\uD83E\uDD16';
-    document.getElementById('machineEmail').style.display='none';
-    var mcr=document.getElementById('machineCodeRow'); if(mcr) mcr.classList.add('hidden');
-    document.getElementById('machineRole').style.display='none';
-    document.getElementById('machineGo').parentElement.style.display='none';
-    hint.textContent=tr('machine.done');
-    if(d.apiKey){const k=document.getElementById('machineKey');k.style.display='block';
-      k.textContent=tr('machine.key')+' '+d.apiKey+(privJwk?('\n\nWIMSE private key (JWK, einmalig / shown once): '+JSON.stringify(privJwk)):'');}
-
-    /* Publish the MACHINE identity — actorType bot, trustScore 0 (the rule). */
-    try{localStorage.setItem('hhttps_identity',JSON.stringify({
-      token:td.token, refreshToken:null,
-      role:null, roleLabel:null, roleIcon:'\uD83E\uDD16', roleLevel:null, levelLabel:null,
-      trustScore:0, actorType:'bot', method:'machine', operatorEmail:email,
-      issuer:'hhttps://hhttps.org', issuedAt:new Date().toISOString(),
-      expiresAt:td.expiresAt||null, refreshExpiresAt:null
-    }));}catch(e){}
-    try{window.postMessage({source:'hhttps-org',type:'identity-issued',payload:{actorType:'bot'}},window.location.origin);}catch(e){}
-
-    const card=document.getElementById('tokenCard');card.classList.remove('hidden');
-    var mth=document.querySelector('#tokenCard .h span[data-i18n]');
-    if(mth){mth.setAttribute('data-i18n','token.done.machine');mth.textContent=tr('token.done.machine');}
-    document.getElementById('tokenMethods').textContent=(LANG==='de'?'\uD83E\uDD16 Maschine \u00b7 Betreiber hinterlegt: ':'\uD83E\uDD16 Machine \u00b7 operator on file: ')+email;
-    const p=td.token.split('.');
-    document.getElementById('tokenRaw').textContent=p[0]+'.'+p[1]+'.'+(p[2]||'').slice(0,16)+'\u2026';
-    const ib=document.getElementById('issueBtn'); if(ib){ib.disabled=true;ib.style.display='none';}
-    card.scrollIntoView({behavior:'smooth',block:'center'});
-    maybeReturnTo();
-  }catch(e){hint.textContent=tr('err')}
-}
-
-/* ── Identity publication + OAuth return ────────────────────────────────────
-   The OAuth consent page reads localStorage['hhttps_identity'] to find the
-   signed-in human; without it, it bounces the user here with ?returnTo=<url>.
-   After a token is issued we therefore (1) publish the identity in exactly the
-   format the consent page and the browser extension expect, and (2) send the
-   user back where they came from. */
-/* AP8-20 (#173): the refresh token stays client-held by design (zero-PII,
-   no server-side session). Two hardenings that cost no UX:
-   (1) it is only ever persisted on the ISSUER's own origin. A mirror, a
-       staging host or a local copy of this page gets the short-lived access
-       token only — the long-lived credential never lands in a foreign
-       origin's localStorage.
-   (2) a refresh token whose refreshExpiresAt has passed is dropped instead of
-       lingering in storage; it cannot buy a new token any more anyway. */
-const ISSUER_HOSTS=['hhttps.org','www.hhttps.org'];
-function isIssuerOrigin(){
-  try{
-    const h=window.location.hostname;
-    return ISSUER_HOSTS.indexOf(h)>=0||h==='localhost'||h==='127.0.0.1';
-  }catch(e){return false}
-}
-function storableRefreshToken(tok,refreshExpiresAt){
-  if(!tok)return null;
-  if(!isIssuerOrigin())return null;
-  if(refreshExpiresAt&&new Date(refreshExpiresAt).getTime()<=Date.now())return null;
-  return tok;
-}
-function publishIdentity(d){
-  const h=(d&&d.hhttps)||{};
-  if(!h.token)return;
-  const identity={
-    token:            h.token,
-    refreshToken:     storableRefreshToken(h.refreshToken,h.refreshExpiresAt),
-    role:             (d.role&&(d.role.id||d.role.role))||h.role||null,
-    roleLabel:        (d.role&&d.role.label)||null,
-    roleIcon:         (d.role&&d.role.icon)||null,
-    roleLevel:        (d.role&&d.role.level)||null,
-    levelLabel:       (d.role&&d.role.levelLabel)||null,
-    trustScore:       h.trustScore||0,
-    method:           ORDER.filter(m=>confirmed[m]).join(',')||'email',
-    // Structured form of the same information. `method` stays for backward
-    // compatibility (extension, older pages); consumers should prefer this.
-    verified_methods: ORDER.filter(m=>confirmed[m]),
-    issuer:           'hhttps://hhttps.org',
-    issuedAt:         new Date().toISOString(),
-    expiresAt:        h.expiresAt||null,
-    refreshExpiresAt: h.refreshExpiresAt||null
-  };
-  try{localStorage.setItem('hhttps_identity',JSON.stringify(identity));}catch(e){}
-  try{window.postMessage({source:'hhttps-org',type:'identity-issued',payload:identity},window.location.origin);}catch(e){}
-}
-
-/* AP8-17 (#151): returnTo is only honoured when it stays on THIS origin —
-   the OAuth consent page lives here, so a relative path or an absolute URL
-   of the same origin is all we ever need. Other hosts, protocol-relative
-   URLs (//evil), javascript:, data: … resolve to null and are ignored. */
-function resolveReturnTo(raw,origin){
-  if(!raw||typeof raw!=='string')return null;
-  let t;
-  try{t=new URL(raw,origin);}catch(e){return null;}
-  if(t.protocol!=='https:'&&t.protocol!=='http:')return null;
-  if(t.origin!==origin)return null;
-  return t;
-}
-/* Return to the OAuth consent page (or whoever sent us here). */
-function maybeReturnTo(){
-  let returnTo=null;
-  try{returnTo=new URL(window.location.href).searchParams.get('returnTo');}catch(e){return;}
-  if(!returnTo)return;
-  const target=resolveReturnTo(returnTo,window.location.origin);
-  if(!target)return;
-  const t=document.createElement('div');
-  t.textContent=(LANG==='de'?'Angemeldet \u2713 \u2014 zur\u00fcck zu ':'Signed in \u2713 \u2014 returning to ')+target.host+' \u2026';
-  t.style.cssText='position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;'
-    +'background:#111;color:#fff;padding:12px 20px;border-radius:10px;font-weight:600;'
-    +'font-family:inherit;box-shadow:0 8px 30px rgba(0,0,0,.25);';
-  document.body.appendChild(t);
-  setTimeout(function(){window.location.href=target.href;},1200);
-}
-
-/* ISSUE TOKEN — role/declare {sessionId} once >=1 human method confirmed */
-async function issueToken(){
-  if(MACHINE_IDENTITY)return; // machine path issues its own token
-  const btn=document.getElementById('issueBtn');btn.disabled=true;
-  try{
-    const r=await fetch(API+'/hhttps/role/declare',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId})});
-    const d=await r.json(); if(!r.ok)throw 0;
-    const card=document.getElementById('tokenCard');card.classList.remove('hidden');
-    document.getElementById('tokenMethods').textContent=(LANG==='de'?'Methoden: ':'Methods: ')+ORDER.filter(m=>confirmed[m]).join(' \u00b7 ');
-    const tok=d.hhttps&&d.hhttps.token;
-    if(tok){const p=tok.split('.');document.getElementById('tokenRaw').textContent=p[0]+'.'+p[1]+'.'+(p[2]||'').slice(0,16)+'\u2026'}
-    publishIdentity(d);
-    card.scrollIntoView({behavior:'smooth',block:'center'});
-    maybeReturnTo();
-  }catch(e){btn.disabled=false}
-}
-
-/* ── Section 2: professional role → iamhmn-card (esco/suggest + role/card) ───
-   Real contracts only. role/card needs ≥1 verified method (ORDER), so the
-   section is gated on hasAnyMethod(). RAL0 self-declared / RAL1 with proof;
-   reserved professions block RAL0. RAL2 (qualified (Q)EAA / register) is the
-   live target, honestly labelled, not faked here. */
-const RESERVED=[
-  {key:'medical',de:'Arzt / Ärztin',en:'Doctor',isco08:'2212'},
-  {key:'nursing',de:'Pflegefachkraft',en:'Nurse',isco08:'2221'},
-  {key:'lawyer', de:'Rechtsanwalt/-anwältin',en:'Lawyer',isco08:'2611'},
-  {key:'notary', de:'Notar/-in',en:'Notary',isco08:'2619'},
-  {key:'police', de:'Polizei',en:'Police officer',isco08:'5412'},
-  {key:'judge',  de:'Richter/-in',en:'Judge',isco08:'2612'}
-];
-let roleSel=null, qualSel=null, roleDocs={self:false,qual:false}, escoTimer=null;
-function hasAnyMethod(){return ORDER.some(m=>confirmed[m]);}
-function rolePick(which){
-  ['self','qual'].forEach(w=>{
-    document.getElementById('rb-'+w).classList.toggle('active',w===which);
-    document.getElementById('rolep-'+w).classList.toggle('hidden',w!==which);
-  });
-}
-function renderQualChips(){
-  const box=document.getElementById('qualChips'); if(!box)return;
-  box.innerHTML=RESERVED.map((r,i)=>`<button type="button" class="role-chip${qualSel===i?' on':''}" onclick="qualPick(${i})">${LANG==='de'?r.de:r.en}</button>`).join('');
-}
-function qualPick(i){qualSel=i;renderQualChips();refreshQual();}
-function escHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-async function escoSuggest(text){
-  const list=document.getElementById('escoList'); roleSel=null; refreshSelf();
-  if(escoTimer)clearTimeout(escoTimer);
-  if(text.trim().length<2){list.classList.add('hidden');list.innerHTML='';return;}
-  escoTimer=setTimeout(async()=>{
-    try{
-      const r=await fetch(API+'/hhttps/esco/suggest?q='+encodeURIComponent(text.trim())+'&lang='+LANG);
-      const d=await r.json(); const hits=d.results||[];
-      if(!hits.length){list.classList.add('hidden');list.innerHTML='';return;}
-      list.innerHTML=hits.map((s,i)=>`<div class="esco-item" onmousedown="escoPick(${i})">${s.reserved?'🔒 ':''}<span>${escHtml(s.label)}</span>${s.isco08?`<span class="isco">ISCO ${escHtml(s.isco08)}</span>`:''}</div>`).join('');
-      list._hits=hits; list.classList.remove('hidden');
-    }catch(e){list.classList.add('hidden');}
-  },180);
-}
-function escoPick(i){
-  const list=document.getElementById('escoList'); const s=(list._hits||[])[i]; if(!s)return;
-  roleSel=s; document.getElementById('escoInput').value=s.label; escoHide(); refreshSelf();
-}
-function escoHide(){const l=document.getElementById('escoList');if(l)l.classList.add('hidden');}
-function roleFile(which,input){
-  const has=!!(input.files&&input.files.length); roleDocs[which]=has;
-  document.getElementById(which==='self'?'roleFileName':'qualFileName').textContent=has?input.files[0].name:tr('role.file.none');
-  which==='self'?refreshSelf():refreshQual();
-}
-function refreshSelf(){
-  const q=document.getElementById('escoInput').value.trim();
-  const reserved=roleSel?!!roleSel.reserved:false;
-  const warn=document.getElementById('roleWarnSelf'),go=document.getElementById('roleGoSelf');
-  if(reserved&&!roleDocs.self){warn.textContent=tr('role.hint.qual');warn.hidden=false;go.disabled=true;return;}
-  warn.hidden=true; go.disabled=q.length<2;
-}
-function refreshQual(){
-  const go=document.getElementById('roleGoQual'),warn=document.getElementById('roleWarnQual');
-  if(qualSel===null){go.disabled=true;return;}
-  if(!roleDocs.qual){warn.textContent=tr('role.hint.qual');warn.hidden=false;go.disabled=true;return;}
-  warn.hidden=true; go.disabled=false;
-}
-async function roleIssue(which){
-  const warn=document.getElementById(which==='self'?'roleWarnSelf':'roleWarnQual');
-  const go=document.getElementById(which==='self'?'roleGoSelf':'roleGoQual');
-  const result=document.getElementById(which==='self'?'roleResultSelf':'roleResultQual');
-  if(!hasAnyMethod()){warn.textContent=tr('role.needmethod');warn.hidden=false;return;}
-  go.disabled=true;
-  const body={sessionId,documentProvided:which==='self'?roleDocs.self:true};
-  if(which==='self'){
-    if(roleSel)body.esco={label:roleSel.label,isco08:roleSel.isco08,escoUri:roleSel.escoUri};
-    else body.customRole=document.getElementById('escoInput').value.trim();
-  }else{const r=RESERVED[qualSel];body.esco={label:LANG==='de'?r.de:r.en,isco08:r.isco08};}
-  try{
-    const r=await fetch(API+'/hhttps/role/card',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-    const d=await r.json();
-    if(!r.ok){warn.textContent=d.remedy||d.error||tr('err');warn.hidden=false;go.disabled=false;return;}
-    warn.hidden=true;
-    const ral=(d.card&&d.card.ral)||0, uri=d.offer&&d.offer.uri, cross=(d.offer&&d.offer.crossDeviceUri)||uri;
-    let qrHtml='';
-    if(cross){const qr=qrcode(0,'L');qr.addData(cross);qr.make();
-      qrHtml=`<div class="qr" style="margin-top:14px"><div class="qr-frame"><span class="sp s1">✦</span><span class="sp s2">✦</span><span class="sp s3">✦</span><span class="sp s4">✦</span><img src="${qr.createDataURL(4,8)}" alt="iamhmn-card QR"></div></div>`;}
-    const ralLabel=ral>=2?'RAL 2':(ral===1?tr('role.ral1'):tr('role.ral0'));
-    result.innerHTML=`<div class="ral-badge ral-${ral}"><span class="dot"></span><span>${ralLabel}</span></div>`+qrHtml+`<div class="ready">${tr('role.ready')}</div>`+(uri?`<a class="openbtn" href="${escHtml(uri)}">${tr('role.open')}</a>`:'');
-    go.disabled=false;
-  }catch(e){warn.textContent=tr('err');warn.hidden=false;go.disabled=false;}
-}
-
-/* ── Restore a previously issued identity across reloads ────────────────────
-   The old sign-in page kept the token visible after a refresh. We restore it
-   from localStorage; if the access token has expired we mint a fresh one from
-   the refresh token, and only if that is impossible do we silently clear the
-   stored identity and start over — the user never sees an "expired" error. */
-function _jwtExp(tok){
-  try { var p=JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); return p&&p.exp?p.exp*1000:0; }
-  catch(e){ return 0; }
-}
-function _showTokenCard(identity){
-  try{
-    var card=document.getElementById('tokenCard');
-    if(!card||!identity||!identity.token) return;
-    var methods=(identity.method||'').split(',').filter(Boolean);
-    var lbl=(typeof LANG!=='undefined'&&LANG==='de'?'Methoden: ':'Methods: ')+(methods.join(' \u00b7 ')||(identity.method||''));
-    var th=document.querySelector('#tokenCard .h span[data-i18n]');
-    if(identity.actorType==='bot'){
-      lbl=(typeof LANG!=='undefined'&&LANG==='de'?'\uD83E\uDD16 Maschine \u00b7 Betreiber hinterlegt: ':'\uD83E\uDD16 Machine \u00b7 operator on file: ')+(identity.operatorEmail||'');
-      if(th){th.setAttribute('data-i18n','token.done.machine');th.textContent=tr('token.done.machine');}
-    } else if(th){th.setAttribute('data-i18n','token.done');th.textContent=tr('token.done');}
-    var mEl=document.getElementById('tokenMethods'); if(mEl) mEl.textContent=lbl;
-    var p=identity.token.split('.');
-    var rEl=document.getElementById('tokenRaw'); if(rEl) rEl.textContent=p[0]+'.'+p[1]+'.'+((p[2]||'').slice(0,16))+'\u2026';
-    card.classList.remove('hidden');
-  }catch(e){}
-}
-async function restoreIdentity(){
-  var identity=null;
-  try{ var raw=localStorage.getItem('hhttps_identity'); if(raw) identity=JSON.parse(raw); }catch(e){}
-  if(!identity||!identity.token) return;
-
-  var expired=_jwtExp(identity.token) <= (Date.now()+5000);
-  if(expired){
-    // Try a stateless refresh; give up silently if not possible.
-    var canRefresh = identity.refreshToken &&
-      (!identity.refreshExpiresAt || new Date(identity.refreshExpiresAt).getTime() > Date.now());
-    if(canRefresh){
-      try{
-        var r=await fetch('/hhttps/token/refresh',{method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({refreshToken:identity.refreshToken})});
-        if(r.ok){
-          var d=await r.json();
-          if(d.token){
-            identity.token=d.token;
-            identity.expiresAt=d.expiresAt||identity.expiresAt||null;
-            /* AP3-18 (#116): /hhttps/token/refresh ROTATES the refresh token —
-               every call returns a new one and invalidates the old one, and
-               re-using an invalidated token trips the reuse detection. Storing
-               only the new access token made the silent refresh work exactly
-               once; the second attempt logged the user out. */
-            if(d.refreshToken){
-              identity.refreshToken=storableRefreshToken(d.refreshToken,d.refreshExpiresAt||identity.refreshExpiresAt);
-              identity.refreshExpiresAt=d.refreshExpiresAt||identity.refreshExpiresAt||null;
-            }
-            try{ localStorage.setItem('hhttps_identity',JSON.stringify(identity)); }catch(e){}
-          } else { canRefresh=false; }
-        } else { canRefresh=false; }
-      }catch(e){ canRefresh=false; }
-    }
-    if(!canRefresh){
-      try{ localStorage.removeItem('hhttps_identity'); }catch(e){}
-      return; // start fresh, no error surfaced
-    }
-  }
-  _showTokenCard(identity);
-}
-
-/* ── K-9: return from the magic link ──────────────────────────────────────
-   GET /hhttps/email/verify redirects to
-   /?email_verify=success&session=<id>&pseudonym=<p>&… (or
-   ?email_verify=error&reason=<code>). Adopt the session, mark the email as
-   confirmed (unlocking the other methods) and clean the URL afterwards. */
-function handleEmailVerifyReturn(){
-  let params;
-  try{params=new URLSearchParams(window.location.search);}catch(e){return;}
-  const state=params.get('email_verify');
-  if(!state)return;
-  const hint=document.getElementById('emailHint');
-  if(state==='success'&&params.get('session')){
-    sessionId=params.get('session');
-    markConfirmed('email');
-    const pseudonym=(params.get('pseudonym')||'').toString();
-    if(pseudonym){
-      const st=document.getElementById('st-email');
-      const sp=document.createElement('span'); sp.className='pseudo'; sp.textContent=pseudonym;
-      st.appendChild(document.createTextNode(' ')); st.appendChild(sp);
-    }
-    if(hint)hint.textContent=tr('email.done').replace('{p}',pseudonym);
-  }else if(state==='error'){
-    if(hint)hint.textContent=tr('err')+' ('+(params.get('reason')||'')+')';
-    pick('email');
-  }
-  ['email_verify','session','pseudonym','reason','level','score','domain'].forEach(k=>params.delete(k));
-  try{
-    const q=params.toString();
-    history.replaceState(null,'',window.location.pathname+(q?'?'+q:'')+window.location.hash);
-  }catch(e){}
-}
-
-/* ── T9 / AK-31, AK-32: login_hint from the OAuth consent page ─────────────
-   The consent page (relogin) sends a not-yet-signed-in user here as
-   /?returnTo=<consent-url>&login_hint=<email>&pseudonym=<name>. Open the
-   email panel, pre-fill both fields, strip login_hint/pseudonym from the URL
-   (returnTo stays — maybeReturnTo() needs it) and request the code ONCE.
-   Because the params are removed BEFORE the send, a reload never re-sends;
-   an invalid address just leaves the pre-filled panel with a hint. */
-function handleLoginHint(){
-  let params;
-  try{params=new URLSearchParams(window.location.search);}catch(e){return;}
-  const loginHint=(params.get('login_hint')||'').trim();
-  if(!loginHint)return;
-  const pseudonym=(params.get('pseudonym')||'').trim();
-  ['login_hint','pseudonym'].forEach(k=>params.delete(k));
-  try{
-    const q=params.toString();
-    history.replaceState(null,'',window.location.pathname+(q?'?'+q:'')+window.location.hash);
-  }catch(e){}
-  pick('email');
-  document.getElementById('emailInput').value=loginHint;
-  const pi=document.getElementById('pseudoInput'); if(pi&&pseudonym) pi.value=pseudonym;
-  const hint=document.getElementById('emailHint');
-  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginHint)){if(hint)hint.textContent=tr('err');return;}
-  if(hint)hint.textContent=tr('email.hintAuto');
-  emailStart();
-}
-
-applyLang();
-handleEmailVerifyReturn();
-handleLoginHint();
-restoreIdentity();
-</script>
+<!-- AP8-34 (#215): the sign-in logic is an ES module under /js/signin/ —
+     lintable, importable by the unit tests and free of inline handlers.
+     The two vendor bundles stay classic scripts; module scripts are
+     deferred, so `qrcode` and `SimpleWebAuthnBrowser` exist by then. -->
+<script src="https://unpkg.com/qrcode-generator@1.4.4/qrcode.js" defer></script>
+<script src="https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js" defer></script>
+<script type="module" src="/js/signin/app.js"></script>
 </body>
 </html>

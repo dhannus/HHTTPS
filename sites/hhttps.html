@@ -1,4 +1,30 @@
 <!DOCTYPE html>
+<!--
+  AP8-40 (#230) — STATUS: REFERENZ-IMPLEMENTIERUNG, NICHT AUSGELIEFERT.
+
+  Diese Seite wird von KEINEM Deploy-Skript kopiert: `scripts/deploy-all.sh`
+  liefert nur `sites/iamhmn.html` (→ iamhmn.org) und `sites/spec.html` aus.
+  Die produktive Anmeldeseite ist `server/public/index.html` (+ die Module unter
+  `server/public/js/signin/`); die produktive Landing-Page ist `sites/iamhmn.html`.
+
+  Warum sie trotzdem gepflegt und getestet wird: sie ist die einzige Seite, die
+  den kompletten HHTTPS-Flow gegen eine LOKALE Server-Instanz durchspielt
+  (E-Mail zuerst → Passkey → role/declare → Token), und `legacy-pages.test.mjs`
+  hält sie an den jeweils aktuellen Endpunkt-Vertrag. Protokolländerungen
+  müssen hier also mitgezogen werden.
+
+  Was hier NICHT mehr dem Server entspricht, bewusst nicht angefasst in
+  Review-Welle 3, weil es die Demo-UI komplett umbauen würde (AP8-42, #234):
+    * `ROLES_LOCAL` — ein fester 15er-Rollenkatalog. Der Server hat seit v0.5
+      keinen Katalog mehr (`GET /hhttps/roles` → `model: 'esco-dynamic'`);
+      Berufe lösen dynamisch gegen ESCO auf.
+    * `VMETHOD_LABELS` mit clientseitigen `score`-Werten und `setTrust(...)` —
+      der Trust Score kommt ausschliesslich vom Server und wird auf der
+      produktiven Seite gar nicht mehr angezeigt.
+    * `getDomainHint()` — eine Kopie der Domain-Regeln aus `server/email.js`.
+  Entscheidung dazu: entweder die Seite ins Deploy aufnehmen UND modernisieren
+  oder archivieren; beides ist eine Produktentscheidung, kein Refactoring.
+-->
 <html lang="de">
 <head>
 <meta charset="UTF-8">
@@ -1876,6 +1902,11 @@ window.addEventListener('load', () => {
     history.replaceState({}, '', '/');
   }
   if (p.get('email_verify') === 'success') {
+    // AP8-40 (#230): the server redirects with ?email_verify=success&session=<id>.
+    // Without adopting that session first, checkEmailStatus() returned right
+    // away (`if (!sessionId) return;`) and the whole branch did nothing.
+    const returned = p.get('session');
+    if (returned) sessionId = returned;
     checkEmailStatus();
     history.replaceState({}, '', '/');
   }

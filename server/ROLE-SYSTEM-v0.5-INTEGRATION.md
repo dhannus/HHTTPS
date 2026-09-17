@@ -28,9 +28,9 @@ die `RESERVED_REGISTRY` ist die einzige feste Rollen-Governance.
 | `roles.eaa.js` | Lese-Pfad: extern→RAL2, Card-Read-back→RAL aus Karte; `guardRoleEaa` | ✅ |
 | `eudi-verifier/backend-client.js` | **`issueIamhmnCard()`** + `ensureIamhmnCardConfig()` (OID4VCI, Hackathon-Flow) | ✅ node --check |
 | `server.js` | `POST /hhttps/role/card`, `GET /hhttps/esco/suggest`, `GET /.well-known/hhttps-role-assurance`, Imports | ✅ node --check |
-| `public/iamhmn-card-issuer.js` | Frontend: ESCO-Typeahead + Freitext + Dokument + „ins Wallet laden" | ✅ |
+| `public/js/signin/app.js` | Frontend: ESCO-Typeahead + Freitext + Dokument + „ins Wallet laden" (AP8-37/#226: die nie eingebundene Web-Component `public/iamhmn-card-issuer.js` wurde gelöscht) | ✅ |
 | `roles.taxonomy.i18n.js` | DE RAL-Strings | ✅ |
-| `public/.well-known/hhttps-role-assurance.json` | Discovery (model: esco-dynamic) | ✅ |
+| `GET /.well-known/hhttps-role-assurance` | Discovery (model: esco-dynamic), aus `roleAssuranceDiscovery()` berechnet. AP8-54 (#249): die statische Kopie unter `public/.well-known/` war bereits gedriftet und wurde gelöscht | ✅ |
 
 ## Was du noch tun musst (kein Code, oder dein Merge)
 
@@ -40,21 +40,12 @@ die `RESERVED_REGISTRY` ist die einzige feste Rollen-Governance.
    Minimal-Config an, aber Encryption/Key-Chain-Attestation richtest du wie im
    Hackathon ein (key-chain `usageType:"attestation"`).
 
-2. **Frontend in `index.html` verdrahten** (dein Merge): die alte Rollen-Grid-
-   Reste (`ROLES_LOCAL`, `selectRole`, `roleGrid`, `selRole`) entfernen und die
-   neue Komponente einhängen — sie gehört in Screen 2 (nach „Mensch verifiziert"):
-
-   ```html
-   <script type="module" src="/iamhmn-card-issuer.js"></script>
-   <iamhmn-card-issuer session-id="…" locale="de"></iamhmn-card-issuer>
-   <script>
-     document.querySelector('iamhmn-card-issuer')
-       .addEventListener('card-offer', e => {
-         // deinen vorhandenen QR-Renderer auf e.detail.uri anwenden
-         renderQr(e.detail.uri);   // gleiche Funktion wie beim EUDI-Age-Flow
-       });
-   </script>
-   ```
+2. **Frontend in `index.html`** — *erledigt, anders als hier geplant.*
+   Die Rollen-Sektion ist direkt in `public/js/signin/app.js` implementiert
+   (`escoSuggest()` → `GET /hhttps/esco/suggest`, `roleIssue()` →
+   `POST /hhttps/role/card`, QR aus `offer.crossDeviceUri`). Die geplante
+   Web-Component `<iamhmn-card-issuer>` wurde nie eingebunden und in
+   Review-Welle 3 gelöscht (AP8-37, #226).
 
 3. **Legacy-`ROLES`-Abbau (optional, separat):** Die alten 15 in `roles.js` sind
    für die Schleife nicht mehr nötig, werden aber noch von Sekundärpfaden gelesen

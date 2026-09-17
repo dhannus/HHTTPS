@@ -1,5 +1,14 @@
 # Finalisierung — Komponente verdrahtet + /hhttps/roles auf ESCO
 
+> **Stand 2026-09 (AP8-37, #226):** Der hier beschriebene Einbau der
+> Web-Component `<iamhmn-card-issuer>` in `public/index.html` hat nie
+> stattgefunden. `public/iamhmn-card-issuer.js` war toter Code — die Seite hat
+> ESCO-Typeahead und Kartenausstellung stattdessen selbst implementiert — und
+> wurde in Review-Welle 3 gelöscht. Die maßgebliche Implementierung liegt in
+> `public/js/signin/app.js` (`escoSuggest`, `roleIssue`, `RESERVED`); die
+> Reserved-Liste ist serverseitig in `roles.taxonomy.js` (`RESERVED_REGISTRY`)
+> maßgeblich. Der Rest dieses Dokuments ist historisch.
+
 Ergänzungen in diesem Schritt, additiv auf den Cleanup-Stand.
 
 ## `public/index.html` — `<iamhmn-card-issuer>` eingehängt
