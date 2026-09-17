@@ -55,3 +55,27 @@ test('AK-29: authorize reads login_hint/pseudonym and only adds valid values to 
   assert.match(route, /params\.set\('login_hint'/, 'login_hint set conditionally on the params object');
   assert.match(route, /params\.set\('pseudonym'/, 'pseudonym set conditionally on the params object');
 });
+
+// ─── AP2-07 (#87): no hard-coded https://hhttps.org — BASE_URL everywhere ────
+
+test('AP2-07: consent page and OAuth error page reference BASE_URL, never a hard-coded https://hhttps.org', () => {
+  const r = renderer();
+  assert.doesNotMatch(r, /https:\/\/hhttps\.org/, 'no hard-coded origin in renderConsentPage');
+  assert.match(r, /const HHTTPS_BASE = \$\{JSON\.stringify\(BASE_URL\)\};/, 'script gets BASE_URL as a JSON literal');
+  assert.match(r, /href="\$\{escapeHtml\(BASE_URL\)\}"/, 'links use escapeHtml(BASE_URL)');
+
+  const fn = r.match(/function relogin\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'relogin() exists');
+  assert.match(fn[1], /HHTTPS_BASE \+ '\/\?returnTo=' \+ encodeURIComponent\(window\.location\.href\)/, 'relogin goes to BASE_URL');
+
+  const refresh = r.match(/async function tryRefresh\(identity\)\{([\s\S]*?)\n\}/);
+  assert.ok(refresh, 'tryRefresh() exists');
+  assert.match(refresh[1], /fetch\(HHTTPS_BASE \+ '\/hhttps\/token\/refresh'/, 'token refresh goes to BASE_URL');
+
+  const errStart = src.indexOf('function renderOAuthError(');
+  const errEnd = src.indexOf('function renderConsentPage(', errStart);
+  assert.ok(errStart > 0 && errEnd > errStart, 'renderOAuthError located');
+  const err = src.slice(errStart, errEnd);
+  assert.doesNotMatch(err, /https:\/\/hhttps\.org/, 'no hard-coded origin in renderOAuthError');
+  assert.match(err, /href="\$\{escapeHtml\(BASE_URL\)\}"/, 'back link uses BASE_URL');
+});

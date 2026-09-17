@@ -49,7 +49,7 @@ import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webho
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
 import { normalizeEmail, emailAnchorHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
-import { validateAuthorizeParams, stateForErrorRedirect } from './oauth-params.js';
+import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect } from './oauth-params.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
@@ -73,6 +73,15 @@ const PORT     = process.env.PORT    || 3000;
 const RP_ID    = process.env.RP_ID   || 'hhttps.org';
 const ORIGIN   = process.env.ORIGIN  || `https://${RP_ID}`;
 const BASE_URL = process.env.BASE_URL || ORIGIN;
+// AP2-15 (#114): key for the pairwise `sub` HMAC. The deterministic fallback
+// is for development only — in production the boot refuses without it (see
+// assertPairwiseSecretConfigured, analogous to assertPepperConfigured).
+const PAIRWISE_SECRET = process.env.PAIRWISE_SECRET || ('hhttps-pairwise-' + RP_ID);
+function assertPairwiseSecretConfigured(env = process.env) {
+  if (env.NODE_ENV === 'production' && !env.PAIRWISE_SECRET) {
+    throw new Error('PAIRWISE_SECRET must be set in production (pairwise OAuth subject identifiers depend on it).');
+  }
+}
 
 // ── WIMSE: RFC 7638 JWK thumbprint for an EC P-256 public JWK ───────────────
 // Zero-PII: only the thumbprint is ever stored, never the key material.
@@ -1409,8 +1418,7 @@ function pairwiseSubjectId(userId, clientId, subjectType) {
     return crypto.createHash('sha256').update(`public:${userId}`).digest('hex').slice(0, 32);
   }
   // pairwise (default): HMAC(userId + clientId, server-secret)
-  const secret = process.env.PAIRWISE_SECRET || 'hhttps-pairwise-' + RP_ID;
-  return crypto.createHmac('sha256', secret)
+  return crypto.createHmac('sha256', PAIRWISE_SECRET)
     .update(`${userId}|${clientId}`)
     .digest('hex')
     .slice(0, 32);
@@ -1463,7 +1471,7 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
 
   // #31: bounded state/nonce, well-formed PKCE (RFC 7636 §4.2). An over-long
   // state is NOT echoed back at full length in the error redirect.
-  const v = validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method });
+  const v = validateAuthorizeParams({ state, nonce, scope, code_challenge, code_challenge_method });
   if (!v.ok) {
     return redirectWithError(res, redirect_uri, stateForErrorRedirect(state), v.error, v.description);
   }
@@ -1535,7 +1543,7 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
 
   // #31: validate before touching the DB — an over-long state/nonce or a
   // malformed code_challenge is a client error, not a 401/500.
-  const v = validateAuthorizeParams({ state, nonce, code_challenge, code_challenge_method });
+  const v = validateAuthorizeParams({ state, nonce, scope, code_challenge, code_challenge_method });
   if (!v.ok) return res.status(400).json({ error: v.error, error_description: v.description });
 
   // Token errors (revoked / not active / jwt) stay 401 — everything after
@@ -1638,7 +1646,22 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
 });
 
 // Token endpoint: exchange code for access_token + id_token
+// AP2-04 (#77): the handler is async under Express 4 — a thrown error would
+// leave the request hanging forever. Everything runs inside handleTokenRequest
+// and any unexpected failure becomes 500 server_error (RFC 6749 §5.2).
 app.post('/hhttps/oauth/token', async (req, res) => {
+  try {
+    await handleTokenRequest(req, res);
+  } catch (err) {
+    console.error('[OAUTH] token endpoint failed:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'server_error' });
+  }
+});
+
+async function handleTokenRequest(req, res) {
+  const tv = validateTokenParams(req.body || {});
+  if (!tv.ok) return res.status(400).json({ error: tv.error, error_description: tv.description });
+
   const {
     grant_type,
     code,
@@ -1669,26 +1692,29 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
       return res.status(400).json({ error: 'invalid_grant' });
     }
-    const active = await db.refreshTokens.get(rd.jti);
-    if (!active) {
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
-    }
-    // AP2-01: "disconnect platform" (/hhttps/oauth/revoke) must end the chain.
-    if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
-      await db.refreshTokens.delete(rd.jti);
-      return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
-    }
-
-    // Rotation: erst die neue jti anlegen, dann die alte entwerten — und
-    // jeden Persistenzfehler sauber beantworten statt den Request hängen zu
-    // lassen.
+    // AP2-03 (#68): rotation is ONE atomic claim — the old jti is deleted with
+    // a conditional DELETE … RETURNING, so of N parallel refreshes with the
+    // same token exactly one wins; the rest get invalid_grant (RFC 6749
+    // §10.4). Only the winner mints the successor. (Inline SQL — db.js belongs
+    // to another package in this review wave; a refreshTokens.claim() helper
+    // is the follow-up.)
     const newJti = uuid();
     try {
+      const claimed = await db.q(
+        `DELETE FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW() RETURNING jti`, [rd.jti]
+      );
+      if (claimed.rowCount !== 1) {
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
+      }
+      // AP2-01: "disconnect platform" must end the chain. The claim above has
+      // already removed the row, so a disconnected platform simply stops here.
+      if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
+      }
       await db.refreshTokens.create({
         jti: newJti, userId: rd.ouid, credentialId: null,
         role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
       });
-      await db.refreshTokens.delete(rd.jti);
     } catch (err) {
       console.error('[OAUTH] refresh rotation failed:', err.message);
       return res.status(500).json({ error: 'server_error' });
@@ -1700,7 +1726,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes: rScopes
     });
     const newRefresh = signToken({
-      sub: 'oauth_refresh', jti: newJti, client_id,
+      sub: 'oauth_refresh', token_use: 'refresh', jti: newJti, client_id,
       ouid: rd.ouid, scope: rd.scope || 'openid',
       role: rd.role || null, trust_score: rd.trust_score ?? 0,
       verification_method: rd.verification_method || null,
@@ -1717,6 +1743,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
       hhttps_iss: `hhttps://${RP_ID}`,
       sub:        rPairwise,
       aud:        client_id,
+      token_use:  'access',
       client_id,
       scope:      rScopes.join(' '),
       role:       rd.role || null,
@@ -1789,8 +1816,10 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   // Generate pairwise subject ID
   const pairwiseId = pairwiseSubjectId(claimed.user_id, client_id, client.subject_type);
 
-  // Record the connection (for "my logins" UI later)
-  await db.connectedPlatforms.record({
+  // Record the connection (for "my logins" UI later). AP2-24 (#131): started
+  // here, awaited right before the response — it runs while the tokens are
+  // signed and the refresh row is written instead of serialising everything.
+  const connectionRecorded = db.connectedPlatforms.record({
     userId:             claimed.user_id,
     clientId:           client_id,
     pairwiseSubjectId:  pairwiseId,
@@ -1816,6 +1845,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     hhttps_iss: `hhttps://${RP_ID}`,
     sub:        pairwiseId,
     aud:        client_id,
+    token_use:  'access',
     client_id,
     scope:      claimed.scopes.join(' '),
     role:       claimed.role,
@@ -1862,20 +1892,17 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   Object.assign(idTokenClaims, identityClaims);
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
 
-  await db.stats.increment('oauth_tokens_issued');
-  await db.stats.increment('oauth_logins');
-
-  // Phase 3b: per-client privacy-preserving daily stats
-  // (no user IDs, just role/trust buckets)
-  try {
-    await db.clientStats.recordLogin(
-      client_id,
-      idTokenClaims.role || 'unknown',
-      idTokenClaims.trust_score || 0
-    );
-  } catch (err) {
-    console.warn('[STATS] recordLogin failed:', err.message);
-  }
+  // AP2-24 (#131): statistics are decoupled from the response path. The two
+  // global counters (`stats` hot rows, INSERT … ON CONFLICT) and the per-client
+  // daily bucket run in parallel and are never awaited — a failure is logged,
+  // never surfaced to the client.
+  Promise.all([
+    db.stats.increment('oauth_tokens_issued'),
+    db.stats.increment('oauth_logins'),
+    // Phase 3b: per-client privacy-preserving daily stats
+    // (no user IDs, just role/trust buckets)
+    db.clientStats.recordLogin(client_id, idTokenClaims.role || 'unknown', idTokenClaims.trust_score || 0)
+  ]).catch(err => console.warn('[STATS] oauth token stats failed:', err.message));
 
   // Refresh-Token für die stille Erneuerung (RFC 6749 §6), rotierend.
   // Die Persistenz darf den Login NIE brechen: schlägt sie fehl, antworten
@@ -1883,14 +1910,18 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   // trägt einen FK auf credentials; die OAuth-Bindung steckt signiert im
   // Refresh-JWT selbst (client_id-Claim).
   let oauthRefreshToken = null;
-  try {
-    const refreshJti = uuid();
-    await db.refreshTokens.create({
-      jti: refreshJti, userId: claimed.user_id, credentialId: null,
-      role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
-    });
+  const refreshJti = uuid();
+  const refreshRowWritten = db.refreshTokens.create({
+    jti: refreshJti, userId: claimed.user_id, credentialId: null,
+    role: claimed.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
+  }).then(() => true, (err) => {
+    console.error('[OAUTH] refresh issuance failed:', err.message);
+    return false;
+  });
+  await connectionRecorded;
+  if (await refreshRowWritten) {
     oauthRefreshToken = signToken({
-      sub: 'oauth_refresh', jti: refreshJti, client_id,
+      sub: 'oauth_refresh', token_use: 'refresh', jti: refreshJti, client_id,
       ouid: claimed.user_id, scope: claimed.scopes.join(' '),
       role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
       verification_method: claimed.verification_method || null,
@@ -1899,8 +1930,6 @@ app.post('/hhttps/oauth/token', async (req, res) => {
         age_verification_method: claimed.age_verification_method || 'self-declared' } : {}),
       ...identityClaims
     }, { expiresIn: OAUTH_REFRESH_TTL });
-  } catch (err) {
-    console.error('[OAUTH] refresh issuance failed:', err.message);
   }
 
   return res.json({
@@ -1911,7 +1940,7 @@ app.post('/hhttps/oauth/token', async (req, res) => {
     ...(oauthRefreshToken ? { refresh_token: oauthRefreshToken } : {}),
     scope:         claimed.scopes.join(' ')
   });
-});
+}
 
 // UserInfo endpoint: returns claims for the bearer token
 app.get('/hhttps/oauth/userinfo', async (req, res) => {
@@ -1919,11 +1948,22 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'unauthorized' });
 
+  let d;
   try {
-    const d = verifyToken(token);
-    if (!d.client_id) {
-      return res.status(403).json({ error: 'not an oauth access token' });
-    }
+    d = verifyToken(token);
+  } catch (e) {
+    return userinfoInvalidToken(res, 'access token invalid or expired');
+  }
+  // AP2-10 (#105): only an OAuth ACCESS token is accepted — positively marked
+  // token_use:'access', audience = client, pairwise/public subject. The
+  // refresh JWT (sub 'oauth_refresh', token_use 'refresh') carries the same
+  // identity claims and lives 30 days, so it must never pass here; neither
+  // does any other server-signed JWT (session, refresh, machine).
+  if (d.token_use !== 'access' || !d.client_id || d.aud !== d.client_id ||
+      !d.sub || d.sub === 'oauth_refresh') {
+    return userinfoInvalidToken(res, 'not an oauth access token');
+  }
+  try {
     const scopes = (d.scope || '').split(/\s+/).filter(Boolean);
     const out = {
       sub: d.sub,
@@ -1947,26 +1987,116 @@ app.get('/hhttps/oauth/userinfo', async (req, res) => {
     }
     return res.json(out);
   } catch (e) {
-    return res.status(401).json({ error: 'invalid_token' });
+    console.error('[OAUTH] userinfo failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
   }
 });
 
-// Revoke endpoint: user disconnects a platform
-app.post('/hhttps/oauth/revoke', async (req, res) => {
-  const { token, client_id } = req.body || {};
-  if (!token || !client_id) return res.status(400).json({ error: 'token + client_id required' });
+// RFC 6750 §3: 401 + WWW-Authenticate for a rejected bearer token.
+function userinfoInvalidToken(res, description) {
+  res.setHeader('WWW-Authenticate',
+    `Bearer realm="hhttps", error="invalid_token", error_description="${description}"`);
+  return res.status(401).json({ error: 'invalid_token', error_description: description });
+}
 
+// AP2-02 (#59): client authentication for /revoke (same rule as /token) —
+// confidential clients (client_secret_hash set) must present their secret,
+// public clients authenticate by client_id alone. Returns the client row or
+// null (→ 401 invalid_client).
+async function authenticateOAuthClient(client_id, client_secret) {
+  if (!client_id) return null;
+  const client = await db.oauthClients.get(client_id);
+  if (!client) return null;
+  if (client.client_secret_hash) {
+    if (!client_secret) return null;
+    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
+    if (expected !== client.client_secret_hash) return null;
+  }
+  return client;
+}
+
+// AP2-02 (#59): the user-facing disconnect — the USER (with their HHTTPS
+// token) severs the connection to a platform. This is the historical
+// behaviour of POST /hhttps/oauth/revoke and stays reachable there; the
+// dedicated path is /hhttps/oauth/disconnect. AP2-02: the user_id is derived
+// exactly as in /approve, so machine actors ('machine:<operatorId>') hit
+// their own row instead of a non-existent 'machine' row.
+async function disconnectPlatform(res, decoded, client_id) {
   try {
-    const d = await checkTokenValid(token);
-    const uid = d.uid || d.userId || d.sub;
+    const uid = decoded.sub === 'machine'
+      ? 'machine:' + (decoded.operatorId || 'unknown')
+      : (decoded.uid || decoded.userId || decoded.sub);
     await db.connectedPlatforms.revoke(uid, client_id);
     // AP2-01: the platform's OAuth refresh chain ends with the connection.
     const ended = await db.refreshTokens.deleteByUser(uid, client_id);
     for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'platform-disconnected');
     return res.json({ status: 'revoked', client_id, refresh_tokens_revoked: ended.length });
   } catch (e) {
+    console.error('[OAUTH] disconnect failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
+}
+
+// Revocation endpoint (RFC 7009) — the `revocation_endpoint` from discovery.
+// AP2-02 (#59): it used to be a user-disconnect route that never revoked
+// anything for a platform. It now serves both callers, dispatched by the kind
+// of token presented:
+//   1. a valid HHTTPS bearer token (human or machine) → user disconnect,
+//      unchanged semantics (see /hhttps/oauth/disconnect);
+//   2. anything else → RFC 7009: the PLATFORM authenticates with its own
+//      client credentials and a refresh token bound to it is deleted (the
+//      next refresh grant fails with invalid_grant). Access tokens are
+//      stateless and short-lived, so there is nothing to persist. Per RFC
+//      7009 §2.2 an invalid or foreign token still yields 200 — the endpoint
+//      never tells a client whether a token existed.
+app.post('/hhttps/oauth/revoke', async (req, res) => {
+  const { token, token_type_hint, client_id, client_secret } = req.body || {};
+  const tv = validateTokenParams({ client_id, client_secret });
+  if (!tv.ok || (token_type_hint !== undefined && typeof token_type_hint !== 'string')) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  if (!token || typeof token !== 'string' || !client_id) {
+    return res.status(400).json({ error: 'invalid_request', error_description: 'token + client_id required' });
+  }
+
+  // (1) user disconnect — checkTokenValid rejects refresh JWTs and OAuth
+  // access tokens (no jti in `tokens`), so platform tokens fall through.
+  let userToken = null;
+  try { userToken = await checkTokenValid(token); } catch { userToken = null; }
+  if (userToken) return disconnectPlatform(res, userToken, client_id);
+
+  // (2) RFC 7009
+  try {
+    const client = await authenticateOAuthClient(client_id, client_secret);
+    if (!client) return res.status(401).json({ error: 'invalid_client' });
+
+    let d = null;
+    try { d = verifyToken(token); } catch { d = null; }
+    if (d && d.sub === 'oauth_refresh' && d.client_id === client_id && d.jti) {
+      await db.refreshTokens.delete(d.jti);
+    }
+    return res.status(200).json({});
+  } catch (e) {
+    console.error('[OAUTH] revoke failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Disconnect endpoint: the user-facing half of /revoke under its own name —
+// only an HHTTPS bearer token is accepted here, so a wrong token is a clean
+// 401 instead of an RFC 7009 no-op 200.
+app.post('/hhttps/oauth/disconnect', async (req, res) => {
+  const { token, client_id } = req.body || {};
+  if (!token || !client_id || typeof token !== 'string' || typeof client_id !== 'string') {
+    return res.status(400).json({ error: 'token + client_id required' });
+  }
+  let d;
+  try {
+    d = await checkTokenValid(token);
+  } catch (e) {
     return res.status(401).json({ error: e.message });
   }
+  return disconnectPlatform(res, d, client_id);
 });
 
 // ─── OAuth helper rendering ──────────────────────────────────────────────────
@@ -1993,7 +2123,7 @@ h1{font-family:'Fraunces',serif;color:#C97D5B;margin-bottom:16px}
 p{line-height:1.6;color:#4A413A}
 a{color:#A86246;text-decoration:none}
 </style></head><body><div class="box"><h1>OAuth error ${status}</h1><p>${message}</p>
-<p><a href="https://hhttps.org">← back to hhttps.org</a></p></div></body></html>`;
+<p><a href="${escapeHtml(BASE_URL)}">← back to ${escapeHtml(RP_ID)}</a></p></div></body></html>`;
 }
 
 function renderConsentPage({ client, scopes, params }) {
@@ -2121,7 +2251,7 @@ function renderConsentPage({ client, scopes, params }) {
 </style></head><body>
 <div class="wrap">
   <div class="top">
-    <a class="brand" href="https://hhttps.org">
+    <a class="brand" href="${escapeHtml(BASE_URL)}">
       <span class="dot"></span><span>HHTTPS</span>
     </a>
     <div class="lang-toggle" role="group" aria-label="Language">
@@ -2152,10 +2282,12 @@ function renderConsentPage({ client, scopes, params }) {
       <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
       <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">Erlauben</button>
     </div>
-    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="https://hhttps.org">hhttps.org</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
+    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="${escapeHtml(BASE_URL)}">${escapeHtml(RP_ID)}</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
   </div>
 </div>
 <script>
+// AP2-07 (#87): the server's own base URL (BASE_URL) — never a hard-coded host.
+const HHTTPS_BASE = ${JSON.stringify(BASE_URL)};
 const params = new URLSearchParams(${JSON.stringify(params)});
 
 document.getElementById('denyBtn').addEventListener('click', () => {
@@ -2185,7 +2317,7 @@ function clearIdentity(){ try { localStorage.removeItem('hhttps_identity'); } ca
 // auto-send the code (AK-31); returnTo brings the user back here.
 function relogin(){
   clearIdentity();
-  let url = 'https://hhttps.org/?returnTo=' + encodeURIComponent(window.location.href);
+  let url = HHTTPS_BASE + '/?returnTo=' + encodeURIComponent(window.location.href);
   const loginHint = params.get('login_hint');
   const pseudonym = params.get('pseudonym');
   if (loginHint) url += '&login_hint=' + encodeURIComponent(loginHint);
@@ -2204,7 +2336,7 @@ async function tryRefresh(identity){
   if (!identity || !identity.refreshToken) return null;
   if (identity.refreshExpiresAt && new Date(identity.refreshExpiresAt).getTime() <= Date.now()) return null;
   try {
-    const r = await fetch('https://hhttps.org/hhttps/token/refresh', {
+    const r = await fetch(HHTTPS_BASE + '/hhttps/token/refresh', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refreshToken: identity.refreshToken })
     });
@@ -4852,6 +4984,7 @@ app.get('/hhttps/stats', async (req, res) => {
 async function main() {
   // 0. F-4 (S-5): refuse to boot in production without the anchor pepper.
   assertPepperConfigured();
+  assertPairwiseSecretConfigured();
 
   // 1. Init keys
   loadOrCreateKeys();
