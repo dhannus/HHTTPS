@@ -5561,6 +5561,13 @@ async function main() {
   // 1. Init keys
   loadOrCreateKeys();
 
+  // 1a. AP4-52 (#245): the EUDI verifier is mounted unconditionally, but every
+  // upstream call needs EUDIPLO_CLIENT_SECRET. Without it the failure used to
+  // surface only when a user started an age or eID flow. Say it at boot.
+  if (!process.env.EUDIPLO_CLIENT_SECRET) {
+    console.warn('[EUDI] EUDIPLO_CLIENT_SECRET is not set — /eudi/* is mounted but every age/eID verification will fail at the first upstream call.');
+  }
+
   // 1b. AP4-18: PID issuer trust must be bound explicitly (operator step).
   warnIfPidTrustUnbound();
 
