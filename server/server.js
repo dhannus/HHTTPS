@@ -165,7 +165,8 @@ function sendJson(req, res, data, opts = {}) {
     subtitle:    opts.subtitle,
     path:        req.path,
     originalUrl: req.originalUrl,
-    version:     PROTOCOL_VERSION
+    version:     PROTOCOL_VERSION,
+    nonce:       res.locals.cspNonce
   }));
 }
 
@@ -193,20 +194,25 @@ const HHTTPS_EXPOSED_HEADERS = [
 ];
 app.use(cors({ exposedHeaders: [...new Set(HHTTPS_EXPOSED_HEADERS)] }));
 
-// CRITICAL: scriptSrcAttr must allow 'unsafe-inline' so the existing onclick=
-// handlers in index.html keep working. Without this, all buttons silently fail.
-// AP1-25 (partial): third-party scripts are pinned to the two exact bundles
-// public/index.html loads instead of the whole of unpkg.com. Dropping
-// 'unsafe-inline' needs the inline handlers in public/*.html replaced first.
+// AP1-25 (#106): no 'unsafe-inline' for scripts any more. The sign-in page was
+// turned into real modules under public/js/ (AP8-34) and the three pages this
+// file renders itself carry a per-request nonce instead of inline handlers, so
+// an injected <script> or an injected onclick attribute no longer executes.
+// Third-party scripts stay pinned to the two exact bundles the sign-in page
+// loads rather than the whole of unpkg.com.
+app.use((req, res, next) => {
+  res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
+  next();
+});
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", "'unsafe-inline'",
+      scriptSrc:  ["'self'", (req, res) => `'nonce-${res.locals.cspNonce}'`,
                    'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js',
                    'https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js',
                    'fonts.googleapis.com'],
-      scriptSrcAttr: ["'unsafe-inline'"],
+      scriptSrcAttr: ["'none'"],
       styleSrc:   ["'self'", "'unsafe-inline'", 'fonts.googleapis.com'],
       fontSrc:    ["'self'", 'fonts.gstatic.com'],
       connectSrc: ["'self'"],
@@ -3212,7 +3218,8 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
     res.send(renderGithubReturnPage({
       ok: true,
       title: 'GitHub verified',
-      message: 'You can close this tab and return to hhttps.org.'
+      message: 'You can close this tab and return to hhttps.org.',
+      nonce: res.locals.cspNonce
     }));
   } catch (e) {
     // AP3-09 (#76): the anchor collision is a hard failure now — the session
@@ -3222,20 +3229,22 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
         ok: false,
         title: 'GitHub account already linked',
         message: 'This GitHub account is already linked to another iamhmn identity. ' +
-                 'Sign in with that identity or use a different GitHub account.'
+                 'Sign in with that identity or use a different GitHub account.',
+        nonce: res.locals.cspNonce
       }));
     }
     res.send(renderGithubReturnPage({
       ok: false,
       title: 'GitHub verification failed',
-      message: e.message
+      message: e.message,
+      nonce: res.locals.cspNonce
     }));
   }
 });
 
 // ─── Static landing page for the GitHub OAuth popup tab ─────────────────────
 // Bilingual (EN/DE stacked), self-closes after 2 s. Inline CSS keeps it tiny.
-function renderGithubReturnPage({ ok, title, message }) {
+function renderGithubReturnPage({ ok, title, message, nonce = '' }) {
   const color = ok ? '#34d399' : '#f87171';
   const icon  = ok ? '✓'  : '✗';
   // AP3-41 (#183): `title` is escaped too. Today every caller passes a literal,
@@ -3262,9 +3271,12 @@ function renderGithubReturnPage({ ok, title, message }) {
     <h1>${safeTitle}</h1>
     <p class="msg">${escapeHtml(message)}</p>
     <p class="lang-de">Du kannst diesen Tab schließen und zu hhttps.org zurückkehren.</p>
-    <button onclick="window.close()">Close tab / Tab schließen</button>
+    <button id="closeBtn">Close tab / Tab schließen</button>
   </div>
-  <script>
+  <script${nonce ? ` nonce="${nonce}"` : ''}>
+    // AP1-25 (#106): a listener and a nonce, not an onclick attribute — the CSP
+    // no longer allows inline handlers anywhere.
+    document.getElementById('closeBtn').addEventListener('click', () => window.close());
     // Best-effort: try to close after 2 s. Some browsers refuse to close tabs
     // that weren't opened via window.open() — the button is the manual fallback.
     setTimeout(() => { try { window.close(); } catch(e){} }, 2000);

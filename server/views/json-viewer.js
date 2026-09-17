@@ -217,6 +217,8 @@ const STYLES = `
  * instead of an interpolated path — nothing from the request is spliced into
  * the script source.
  */
+// AP1-25 (#106): an event listener, not an onclick attribute — the page is
+// served with a per-request nonce and the CSP no longer allows inline handlers.
 const COPY_SCRIPT = `
 async function copyJson() {
   try {
@@ -231,6 +233,7 @@ async function copyJson() {
     alert('Kopieren fehlgeschlagen: ' + e.message);
   }
 }
+document.getElementById('copyBtn').addEventListener('click', copyJson);
 `;
 
 const DEFAULT_SUBTITLE = 'Open protocol — open API. JSON below, formatted for humans.';
@@ -245,9 +248,10 @@ const DEFAULT_SUBTITLE = 'Open protocol — open API. JSON below, formatted for 
  * @param {string} [args.path]        req.path — shown in the header badge
  * @param {string} [args.originalUrl] req.originalUrl — drives the raw-JSON link
  * @param {string} [args.version]     protocol version for the header badge
+ * @param {string} [args.nonce]       CSP nonce for the inline copy script
  * @returns {string} HTML document
  */
-export function renderJsonPage({ data, title = 'HHTTPS API', subtitle, path = '/', originalUrl, version = '0.5.0' } = {}) {
+export function renderJsonPage({ data, title = 'HHTTPS API', subtitle, path = '/', originalUrl, version = '0.5.0', nonce = '' } = {}) {
   const safeTitle    = escapeHtml(title);
   const safeSubtitle = escapeHtml(subtitle || DEFAULT_SUBTITLE);
   const safePath     = escapeHtml(path);
@@ -285,7 +289,7 @@ export function renderJsonPage({ data, title = 'HHTTPS API', subtitle, path = '/
     <a class="btn primary" href="${rawHref}" target="_blank">
       <span>↓</span> Raw JSON
     </a>
-    <button class="btn" id="copyBtn" onclick="copyJson()">
+    <button class="btn" id="copyBtn">
       <span>⎘</span> <span id="copyLabel">Kopieren</span>
     </button>
     <a class="btn" href="/spec">Spec</a>
@@ -303,7 +307,7 @@ export function renderJsonPage({ data, title = 'HHTTPS API', subtitle, path = '/
     <a href="/hhttps/roles">Roles</a>
   </footer>
 </div>
-<script>${COPY_SCRIPT}</script>
+<script${nonce ? ` nonce="${nonce}"` : ''}>${COPY_SCRIPT}</script>
 </body>
 </html>`;
 }

@@ -27,10 +27,14 @@ import * as roles from '../../roles.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (f) => readFileSync(join(here, '../..', f), 'utf8');
 
-/** Source with comments blanked out — assertions here are about CODE, not prose. */
+/** Source with comments blanked out — assertions here are about CODE, not prose.
+ *  Line comments are stripped FIRST: a line comment that mentions a wildcard
+ *  path (for example the /eudi status routes) contains a slash-star sequence,
+ *  and stripping block comments first would swallow everything up to the next
+ *  star-slash — several hundred lines of real code. */
 const stripComments = (src) => src
-  .replace(/\/\*[\s\S]*?\*\//g, '')
-  .split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  .split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n')
+  .replace(/\/\*[\s\S]*?\*\//g, '');
 
 const serverSrc  = read('server.js');
 const serverCode = stripComments(serverSrc);

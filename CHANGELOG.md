@@ -5,6 +5,34 @@ All notable changes to the HHTTPS protocol and reference implementation are docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Review 2026-09, Welle 3 (Wartbarkeit)
+
+Refactoring-Welle: 45 S3-Findings und sechs S4-Sammelissues aus sieben Arbeitspaketen. Das Verhalten der Endpunkte bleibt gleich, bis auf die im jeweiligen Finding geforderten Korrekturen.
+
+### Changed
+- **Die Sign-in-Seite besteht aus Modulen** (AP8-34): `server/public/index.html` schrumpft von 1140 auf 396 Zeilen, das Skript liegt in `public/js/signin/{app,i18n,identity,poll,util}.js`. Die Seite enthält kein Inline-Skript und kein `on*=`-Attribut mehr; die Unit-Tests importieren jetzt echte Module statt Text über Regex zu prüfen.
+- **Keine `unsafe-inline`-Skripte mehr in der CSP** (AP1-25): Möglich geworden durch den Umbau oben. Die drei Seiten, die der Server selbst rendert (JSON-Viewer, GitHub-Rückkehrseite, Consent), tragen einen Nonce pro Request; `script-src-attr` steht auf `'none'`. Ein injiziertes `<script>` oder `onclick` wird nicht mehr ausgeführt.
+- **Ein Weg für Schemaänderungen** (AP6-40): Registry und Ledger (`schema_migrations`) in `scripts/migrate.js`, die Boot-DDL zieht ihre Einträge aus derselben Liste. `migrate.sh` ist weg.
+- **Der OAuth-Token-Endpunkt ist zerlegt** (AP2-28/29): ein Dispatcher plus je eine Funktion pro Grant, gemeinsame Claim-Builder statt zweier ausformulierter Kopien. Die Consent-Seite lädt ihr Skript als Modul und ihr CSS als Datei (AP2-31).
+- **Eine Quelle für Registrierungsregeln** (AP5-38/39): Apex-Domain, Redirect-Validierung, Client-ID und DNS-Prüfung lagen doppelt vor — mit unterschiedlicher Semantik, je nachdem, ob eine Registrierung über das Portal oder das WordPress-Plugin kam. Jetzt in `client-registration.js` und `dns-verify.js`, jeweils mit der strengeren Regel.
+- **Gemeinsame Helfer statt Kopien**: HMAC-Assertionen und Session-Flags im EUDI-Bereich (AP4-47/48), Token-Extraktion, Slug-Regex und Signatur-Auswertung im Kern (AP1-43/44/45), ein E-Mail-Bestätigungspfad statt zweier (AP3-33), ein `escapeHtml` (AP3-46), eine `config.js` für Issuer-Identität (AP3-36), ein `.env`-Parser für alle Skripte (AP6-48).
+
+### Removed
+- Toter Code: `roles.taxonomy.i18n.js`, `resolveVerification`, `setRoleHeaders`, `iamhmn-card-issuer.js`, der Fetch/XHR-Sniffer und der wirkungslose Signatur-Modus-Schalter der Extension, `scripts/patch-coop-popups.sh`, `scripts/patch-pseudonym-stage1.sh`, `server/scripts/migrate.sh`, eine gedriftete Kopie von `hhttps-role-assurance.json`.
+- `POST /hhttps/session/email/start` (AP3-30): die zweite, ungenutzte Session-Bootstrap-Route.
+
+### Added
+- **Die Browser-Extension hat Tests und ein Lint-Gate** (AP8-47): `extension/lib/identity.js` als gemeinsames Identitätsmodul, 23 Tests inklusive ESLint-Lauf über `extension/`.
+- Alle 17 EUDI-Umgebungsvariablen sind in `.env.example` dokumentiert (AP4-52); ein Test hält die Liste vollständig.
+- `server/views/json-viewer.js` als eigenes Modul (AP1-42): `sendJson` war ein 258-Zeilen-Handler mit eingebettetem HTML.
+
+### Fixed
+- Ein fehlerhafter Test-Helfer: Sein Kommentar-Filter entfernte Blockkommentare vor Zeilenkommentaren, sodass eine Zeile mit einem Wildcard-Pfad mehrere hundert Zeilen echten Code verschluckte.
+- `sites/hhttps.html`: Der Magic-Link-Rückweg war ein No-op (AP8-40); die Seite ist jetzt als Referenzimplementierung gekennzeichnet, weil kein Deploy-Skript sie ausliefert.
+
+### Offen geblieben
+- **#191** (`VERIFICATION_CHECKS`), **#185** (`trustScore` vs. `trust_score`), **#172** (Rückgabeformat der Datenbankschicht), **#234** (Rollen-Kataloge im Frontend), **#213** (Rest der AP6-Sammelliste): jeweils Änderungen, die Aufrufer oder veröffentlichte Claim-Namen betreffen und damit über eine Refactoring-Welle hinausgehen. Begründung steht im jeweiligen Issue.
+
 ## [Unreleased] — Review 2026-09, Welle 2 (Betrieb und Härtung)
 
 94 verifizierte Findings aus AP1–AP6 und AP8. Sieben Arbeitspakete parallel, danach zusammengeführt.
