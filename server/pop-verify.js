@@ -27,13 +27,18 @@
 import crypto from 'crypto';
 
 // ── base64url helpers ────────────────────────────────────────────────────────
+// AP5-45: Node's 'base64url' encoding does the character swap and the padding
+// by itself — the hand-rolled replace() chains predate it.
 function b64uDecode(s) {
-  return Buffer.from(String(s).replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  return Buffer.from(String(s), 'base64url');
 }
 function b64uEncode(buf) {
-  return Buffer.from(buf).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return Buffer.from(buf).toString('base64url');
 }
+
+// AP5-44: the PoP timings, named instead of inlined.
+export const POP_CHALLENGE_TTL_S = 120;    // how long an issued nonce is usable
+export const POP_IAT_SKEW_S      = 300;    // accepted clock skew on the proof's iat
 
 // RFC 7638 JWK thumbprint for an EC P-256 public JWK (base64url SHA-256).
 function jwkThumbprint(jwk) {
@@ -135,8 +140,8 @@ async function verifyPoP({ popHeader, token, verifyToken, checkTokenValid, db, e
     if (expect.htm && pc.htm !== expect.htm) return { ok: false, error: 'htm_mismatch' };
     if (expect.htu && pc.htu !== expect.htu) return { ok: false, error: 'htu_mismatch' };
   }
-  // freshness window on iat (±300s)
-  if (!pc.iat || Math.abs(Date.now() / 1000 - pc.iat) > 300) {
+  // freshness window on iat (±POP_IAT_SKEW_S)
+  if (!pc.iat || Math.abs(Date.now() / 1000 - pc.iat) > POP_IAT_SKEW_S) {
     return { ok: false, error: 'stale' };
   }
   return { ok: true, jkt: boundJkt, claims: decoded };
@@ -162,8 +167,9 @@ export function mountPopVerify(app, deps) {
 
     const nonce = b64uEncode(crypto.randomBytes(18));
     const chId  = 'pop:' + decoded.jti + ':' + jkt;
-    await db.challenges.create(chId, nonce, decoded.operatorId || null, 'pop', 120_000);
-    return res.json({ challenge: nonce, expires_in: 120,
+    await db.challenges.create(chId, nonce, decoded.operatorId || null, 'pop',
+      POP_CHALLENGE_TTL_S * 1000);
+    return res.json({ challenge: nonce, expires_in: POP_CHALLENGE_TTL_S,
       htu: `${BASE_URL}/hhttps/pop/demo`, htm: 'POST' });
   }));
 

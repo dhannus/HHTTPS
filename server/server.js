@@ -1,6 +1,4 @@
 import 'dotenv/config';
-import { mountPopVerify } from './pop-verify.js'; // POP-VERIFY
-import { mountWpPluginRegistration } from './wp-plugin-registration.js'; // WP-PLUGIN-REG
 /**
  * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
  * iamhmn Initiative · daniel.hannuschka@tweakz.de
@@ -60,6 +58,20 @@ import { issueIamhmnCard, warnIfPidTrustUnbound } from './eudi-verifier/backend-
 
 import { createEudiVerifierRouter } from './eudi-verifier/index.js';
 
+// Proof-of-Possession for machine tokens (AP5-45: jwkThumbprint lives here —
+// server.js used to carry a byte-identical second copy).
+import { mountPopVerify, jwkThumbprint } from './pop-verify.js';
+// Self-service OAuth-client registration for CMS plugins (WordPress first).
+import { mountWpPluginRegistration } from './wp-plugin-registration.js';
+// AP5-38 / AP5-39: the ONE set of registration helpers and the ONE DNS-TXT
+// ownership check — shared with wp-plugin-registration.js.
+import {
+  normalizeApexDomain, apexDomainFromUrl, emailMatchesPlatform, expectedDnsHost,
+  isValidHomepageUrl, isValidRedirectUri, generateClientId, randomToken,
+  WP_PLUGIN_OWNER_ID, PLATFORM_EMAIL_TOKEN_TTL_MS
+} from './client-registration.js';
+import { dnsCheckTooSoon, verifyDnsToken, DNS_MIN_INTERVAL_MS } from './dns-verify.js';
+
 // External provider verification (GitHub for now; extends to ORCID, LinkedIn)
 import {
   isGithubConfigured, startGithubVerify, handleGithubCallback,
@@ -81,16 +93,6 @@ function assertPairwiseSecretConfigured(env = process.env) {
   if (env.NODE_ENV === 'production' && !env.PAIRWISE_SECRET) {
     throw new Error('PAIRWISE_SECRET must be set in production (pairwise OAuth subject identifiers depend on it).');
   }
-}
-
-// ── WIMSE: RFC 7638 JWK thumbprint for an EC P-256 public JWK ───────────────
-// Zero-PII: only the thumbprint is ever stored, never the key material.
-function jwkThumbprint(jwk) {
-  try {
-    if (!jwk || jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) return null;
-    const canon = JSON.stringify({ crv: 'P-256', kty: 'EC', x: jwk.x, y: jwk.y });
-    return crypto.createHash('sha256').update(canon).digest('base64url');
-  } catch { return null; }
 }
 
 const RP_NAME  = 'iamhmn HHTTPS';
@@ -591,6 +593,16 @@ app.use(express.static(join(__dirname, 'public')));
 // EUDI claims never reached the browser cookie — the upgrade runs server-to-server).
 app.use('/eudi', createEudiVerifierRouter({ setIdentityCookie }));
 
+// AP5-46: these two used to be mounted inside main(), uneindented and tagged
+// with `// POP-VERIFY` / `// WP-PLUGIN-REG` patch markers. They are ordinary
+// route groups — they belong here, next to every other mount. Neither shares
+// a path prefix with a route below, so the order is unchanged in effect.
+//
+// AP5-05: PoP checks the token like every other route (signature + exp +
+// revocation + active), not just the signature.
+mountPopVerify(app, { db, checkTokenValid, BASE_URL });
+mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL });
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function setHHTPPS(res, opts = {}) {
@@ -656,34 +668,9 @@ function setHHTPPS(res, opts = {}) {
 
 // ─── Signature helpers (Phase 2.5: Domain-bound slugs) ───────────────────────
 
-// Normalize a hostname to its "apex" form for binding purposes.
-// reddit.com, www.reddit.com, old.reddit.com, np.reddit.com → "reddit.com"
-// This is heuristic and uses a small public-suffix list for the common cases.
-// Not as bulletproof as the full PSL but covers 99% of real domains.
-const TWO_PART_TLDS = new Set([
-  'co.uk', 'co.jp', 'co.kr', 'co.nz', 'co.za', 'co.in', 'co.il',
-  'com.au', 'com.br', 'com.cn', 'com.mx', 'com.tr', 'com.tw', 'com.ar',
-  'org.uk', 'org.au', 'net.au', 'gov.uk', 'gov.au', 'ac.uk', 'ac.jp',
-  'or.jp', 'ne.jp'
-]);
-
-function normalizeApexDomain(hostname) {
-  if (!hostname || typeof hostname !== 'string') return null;
-  let h = hostname.toLowerCase().trim();
-  // Strip protocol and path if accidentally included
-  h = h.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
-  if (!/^[a-z0-9.\-]+$/.test(h)) return null;
-  const parts = h.split('.').filter(Boolean);
-  if (parts.length < 2) return parts.join('.') || null;
-  // Check two-part TLD
-  if (parts.length >= 3) {
-    const lastTwo = parts.slice(-2).join('.');
-    if (TWO_PART_TLDS.has(lastTwo)) {
-      return parts.slice(-3).join('.');
-    }
-  }
-  return parts.slice(-2).join('.');
-}
+// normalizeApexDomain / TWO_PART_TLDS moved to ./client-registration.js
+// (AP5-38): the WordPress-plugin path carried a second, shorter suffix list,
+// so the same host resolved to two different apexes depending on the door.
 
 // Slug generator: 12-char Crockford Base32 with prefix "hp-" (HHTTPS signature).
 // Avoids 0/O/1/I confusion. Example: "hp-7K2-XQ9NMR-3F"
@@ -3813,7 +3800,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
           priorEudi = prev?.eudi_verified === true ||
                       (Array.isArray(prev?.verified_methods) && prev.verified_methods.includes('eudi'));
         }
-      } catch (_) { /* invalid/expired/revoked — ignore */ }
+      } catch { /* invalid/expired/revoked — ignore */ }
     }
 
     // Reissue the holder's token with VERIFIED age claims. age_group lives in the
@@ -4024,7 +4011,7 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
             age_verification_method: prev.age_verification_method || null
           };
         }
-      } catch (_) { /* invalid/expired/revoked token — reissue without age */ }
+      } catch { /* invalid/expired/revoked token — reissue without age */ }
     }
 
     // Recompute the verification surface with eudi now true → +40.
@@ -4339,6 +4326,20 @@ app.get('/hhttps/protected', async (req, res) => {
 
 // ─── Machine Tokens ───────────────────────────────────────────────────────────
 
+// AP5-44: named instead of spelled out at four call sites.
+const HHTTPS_VERSION    = '0.5.0';
+const HHTTPS_ENVELOPE   = Object.freeze({ version: HHTTPS_VERSION });
+// A pragmatic "looks like an address" shape — reachability is proven by the
+// confirmation code, not by this regex.
+const OPERATOR_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** AP5-26: constant-time comparison of two hex digests of equal length. */
+function timingSafeHexEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  const ba = Buffer.from(a, 'hex'), bb = Buffer.from(b, 'hex');
+  return ba.length === bb.length && ba.length > 0 && crypto.timingSafeEqual(ba, bb);
+}
+
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   // #7: a DB error here used to be an unhandled rejection that killed the
   // process (missing column key_jkt). Answer 500 and keep serving.
@@ -4348,7 +4349,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
       return res.status(400).json({ error: 'operatorName and purpose are required.' });
     // The ONE rule for machines: an operator contact e-mail is required.
     // This is reachability, not a trust event — machine trustScore stays 0.
-    if (!contactEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(contactEmail)))
+    if (!contactEmail || !OPERATOR_EMAIL_RE.test(String(contactEmail)))
       return res.status(400).json({ error: 'operator_email_required',
         detail: 'A valid operator contact e-mail is required to register a machine.' });
     // The operator e-mail must be CONFIRMED via the code flow — we need to know
@@ -4400,7 +4401,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     });
 
     res.status(201).json({
-      hhttps: { version: '0.5.0' },
+      hhttps: HHTTPS_ENVELOPE,
       operatorId, apiKey,
       keyJkt: keyJkt || null,
       role: normalizedRole,
@@ -4424,8 +4425,11 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
     const op = await db.machineOperators.get(operatorId);
     if (!op) return res.status(404).json({ error: 'Operator not found.' });
 
+    // AP5-26: `!==` on the hex digests leaks the position of the first
+    // differing byte through timing. Both sides are sha256 hex, so the
+    // buffers always have the same length and timingSafeEqual never throws.
     const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-    if (keyHash !== op.api_key_hash)
+    if (!timingSafeHexEqual(keyHash, op.api_key_hash))
       return res.status(401).json({ error: 'Invalid API key.' });
 
     const jti   = uuid();
@@ -4446,16 +4450,18 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
     if (op.key_jkt) { tokenPayload.cnf = { jkt: op.key_jkt }; }
     const token = signToken(tokenPayload, { expiresIn: MACHINE_TTL });
 
-    await db.tokens.create({
-      jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000
-    });
-    await db.machineOperators.incrementTokensIssued(operatorId);
+    // AP5-33: two independent writes — the token row and the operator's
+    // counter. They were awaited one after the other for no reason.
+    await Promise.all([
+      db.tokens.create({ jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000 }),
+      db.machineOperators.incrementTokensIssued(operatorId)
+    ]);
 
     setHHTPPS(res, { status: 'verified', human: false, actorType: 'bot',
                      method: 'machine-token', machineOperator: operatorId,
                      machinePurpose: op.purpose });
     res.json({
-      hhttps: { version: '0.5.0', human: false, actorType: 'bot' },
+      hhttps: { ...HHTTPS_ENVELOPE, human: false, actorType: 'bot' },
       token, expiresAt: new Date(Date.now() + MACHINE_TTL * 1000).toISOString(),
       operator: { id: operatorId, name: op.operator_name, purpose: op.purpose }
     });
@@ -4473,8 +4479,11 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 app.get('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   try {
-    res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks(u.userId) });
-  } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
+    res.json({ hhttps: HHTTPS_ENVELOPE, webhooks: await listWebhooks(u.userId) });
+  } catch (e) { // AP5-24: the reason goes to the log, not to the caller.
+    console.error('[webhooks] list failed:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
 }));
 
 app.post('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
@@ -4488,7 +4497,7 @@ app.post('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   try {
     const wh = await registerWebhook({ url, events, secret, ownerUserId: u.userId });
     res.status(201).json({
-      hhttps: { version: '0.5.0' },
+      hhttps: HHTTPS_ENVELOPE,
       webhook: { id: wh.id, url: wh.url, events: wh.events, secret: wh.secret },
       note: 'Speichere das Secret — es wird nur dieses eine Mal ausgegeben. Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
     });
@@ -4501,15 +4510,26 @@ app.delete('/hhttps/webhooks/:id', limit.webhooks, wrap(async (req, res) => {
     const ok = await removeWebhook(req.params.id, u.userId);
     ok ? res.json({ deleted: true, id: req.params.id })
        : res.status(404).json({ error: 'Webhook not found.' });
-  } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
+  } catch (e) { // AP5-24
+    console.error('[webhooks] delete failed:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
 }));
 
-app.post('/hhttps/webhooks/verify', (req, res) => {
-  const { payload, signature, secret } = req.body;
-  if (!payload || !signature || !secret)
+// AP5-12: a non-string payload/signature/secret used to reach createHmac and
+// throw — an unhandled 500 for what is plainly a bad request. AP5-43: the
+// route is an HMAC oracle and gets the same limiter as the rest of the group.
+app.post('/hhttps/webhooks/verify', limit.webhooks, (req, res) => {
+  const { payload, signature, secret } = req.body || {};
+  if (typeof payload !== 'string' || typeof signature !== 'string' || typeof secret !== 'string'
+      || !payload || !signature || !secret)
     return res.status(400).json({ error: 'payload, signature, secret are required.' });
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  res.json({ valid: expected === signature, expected, received: signature });
+  // AP5-12: the comparison itself is constant-time. The caller already knows
+  // the secret here, but the helper is free and keeps the habit.
+  const valid = expected.length === signature.length
+    && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  res.json({ valid, expected, received: signature });
 });
 
 // ─── Phase 3b: Developer Self-Service + Admin ─────────────────────────────
@@ -4536,34 +4556,8 @@ app.post('/hhttps/webhooks/verify', (req, res) => {
 //   3. dns_verified_at IS NOT NULL      (TXT record at _hhttps-verify.<apex>)
 //   4. Admin clicked Approve            (verification_status='verified')
 
-/** Resolve apex domain (last two parts, with two-part TLDs like co.uk handled). */
-function apexDomainFromUrl(urlOrHost) {
-  if (!urlOrHost) return null;
-  let host;
-  try {
-    host = (urlOrHost.includes('://') ? new URL(urlOrHost).hostname : urlOrHost).toLowerCase();
-  } catch (e) {
-    return null;
-  }
-  return normalizeApexDomain(host);
-}
-function apexDomainFromEmail(email) {
-  if (!email || !email.includes('@')) return null;
-  return normalizeApexDomain(email.split('@')[1].toLowerCase());
-}
-
-/** Variant A: email's apex must equal platform's apex.
- *  Subdomain mail is accepted (e.g. admin@team.example.com for example.com). */
-function emailMatchesPlatform(email, homepageUrl) {
-  const e = apexDomainFromEmail(email);
-  const h = apexDomainFromUrl(homepageUrl);
-  return !!(e && h && e === h);
-}
-
-/** Generate a short random hex token (URL-safe). */
-function randomToken(bytes = 24) {
-  return crypto.randomBytes(bytes).toString('base64url');
-}
+// apexDomainFromUrl / apexDomainFromEmail / emailMatchesPlatform / randomToken
+// moved to ./client-registration.js (AP5-38) — see the import block up top.
 
 // AP5-09: Express 4 does not catch a rejected async handler — the request
 // hung until the client gave up. wrap() forwards the rejection to the
@@ -4678,19 +4672,7 @@ async function requirePortalUser(req, res) {
   return null;
 }
 
-/** Validate redirect URI format. Must be a syntactically valid HTTPS URL
- *  (or http://localhost for dev). */
-function isValidRedirectUri(uri) {
-  if (typeof uri !== 'string' || uri.length > 500) return false;
-  try {
-    const u = new URL(uri);
-    if (u.protocol === 'https:') return true;
-    if (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1')) return true;
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
+// isValidRedirectUri moved to ./client-registration.js (AP5-38).
 
 // AP5-23: logo_url / impressum_url are rendered by the dashboard (href / img
 // src) and impressum_url is a hard requirement for `verified` — both were
@@ -4733,17 +4715,7 @@ function assertTransition(res, client, action) {
   return false;
 }
 
-/** Slug-ify a platform name for client_id generation.
- *  Returns something like "my-platform-x4z7". */
-function generateClientId(name) {
-  const slug = (name || 'platform')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32);
-  const tail = crypto.randomBytes(2).toString('hex');
-  return `${slug || 'platform'}-${tail}`;
-}
+// generateClientId moved to ./client-registration.js (AP5-38).
 
 // ─── GET /hhttps/whoami — who am I, and is this identity durable? ──────────
 // Zero-PII by construction: everything here already lives in the caller's own
@@ -4764,6 +4736,13 @@ app.get('/hhttps/whoami', wrap(async (req, res) => {
   // comes back on every sign-in. An eID identity is durable in the same sense.
   const durable  = hasKey || methods.includes('eudi');
   const isAdmin  = await db.admins.isAdmin(u.userId);
+  // AP5-25: the shell recipe below names an absolute path on the server's
+  // filesystem — deployment detail, handed to every signed-in caller. It is
+  // only useful in two situations, so it is only shown in those two: the
+  // caller is already an admin, or nobody is (first boot, bootstrap).
+  const noAdminsYet = isAdmin
+    ? false
+    : (await db.pool().query('SELECT 1 FROM admins LIMIT 1')).rows.length === 0;
 
   res.json({
     user_id:          u.userId,
@@ -4788,8 +4767,10 @@ app.get('/hhttps/whoami', wrap(async (req, res) => {
         : 'This user_id was minted for this session only. Signing in again produces a NEW id — ' +
           'platform ownership and admin membership will not carry over. Register a passkey.'
     },
-    grant_admin_command:
-      `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
+    ...(isAdmin || noAdminsYet ? {
+      grant_admin_command:
+        `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
+    } : {})
   });
 }));
 
@@ -4806,7 +4787,7 @@ app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
     return res.status(400).json({ error: 'invalid_name',
       message: 'Name must be 2-120 characters' });
   }
-  if (!homepage_url || !apexDomainFromUrl(homepage_url)) {
+  if (!isValidHomepageUrl(homepage_url)) {                     // AP5-14
     return res.status(400).json({ error: 'invalid_homepage',
       message: 'homepage_url must be a valid HTTPS URL' });
   }
@@ -4850,7 +4831,7 @@ app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
   // Compute domain match + generate tokens
   const domainMatch  = emailMatchesPlatform(contact_email, homepage_url);
   const emailToken   = randomToken(24);
-  const emailExpires = new Date(Date.now() + 48 * 3600 * 1000); // 48h
+  const emailExpires = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
   const dnsToken     = `hhttps-verify=${randomToken(20)}`;
   const clientId     = generateClientId(name);
 
@@ -4868,8 +4849,10 @@ app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
       dnsToken
     });
   } catch (err) {
-    console.error('[DEVELOPERS] createDraft failed:', err.message);
-    return res.status(500).json({ error: 'creation_failed', message: err.message });
+    // AP5-24: a Postgres error text names columns, constraints and values.
+    console.error('[DEVELOPERS] createDraft failed:', err);
+    return res.status(500).json({ error: 'creation_failed',
+      message: 'The platform could not be created. Please try again.' });
   }
 
   // Send confirmation email
@@ -4950,7 +4933,7 @@ app.get('/hhttps/developers/confirm-email', wrap(async (req, res) => {
 
   // Platforms registered through a CMS plugin continue in the plugin's own
   // setup wizard, not in the developer portal.
-  const isWpPlugin = client.owner_user_id === 'wp-plugin' && !!client.homepage_url;
+  const isWpPlugin = client.owner_user_id === WP_PLUGIN_OWNER_ID && !!client.homepage_url;
   const wpSetupUrl = isWpPlugin
     ? String(client.homepage_url).replace(/\/+$/, '') +
       '/wp-admin/options-general.php?page=iamhmn-verify-setup'
@@ -5050,7 +5033,7 @@ app.patch('/hhttps/developers/clients/:id', wrap(async (req, res) => {
     }
     const newMatch = emailMatchesPlatform(contact_email, client.homepage_url);
     const newToken = randomToken(24);
-    const newExp   = new Date(Date.now() + 48 * 3600 * 1000);
+    const newExp   = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
     await db.oauthClients.updateContactEmail(client.client_id, contact_email, newMatch, newToken, newExp);
     try {
       const confirmUrl = `${BASE_URL}/hhttps/developers/confirm-email?token=${newToken}`;
@@ -5114,15 +5097,9 @@ app.delete('/hhttps/developers/clients/:id', wrap(async (req, res) => {
 // ─── POST /hhttps/developers/clients/:id/dns-check ────────────────────────
 // Triggers a DNS lookup for _hhttps-verify.<apex> and matches against dns_token.
 // AP5-31: the lookup has a timeout, the route a limiter and a minimum
-// interval per client (dns_last_checked_at).
-const DNS_TIMEOUT_MS      = 3000;
-const DNS_MIN_INTERVAL_MS = 15_000;
+// interval per client (dns_last_checked_at) — the lookup itself and the
+// interval rule live in ./dns-verify.js (AP5-39), shared with the plugin flow.
 limit.dnsCheck = rl(10, 60_000);
-
-function dnsCheckTooSoon(client) {
-  const last = client.dns_last_checked_at ? new Date(client.dns_last_checked_at).getTime() : 0;
-  return last && (Date.now() - last) < DNS_MIN_INTERVAL_MS;
-}
 
 app.post('/hhttps/developers/clients/:id/dns-check', limit.dnsCheck, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
@@ -5148,56 +5125,10 @@ app.post('/hhttps/developers/clients/:id/dns-check', limit.dnsCheck, wrap(async 
       message: 'Cannot resolve apex domain from homepage_url' });
   }
 
-  // DNS lookup via Node's dns/promises — bounded by the resolver timeout AND
-  // a hard deadline (the resolver timeout is per attempt / per server).
-  const { Resolver } = await import('dns/promises');
-  const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-  resolver.setServers(['1.1.1.1', '8.8.8.8']);
-
-  let found = false;
-  let records = [];
-  try {
-    records = await Promise.race([
-      resolver.resolveTxt(`_hhttps-verify.${apex}`),
-      new Promise((_, reject) => setTimeout(() => {
-        const e = new Error('DNS lookup timed out'); e.code = 'ETIMEOUT'; reject(e);
-      }, DNS_TIMEOUT_MS * 2 + 500).unref())
-    ]);
-    // records is array of arrays of strings (TXT can have multiple chunks)
-    for (const recordChunks of records) {
-      const joined = recordChunks.join('');
-      if (joined.trim() === client.dns_token.trim()) {
-        found = true;
-        break;
-      }
-    }
-  } catch (err) {
-    await db.oauthClients.touchDnsCheck(client.client_id);
-    return res.json({
-      success: false,
-      dns_verified: false,
-      error: 'dns_lookup_failed',
-      message: `Could not resolve _hhttps-verify.${apex}: ${err.code || err.message}`,
-      expected_record: client.dns_token,
-      expected_host: `_hhttps-verify.${apex}`
-    });
-  }
-
-  await db.oauthClients.touchDnsCheck(client.client_id);
-  if (found) {
-    await db.oauthClients.setDnsVerified(client.client_id);
-    return res.json({ success: true, dns_verified: true });
-  }
-
-  return res.json({
-    success: false,
-    dns_verified: false,
-    error: 'record_not_found',
-    message: 'TXT record exists but value does not match. Make sure the value is exactly the dns_token.',
-    expected_record: client.dns_token,
-    expected_host: `_hhttps-verify.${apex}`,
-    found_records: records.map(r => r.join(''))
-  });
+  // AP5-39: one implementation, shared with POST /hhttps/plugin/dns-check.
+  // Auto-approval stays exclusive to the plugin flow — a portal client is
+  // approved by an admin.
+  res.json(await verifyDnsToken(db, client));
 }));
 
 // ─── POST /hhttps/developers/clients/:id/submit-review ─────────────────────
@@ -5269,13 +5200,14 @@ app.post('/hhttps/developers/clients/:id/resend-email', limit.email, wrap(async 
   }
 
   const emailToken   = randomToken(24);
-  const emailExpires = new Date(Date.now() + 48 * 3600 * 1000); // 48h, same as registration
+  const emailExpires = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
 
   try {
     await db.oauthClients.refreshEmailToken(client.client_id, emailToken, emailExpires);
   } catch (err) {
-    console.error('[DEVELOPERS] refreshEmailToken failed:', err.message);
-    return res.status(500).json({ error: 'token_refresh_failed', message: err.message });
+    console.error('[DEVELOPERS] refreshEmailToken failed:', err);   // AP5-24
+    return res.status(500).json({ error: 'token_refresh_failed',
+      message: 'The confirmation token could not be refreshed. Please try again.' });
   }
 
   try {
@@ -5287,8 +5219,9 @@ app.post('/hhttps/developers/clients/:id/resend-email', limit.email, wrap(async 
       kind:         'resend'
     });
   } catch (err) {
-    console.warn('[DEVELOPERS] resend email failed:', err.message);
-    return res.status(500).json({ error: 'send_failed', message: err.message });
+    console.warn('[DEVELOPERS] resend email failed:', err);          // AP5-24
+    return res.status(500).json({ error: 'send_failed',
+      message: 'The confirmation e-mail could not be sent. Please try again.' });
   }
 
   // Mask the address — the owner knows it, the response body need not carry it.
@@ -5385,22 +5318,46 @@ app.post('/hhttps/admin/clients/:id/suspend', wrap(async (req, res) => {
 }));
 
 // GET /hhttps/admin/clients — list all (with filter)
+//
+// AP5-34: the query was a bare `LIMIT 200`, so past 200 platforms the admin
+// view silently stopped showing rows with no way to reach them and no sign
+// that anything was missing. `?limit=` / `?offset=` now page through the list
+// and `total` says how many rows the filter actually matches. The defaults are
+// the old behaviour (first 200, newest first), so existing callers see no
+// change. The review queue has its own endpoint (/admin/clients/pending) and
+// is therefore never affected by this page window.
+const ADMIN_CLIENTS_DEFAULT_LIMIT = 200;
+const ADMIN_CLIENTS_MAX_LIMIT     = 500;
+
+/** A positive integer query parameter, clamped; `fallback` when absent/invalid. */
+function intParam(value, { fallback, min = 0, max }) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
 app.get('/hhttps/admin/clients', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const status = req.query.status;
-  const { rows } = await db.pool().query(
-    status
-      ? `SELECT * FROM oauth_clients WHERE verification_status = $1 ORDER BY created_at DESC LIMIT 200`
-      : `SELECT * FROM oauth_clients ORDER BY created_at DESC LIMIT 200`,
-    status ? [status] : []
-  );
-  const clients = rows.map(r => {
-    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-    return serializeClientForAdmin(r);
+  const limit  = intParam(req.query.limit,
+    { fallback: ADMIN_CLIENTS_DEFAULT_LIMIT, min: 1, max: ADMIN_CLIENTS_MAX_LIMIT });
+  const offset = intParam(req.query.offset, { fallback: 0, min: 0, max: 1_000_000 });
+  const where  = status ? 'WHERE verification_status = $1' : '';
+  const args   = status ? [status] : [];
+  const [page, count] = await Promise.all([
+    db.pool().query(
+      `SELECT * FROM oauth_clients ${where}
+        ORDER BY created_at DESC LIMIT $${args.length + 1} OFFSET $${args.length + 2}`,
+      [...args, limit, offset]),
+    db.pool().query(`SELECT COUNT(*)::int AS n FROM oauth_clients ${where}`, args)
+  ]);
+  const total = count.rows[0].n;
+  res.json({
+    success: true,
+    clients: page.rows.map(r => serializeClientForAdmin(parseClientRow(r))),
+    total, limit, offset, has_more: offset + page.rows.length < total
   });
-  res.json({ success: true, clients });
 }));
 
 // GET /hhttps/admin/stats — system overview
@@ -5421,6 +5378,17 @@ app.get('/hhttps/admin/stats', wrap(async (req, res) => {
 }));
 
 // ─── Helpers used by Phase 3b endpoints ────────────────────────────────────
+
+/** AP5-40: raw oauth_clients rows keep redirect_uris / allowed_scopes as JSON
+ *  TEXT. db.oauthClients.* parses them; the admin list queries the pool
+ *  directly, so it has to do the same — in one place, not inline per column. */
+function parseClientRow(row) {
+  for (const col of ['redirect_uris', 'allowed_scopes']) {
+    if (typeof row[col] !== 'string') continue;
+    try { row[col] = JSON.parse(row[col]); } catch { row[col] = []; }
+  }
+  return row;
+}
 
 /** Serialize a client for owner-facing dashboard. Includes sensitive metadata
  *  (DNS token, contact email) but never the client_secret_hash. */
@@ -5443,7 +5411,7 @@ function serializeClientForOwner(c) {
     dns_verified_at:        c.dns_verified_at,
     dns_last_checked_at:    c.dns_last_checked_at,
     dns_token:              c.dns_token,
-    dns_record_host:        apex ? `_hhttps-verify.${apex}` : null,
+    dns_record_host:        expectedDnsHost(apex),
     submitted_for_review_at:c.submitted_for_review_at,
     reviewed_at:            c.reviewed_at,
     rejection_reason:       c.rejection_reason,
@@ -5517,7 +5485,7 @@ async function computePublicStats() {
   ]);
   const total = dist.reduce((sum, r) => sum + r.n, 0);
   return {
-    hhttps: { version: '0.5.0' },
+    hhttps: HHTTPS_ENVELOPE,
     stats: {
       verifications:       s.verifications      || 0,
       tokensIssued:        s.tokens_issued      || 0,
@@ -5591,10 +5559,6 @@ async function main() {
     process.exit(1);
   }
 
-  mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
-  // AP5-05: PoP checks the token like every other route (signature + exp +
-  // revocation + active), not just the signature.
-  mountPopVerify(app, { db, checkTokenValid, RP_ID, BASE_URL }); // POP-VERIFY
   // AP5-09: last — catches every forwarded async rejection.
   app.use(centralErrorHandler);
   app.listen(PORT, () => {

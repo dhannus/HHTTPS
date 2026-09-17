@@ -97,7 +97,7 @@ HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
 
 <footer class="footer">
   <div class="footer-inner">
-    <div class="mono">HHTTPS · v4 · dashboard</div>
+    <div class="mono">HHTTPS · v0.5 · dashboard</div>
     <div><a href="/developers/">overview</a> · <a href="/spec">spec</a> · <a href="https://github.com/dhannus/HHTTPS">github</a></div>
   </div>
 </footer>
@@ -403,9 +403,10 @@ HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
     if (redirectUris.length > 10) {
       HHTTPS.ui.toast('Maximum 10 redirect URIs', 'error'); return;
     }
-    const badRedirect = redirectUris.find(u => !/^https:\/\//i.test(u));
+    // AP5-48: same rule as the server (server/client-registration.js).
+    const badRedirect = redirectUris.find(u => !HHTTPS.rules.isValidRedirectUri(u));
     if (badRedirect) {
-      HHTTPS.ui.toast(`Redirect URI must be https://: ${badRedirect}`, 'error'); return;
+      HHTTPS.ui.toast(`${HHTTPS.rules.REDIRECT_URI_HINT}: ${badRedirect}`, 'error'); return;
     }
     // AP5-23: mirrors the server rule (https only; the logo may also be a data:image/* URI)
     if (!/^https:\/\//i.test(raw.impressum_url || '')) {

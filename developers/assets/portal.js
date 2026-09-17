@@ -279,12 +279,6 @@
     return hasPasskey();
   }
 
-  /** @deprecated v5 — the 'developer' role no longer exists. Kept as an alias so
-   *  older cached pages don't break. Use hasPortalAccess(). */
-  function isDeveloper() {
-    return hasPortalAccess();
-  }
-
   // ─── Sign-in via the universal consent page ────────────────────────────
   // Same flow every other client uses (ask.iamhmn.org, the WordPress plugin):
   //
@@ -388,14 +382,17 @@
     return api('GET', '/hhttps/whoami');
   }
 
+  // AP5-35: this used to probe GET /hhttps/admin/stats on every page load —
+  // a full admin overview (a GROUP BY over oauth_clients plus the 20 most
+  // recent admin actions) fetched purely to read its status code, and a 403 in
+  // the log for every non-admin. /hhttps/whoami answers the same question
+  // directly, from the caller's own token, and is what the identity panel
+  // already reads.
   async function verifyAdmin() {
-    const token = getToken();
-    if (!token) return false;
+    if (!getToken()) return false;
     try {
-      const res = await fetch('/hhttps/admin/stats', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      const ok = res.ok;
+      const me = await whoami();
+      const ok = !!me.is_admin;
       const id = getIdentity();
       if (id) { id.is_admin = ok; setIdentity(id); }
       return ok;
@@ -418,11 +415,6 @@
     if (isAdmin()) return true;          // admins always pass
     renderAccessGate();
     return false;
-  }
-
-  /** @deprecated v5 — alias for requirePortalAccess(). */
-  function requireDeveloper() {
-    return requirePortalAccess();
   }
 
   function renderAccessGate() {
@@ -474,6 +466,24 @@
       el.addEventListener('click', (e) => { e.preventDefault(); startSignIn(); });
     });
   }
+
+  // ─── Shared input rules (AP5-48) ───────────────────────────────────────
+  // These mirror server/client-registration.js exactly. The pages used to test
+  // `/^https:\/\//i` on their own, which rejected the `http://localhost` and
+  // `http://127.0.0.1` redirect URIs the server accepts for local development
+  // — the wizard refused a URI the backend would have taken.
+  const MAX_REDIRECT_URI_LENGTH = 500;
+  function isValidRedirectUri(uri) {
+    if (typeof uri !== 'string' || !uri || uri.length > MAX_REDIRECT_URI_LENGTH) return false;
+    let u;
+    try { u = new URL(uri); } catch (_) { return false; }
+    if (u.hash) return false;
+    if (u.username || u.password) return false;
+    if (u.protocol === 'https:') return true;
+    return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+  }
+  const REDIRECT_URI_HINT =
+    'Redirect URI must be https:// (http://localhost is allowed for development) and carry no #fragment';
 
   // ─── API client ────────────────────────────────────────────────────────
   async function api(method, path, body) {
@@ -634,10 +644,9 @@
             startSignIn, completeSignIn,
             getTrust, getMethods, hasPasskey,
             hasPortalAccess, requireAuth, requirePortalAccess,
-            PORTAL_REQUIRED_METHOD,
-            // deprecated aliases (v4 compat)
-            isDeveloper, requireDeveloper },
+            PORTAL_REQUIRED_METHOD },
     api:  { developers, admin, raw: api },
+    rules:{ isValidRedirectUri, REDIRECT_URI_HINT, MAX_REDIRECT_URI_LENGTH },
     ui:   { renderIdentityBadge, toast, copyToClipboard, escapeHtml, fmtDate, initNav },
     i18n: { t, setLang, getLang, applyTranslations },
   };

@@ -26,58 +26,20 @@
 // Zero-PII stance: stores only what the developer flow already stores
 // (contact e-mail, domain, tokens). No end-user data is involved.
 
-import crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { isValidEmail, normalizeEmail } from './identity.js';
-import { Resolver } from 'dns/promises';
+import {
+  apexDomainFromUrl, emailMatchesPlatform, expectedDnsHost,
+  generateClientId, isValidHomepageUrl, isValidRedirectUri, randomToken,
+  WP_PLUGIN_OWNER_ID, PLATFORM_EMAIL_TOKEN_TTL_MS
+} from './client-registration.js';
+import { dnsCheckTooSoon, maybeAutoVerify, verifyDnsToken, DNS_MIN_INTERVAL_MS }
+  from './dns-verify.js';
 
-// ── small local helpers (server.js keeps its own copies; duplicated here so
-//    this module stays self-contained and server.js untouched) ──────────────
-
-const TWO_PART_TLDS = new Set(['co.uk', 'org.uk', 'ac.uk', 'com.au', 'net.au',
-  'co.nz', 'co.jp', 'com.br', 'com.mx', 'co.in']);
-
-function apexDomainFromUrl(urlOrHost) {
-  if (!urlOrHost) return null;
-  let host;
-  try {
-    host = new URL(urlOrHost.includes('://') ? urlOrHost : `https://${urlOrHost}`).hostname;
-  } catch { return null; }
-  const parts = host.toLowerCase().split('.').filter(Boolean);
-  if (parts.length < 2) return null;
-  const lastTwo = parts.slice(-2).join('.');
-  if (TWO_PART_TLDS.has(lastTwo) && parts.length >= 3) {
-    return parts.slice(-3).join('.');
-  }
-  return lastTwo;
-}
-
-function emailMatchesPlatform(email, homepageUrl) {
-  const at = (email || '').split('@')[1];
-  if (!at) return false;
-  const emailApex = apexDomainFromUrl(at);
-  const siteApex  = apexDomainFromUrl(homepageUrl);
-  return !!emailApex && !!siteApex && emailApex === siteApex;
-}
-
-function randomToken(len) {
-  return crypto.randomBytes(len).toString('base64url').slice(0, len);
-}
-
-function generateClientId(name) {
-  const slug = String(name || 'site').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24) || 'site';
-  return `wp-${slug}-${randomToken(8)}`;
-}
-
-function isValidRedirectUri(uri) {
-  try {
-    const u = new URL(uri);
-    if (u.protocol !== 'https:' && u.hostname !== 'localhost') return false;
-    if (u.hash) return false;
-    return true;
-  } catch { return false; }
-}
+// AP5-38 / AP5-39 (Welle 3): apex resolution, redirect validation, client-id
+// generation and the DNS-TXT check used to be private copies here, with
+// semantics that quietly differed from the developer portal's. They now live
+// in ./client-registration.js and ./dns-verify.js — one rule, both doors.
 
 // AP5-17: 5 registrations per IP per hour via express-rate-limit (keyed on
 // req.ip, which honours the app's `trust proxy` setting — the previous
@@ -89,28 +51,13 @@ const registrationLimiter = rateLimit({
 });
 
 // AP5-31: the DNS check is unauthenticated (client_id only) and used to run
-// an unbounded lookup per call — now 10 calls / min per IP, a resolver
-// timeout, a hard deadline and a minimum interval per client.
-const DNS_TIMEOUT_MS      = 3000;
-const DNS_MIN_INTERVAL_MS = 15_000;
+// an unbounded lookup per call — now 10 calls / min per IP, plus the resolver
+// timeout, hard deadline and per-client minimum interval from dns-verify.js.
 const dnsCheckLimiter = rateLimit({
   windowMs: 60_000, limit: 10, standardHeaders: true, legacyHeaders: false,
   handler: (_req, res) => res.status(429).json({ error: 'rate_limited',
     message: 'Too many DNS checks from this address. Try again later.' })
 });
-function dnsCheckTooSoon(client) {
-  const last = client.dns_last_checked_at ? new Date(client.dns_last_checked_at).getTime() : 0;
-  return last && (Date.now() - last) < DNS_MIN_INTERVAL_MS;
-}
-function resolveTxtWithDeadline(host) {
-  const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-  return Promise.race([
-    resolver.resolveTxt(host),
-    new Promise((_, reject) => setTimeout(() => {
-      const e = new Error('DNS lookup timed out'); e.code = 'ETIMEOUT'; reject(e);
-    }, DNS_TIMEOUT_MS * 2 + 500).unref())
-  ]);
-}
 
 // AP5-29: an unauthenticated registration writes a row and sends a mail per
 // call. Besides the IP limiter, at most this many UNCONFIRMED (email_pending,
@@ -119,9 +66,10 @@ const MAX_OPEN_DRAFTS_PER_APEX = 3;
 async function countOpenDraftsForApex(db, apex) {
   const { rows } = await db.q(
     `SELECT homepage_url FROM oauth_clients
-      WHERE owner_user_id = 'wp-plugin'
+      WHERE owner_user_id = $1
         AND verification_status = 'email_pending'
-        AND email_token_expires_at > NOW()`
+        AND email_token_expires_at > NOW()`,
+    [WP_PLUGIN_OWNER_ID]
   );
   return rows.filter(r => apexDomainFromUrl(r.homepage_url) === apex).length;
 }
@@ -150,11 +98,11 @@ export function mountWpPluginRegistration(app, deps) {
       return res.status(400).json({ error: 'invalid_name',
         message: 'site_name must be 2-120 characters' });
     }
-    const apex = apexDomainFromUrl(homepage_url);
-    if (!apex) {
+    if (!isValidHomepageUrl(homepage_url)) {                   // AP5-14
       return res.status(400).json({ error: 'invalid_homepage',
         message: 'homepage_url must be a valid HTTPS URL' });
     }
+    const apex = apexDomainFromUrl(homepage_url);
     if (!redirect_uri || !isValidRedirectUri(redirect_uri)) {
       return res.status(400).json({ error: 'invalid_redirect_uri',
         message: 'redirect_uri must be a valid HTTPS URL without fragment' });
@@ -179,9 +127,9 @@ export function mountWpPluginRegistration(app, deps) {
 
     const domainMatch  = emailMatchesPlatform(contact_email, homepage_url);
     const emailToken   = randomToken(24);
-    const emailExpires = new Date(Date.now() + 48 * 3600 * 1000);
+    const emailExpires = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
     const dnsToken     = `hhttps-verify=${randomToken(20)}`;
-    const clientId     = generateClientId(site_name);
+    const clientId     = generateClientId(site_name, { prefix: 'wp-', fallback: 'site' });
 
     try {
       await db.oauthClients.createDraft({
@@ -193,14 +141,16 @@ export function mountWpPluginRegistration(app, deps) {
         contactEmail: contact_email,
         impressumUrl: null,
         logoUrl: null,
-        ownerUserId: 'wp-plugin',
+        ownerUserId: WP_PLUGIN_OWNER_ID,
         domainEmailMatch: domainMatch,
         emailToken, emailTokenExpiresAt: emailExpires,
         dnsToken
       });
     } catch (err) {
-      console.error('[WP-PLUGIN] createDraft failed:', err.message);
-      return res.status(500).json({ error: 'creation_failed', message: err.message });
+      // AP5-24: a Postgres error text names columns, constraints and values.
+      console.error('[WP-PLUGIN] createDraft failed:', err);
+      return res.status(500).json({ error: 'creation_failed',
+        message: 'The site could not be registered. Please try again.' });
     }
 
     try {
@@ -224,7 +174,7 @@ export function mountWpPluginRegistration(app, deps) {
       client_id: clientId,
       verification_status: 'email_pending',
       domain_email_match: domainMatch,
-      expected_host: `_hhttps-verify.${apex}`,
+      expected_host: expectedDnsHost(apex),
       dns_token: dnsToken,
       warnings: domainMatch ? [] : [{
         code: 'email_domain_mismatch',
@@ -237,7 +187,7 @@ export function mountWpPluginRegistration(app, deps) {
   // ── GET /hhttps/plugin/status/:clientId ────────────────────────────────
   app.get('/hhttps/plugin/status/:clientId', wrap(async (req, res) => {
     const client = await db.oauthClients.get(req.params.clientId);
-    if (!client || client.owner_user_id !== 'wp-plugin') {
+    if (!client || client.owner_user_id !== WP_PLUGIN_OWNER_ID) {
       return res.status(404).json({ error: 'not_found' });
     }
     const apex = apexDomainFromUrl(client.homepage_url);
@@ -247,7 +197,7 @@ export function mountWpPluginRegistration(app, deps) {
       email_verified:      !!client.email_verified_at,
       domain_email_match:  !!client.domain_email_match,
       dns_verified:        !!client.dns_verified_at,
-      expected_host:       apex ? `_hhttps-verify.${apex}` : null,
+      expected_host:       expectedDnsHost(apex),
       // The TXT token is only revealed until the client is verified; after
       // that it is no longer needed by the wizard.
       dns_token: client.verification_status === 'verified' ? null : client.dns_token
@@ -257,7 +207,7 @@ export function mountWpPluginRegistration(app, deps) {
   // ── POST /hhttps/plugin/dns-check/:clientId ────────────────────────────
   app.post('/hhttps/plugin/dns-check/:clientId', dnsCheckLimiter, wrap(async (req, res) => {
     const client = await db.oauthClients.get(req.params.clientId);
-    if (!client || client.owner_user_id !== 'wp-plugin') {
+    if (!client || client.owner_user_id !== WP_PLUGIN_OWNER_ID) {
       return res.status(404).json({ error: 'not_found' });
     }
     if (!client.dns_token) {
@@ -273,51 +223,11 @@ export function mountWpPluginRegistration(app, deps) {
       return res.status(400).json({ error: 'no_apex' });
     }
 
-    let records = [];
-    try {
-      records = await resolveTxtWithDeadline(`_hhttps-verify.${apex}`);
-    } catch (err) {
-      await db.oauthClients.touchDnsCheck(client.client_id);
-      return res.json({
-        success: false, dns_verified: false,
-        error: 'dns_lookup_failed',
-        message: `Could not resolve _hhttps-verify.${apex}: ${err.code || err.message}`,
-        expected_record: client.dns_token,
-        expected_host: `_hhttps-verify.${apex}`
-      });
-    }
+    const result = await verifyDnsToken(db, client);
+    if (!result.dns_verified) return res.json(result);
 
-    let found = false;
-    for (const parts of records) {
-      if (parts.join('').trim() === client.dns_token.trim()) { found = true; break; }
-    }
-    await db.oauthClients.touchDnsCheck(client.client_id);
-
-    if (!found) {
-      return res.json({
-        success: false, dns_verified: false,
-        error: 'record_not_found',
-        message: 'TXT record not found or value does not match.',
-        expected_record: client.dns_token,
-        expected_host: `_hhttps-verify.${apex}`,
-        found_records: records.map(r => r.join(''))
-      });
-    }
-
-    await db.oauthClients.setDnsVerified(client.client_id);
-
-    // AUTO-APPROVAL: all three hard requirements met → verified, no admin
-    // click. verified_by records the automatic path for auditability.
-    const fresh = await db.oauthClients.get(client.client_id);
-    let autoVerified = false;
-    if (fresh.email_verified_at && fresh.domain_email_match && fresh.dns_verified_at
-        && fresh.verification_status !== 'verified'
-        && fresh.verification_status !== 'suspended'
-        && fresh.verification_status !== 'rejected') {
-      await db.oauthClients.adminApprove(client.client_id, 'auto:plugin-dns');
-      autoVerified = true;
-      console.log(`[WP-PLUGIN] auto-verified client ${client.client_id} (email+domain+dns)`);
-    }
+    // AUTO-APPROVAL: all three hard requirements met → verified, no admin click.
+    const { autoVerified, client: fresh } = await maybeAutoVerify(db, client.client_id);
 
     return res.json({
       success: true,
