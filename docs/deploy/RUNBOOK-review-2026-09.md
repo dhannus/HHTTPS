@@ -98,4 +98,15 @@ pm2 logs hhttps-v4 --lines 30 | grep -E 'CLEANUP|PAIRWISE|EUDI_PID'
 
 ## Welle 3 — Wartbarkeit (PR folgt)
 
-Keine Betriebsänderungen erwartet.
+Refactoring-Welle: das Verhalten der Endpunkte bleibt gleich. Am Betrieb ändern sich vier Dinge:
+
+| Punkt | Aktion |
+|---|---|
+| **Ein Weg für Schemaänderungen** | `server/scripts/migrate.js` ist jetzt die einzige Quelle: eine Registry, ein Ledger (`schema_migrations`), und die Boot-DDL zieht ihre Einträge aus derselben Liste. `server/scripts/migrate.sh` (das alte ZIP-Migrationsskript) ist gelöscht. |
+| **Neue Migration Phase 11** | Läuft über den normalen Weg (Boot-DDL bzw. `node scripts/migrate.js`). Sie zieht Spalten nach, die bisher nur als `ADD COLUMN` in alten Phasendateien standen. |
+| **Verschobene und gelöschte Skripte** | `force-verify-client.mjs` liegt jetzt unter `server/scripts/` und verweigert den Start in Produktion ohne `--yes-i-know`. Gelöscht: `scripts/patch-coop-popups.sh`, `scripts/patch-pseudonym-stage1.sh`, `server/scripts/migrate.sh`, `scripts/deploy-privacy-pass.sh`. Wenn eine dieser Dateien auf dem Server liegt, kann sie weg. |
+| **`deploy-all.sh` provisioniert nicht mehr selbst** | Die PostgreSQL-Einrichtung ruft `install-pg.sh` auf, statt sie zu kopieren. Alle Skripte lesen `.env` über denselben Parser (`server/scripts/lib/common.sh`), ohne sie als Shell zu sourcen. |
+
+Die SQL-Dateien haben jetzt alle denselben „HOW TO RUN"-Kopf. Konvention: **als Anwendungsnutzer `hhttps`** ausführen, nicht als `postgres`. Für Altinstallationen mit `postgres`-eigenen Tabellen zuerst `server/sql/ownership-hhttps.sql` als `postgres` einspielen.
+
+> Hinweis zum Phase-8-Runbook: `docs/deploy/RUNBOOK-srv1421412-phase8.md` nennt an drei Stellen (Zeilen 18, 88, 130) noch `force-verify-client.mjs` im Server-Verzeichnis und `privacy-pass/public/demo.html`. Beides trifft nach den Wellen 0 und 3 nicht mehr zu; das Dokument beschreibt den Stand von Phase 8 und bleibt als Historie stehen.
