@@ -48,7 +48,12 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
+import { normalizeEmail, emailAnchorHash, emailVerificationHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
+// AP3-46 (#199): ONE html escaper for server.js and email.js alike.
+import { escapeHtml } from './html.js';
+// AP3-36 (#169): ONE resolution of the issuer's public identity — email.js
+// reads exactly the same values, so mail links can no longer point elsewhere.
+import { RP_ID, ORIGIN, BASE_URL } from './config.js';
 import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect } from './oauth-params.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
@@ -73,9 +78,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT     = process.env.PORT    || 3000;
-const RP_ID    = process.env.RP_ID   || 'hhttps.org';
-const ORIGIN   = process.env.ORIGIN  || `https://${RP_ID}`;
-const BASE_URL = process.env.BASE_URL || ORIGIN;
+// RP_ID / ORIGIN / BASE_URL come from config.js (AP3-36).
 // AP2-15 (#114): key for the pairwise `sub` HMAC. The deterministic fallback
 // is for development only — in production the boot refuses without it (see
 // assertPairwiseSecretConfigured, analogous to assertPepperConfigured).
@@ -520,7 +523,12 @@ function readIdentityCookie(req) {
     const i = part.indexOf('=');
     if (i === -1) continue;
     if (part.slice(0, i).trim() === ID_COOKIE) {
-      return decodeURIComponent(part.slice(i + 1).trim());
+      // AP3-07 (#199): a malformed percent-escape ("%zz") makes
+      // decodeURIComponent throw. This runs in middleware on EVERY request, so
+      // one bad cookie used to turn every route into a 500 until the browser
+      // dropped it. An undecodable cookie is simply not an identity.
+      try { return decodeURIComponent(part.slice(i + 1).trim()); }
+      catch { return null; }
     }
   }
   return null;
@@ -768,6 +776,18 @@ async function issueRefreshToken(userId, credId, role, surface = {}) {
   return tok;
 }
 
+/**
+ * AP3-34 (#156): THE definition of "this refresh jti is still active" — the
+ * stored row, or an error with the one wording both callers share. Used by
+ * checkTokenValid's refresh branch and by POST /hhttps/token/refresh, which
+ * had a verbatim copy of the lookup and the message.
+ */
+async function loadActiveRefreshToken(jti) {
+  const stored = await db.refreshTokens.get(jti);
+  if (!stored) throw new Error('Refresh-Token nicht aktiv');
+  return stored;
+}
+
 // AP5-01 / AP4-01: a refresh token is a credential for /hhttps/token/refresh
 // only. Every bearer-style check refuses it unless the caller opts in.
 async function checkTokenValid(token, { allowRefresh = false } = {}) {
@@ -775,7 +795,7 @@ async function checkTokenValid(token, { allowRefresh = false } = {}) {
   if (await db.revokedTokens.has(decoded.jti)) throw new Error('Token revoked');
   if (decoded.sub === 'refresh' || decoded.sub === 'oauth_refresh') {
     if (!allowRefresh) throw new Error('Refresh token not accepted as bearer token');
-    if (!await db.refreshTokens.get(decoded.jti)) throw new Error('Refresh-Token nicht aktiv');
+    await loadActiveRefreshToken(decoded.jti);
   } else {
     if (!await db.tokens.exists(decoded.jti)) throw new Error('Token nicht aktiv');
   }
@@ -944,7 +964,6 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
       'POST /hhttps/check':                     '★ Human/machine + role check',
       'GET  /hhttps/roles':                     'Role registry (ESCO-dynamic)',
       'POST /hhttps/session/start':             'Create a method-neutral session (step 1; optional pseudonym)',
-      'POST /hhttps/session/email/start':       'Alias of session/start (legacy name)',
       'POST /hhttps/email/send':                'Send the 6-digit verification code (step 2; email is the mandatory first method)',
       'POST /hhttps/email/confirm-code':        'Confirm the code in the same tab → session bound to the identity anchor (step 3)',
       'GET  /hhttps/email/verify':              'Confirm via magic link (same session only)',
@@ -2645,11 +2664,6 @@ try {
 </body></html>`;
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 // ─── Roles registry ───────────────────────────────────────────────────────────
 
@@ -2670,18 +2684,46 @@ app.get('/hhttps/roles', (req, res) => {
   });
 });
 
+/**
+ * AP3-37 (#177): ONE error responder for the identity endpoints
+ * (webauthn/*, token/refresh, session/*, email/*, verify/github/*).
+ * `code` is the machine-readable value that lands in `error`; `extra` carries
+ * the additional fields a route documents (`detail`, `attemptsLeft`, …).
+ * The emitted body is byte-for-byte what these routes produced before — the
+ * helper only stops each of them from hand-rolling the same object.
+ */
+function sendError(res, status, code, extra = null) {
+  return res.status(status).json(extra ? { error: code, ...extra } : { error: code });
+}
+
+// ─── AP3-42 (#199): named constants for the identity flow ───────────────
+// These numbers used to sit inline at every call site, which is how the
+// comments around them drifted away from the values (AP3-12).
+const SESSION_BOOTSTRAP_TTL_MS   = 15 * 60_000;   // /session/start — long enough to receive and type a code
+const PASSKEY_SESSION_TTL_MS     = 30 * 60_000;   // after webauthn/auth/finish — pseudonym / role / age choices
+const PASSKEY_TRUST_SEED         = 50;            // = HUMAN_CONFIRMED_THRESHOLD (email 20 + passkey 30); the
+                                                  // real number is computed by computeVerification later
+const WEBAUTHN_REG_CHALLENGE_TTL_MS  = 120_000;
+const WEBAUTHN_AUTH_CHALLENGE_TTL_MS = 90_000;
+const MAX_EMAILS_PER_SESSION     = 3;             // resend cap per session (the IP cap is limit.email)
+const MIN_SESSION_REMAINDER_MS   = 60_000;        // AP3-05: refuse a send that would outlive its session
+
 // ─── Token surface (W-3) ─────────────────────────────────────────────────────
 // The method-neutral identity claims of an HHTTPS access token (AK-9 / AK-18):
 // verified_methods + the four *_verified flags, the domain value and the
 // account pseudonym (D3). Shared by /role/declare, /eid/upgrade and
 // /token/refresh so the three never drift apart.
-function tokenSurface(session, v, pseudonym = session?.pseudonym || null) {
-  const methods = Array.isArray(v?.methods) ? v.methods : [];
+// AP3-43 (#199): the input is the surface itself — `{ methods, emailDomain,
+// pseudonym }` — not a session row. /token/refresh used to fake a session
+// object (`{ emailDomain }`) and a verification object (`{ methods }`) just to
+// satisfy the old signature.
+function tokenSurface({ methods, emailDomain = null, pseudonym = null }) {
+  const list = Array.isArray(methods) ? methods : [];
   return {
-    verified_methods:    methods,
-    ...methodFlags(methods),          // email/passkey/github/eudi_verified
+    verified_methods:    list,
+    ...methodFlags(list),             // email/passkey/github/eudi_verified
     verification_status: 'verified',
-    ...(session?.emailDomain ? { domain_name: session.emailDomain } : {}),
+    ...(emailDomain ? { domain_name: emailDomain } : {}),
     ...(pseudonym ? { pseudonym } : {})
   };
 }
@@ -2697,9 +2739,9 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
     // parameter, not a gate violation); with `sessionId` the body `userId` is
     // ignored.
     const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    if (!sessionId) return sendError(res, 400, 'sessionId required');
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    if (!session) return sendError(res, 404, 'Unknown or expired session.');
     if (!requireEmailVerified(session, res)) return;
 
     const userId    = session.userId;
@@ -2726,9 +2768,9 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
       supportedAlgorithmIDs: [-7, -257]
     });
 
-    await db.challenges.create(userId, options.challenge, userId, 'registration', 120_000);
+    await db.challenges.create(userId, options.challenge, userId, 'registration', WEBAUTHN_REG_CHALLENGE_TTL_MS);
     res.json({ userId, options });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, 500, e.message); }
 });
 
 app.post('/hhttps/webauthn/register/finish', async (req, res) => {
@@ -2739,18 +2781,18 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
   // email gate still holds at finish time. All three checks run BEFORE the
   // challenge lookup so a rejected call never touches the challenge.
   const { userId, response, sessionId } = req.body || {};
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (!sessionId) return sendError(res, 400, 'sessionId required');
 
   // AP3-03 (#46): every await lives inside the try — a DB error must answer,
   // not turn into an unhandled rejection with no response at all.
   try {
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    if (!session) return sendError(res, 404, 'Unknown or expired session.');
     if (!requireEmailVerified(session, res)) return;
-    if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
+    if (session.userId !== userId) return sendError(res, 401, 'session_user_mismatch');
 
     const stored = await db.challenges.get(userId);
-    if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
+    if (!stored) return sendError(res, 400, 'Challenge expired.');
 
     const v = await verifyRegistrationResponse({
       response, expectedChallenge: stored.challenge,
@@ -2758,7 +2800,7 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
       requireUserVerification: true
     });
     if (!v.verified || !v.registrationInfo)
-      return res.status(400).json({ error: 'Verifikation fehlgeschlagen.' });
+      return sendError(res, 400, 'Verifikation fehlgeschlagen.');
 
     const { credentialID, credentialPublicKey, counter,
             credentialDeviceType, credentialBackedUp } = v.registrationInfo;
@@ -2780,14 +2822,14 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
       status: 'registered', credentialId: credId,
       deviceType: credentialDeviceType, backedUp: credentialBackedUp
     });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { sendError(res, 400, e.message); }
 });
 
 // ─── WebAuthn Authentication ──────────────────────────────────────────────────
 
 app.post('/hhttps/webauthn/auth/start', limit.webauthn, async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId } = req.body || {};   // AP3-37: same body handling as every sibling route
     const userCreds = userId ? await db.credentials.findByUserId(userId) : [];
 
     // CRITICAL: convert credentialId from base64url string to Buffer
@@ -2802,9 +2844,9 @@ app.post('/hhttps/webauthn/auth/start', limit.webauthn, async (req, res) => {
       rpID: RP_ID, userVerification: 'required',
       allowCredentials, timeout: 60_000
     });
-    await db.challenges.create(sessionId, options.challenge, userId, 'authentication', 90_000);
+    await db.challenges.create(sessionId, options.challenge, userId, 'authentication', WEBAUTHN_AUTH_CHALLENGE_TTL_MS);
     res.json({ sessionId, options });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, 500, e.message); }
 });
 
 app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
@@ -2818,14 +2860,14 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
   // the try, so a DB error answers 400 instead of hanging.
   const { sessionId, response, emailSessionId, priorSessionId } = req.body || {};
   if (typeof sessionId !== 'string' || !sessionId || typeof response?.id !== 'string' || !response.id)
-    return res.status(400).json({ error: 'sessionId and response.id required' });
+    return sendError(res, 400, 'sessionId and response.id required');
 
   try {
     const stored = await db.challenges.get(sessionId);
-    if (!stored) return res.status(400).json({ error: 'Session expired.' });
+    if (!stored) return sendError(res, 400, 'Session expired.');
 
     const cred = await db.credentials.get(response.id);
-    if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
+    if (!cred) return sendError(res, 400, 'Passkey nicht registriert.');
 
     const v = await verifyAuthenticationResponse({
       response, expectedChallenge: stored.challenge,
@@ -2838,7 +2880,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       },
       requireUserVerification: true
     });
-    if (!v.verified) return res.status(401).json({ error: 'WebAuthn fehlgeschlagen.' });
+    if (!v.verified) return sendError(res, 401, 'WebAuthn fehlgeschlagen.');
 
     await db.credentials.updateCounter(cred.credentialId, v.authenticationInfo.newCounter);
     await db.challenges.delete(sessionId);
@@ -2855,7 +2897,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     const priorId = priorSessionId || emailSessionId;
     const prior = priorId ? await db.sessions.get(priorId) : null;
     const resolved = resolvePasskeySession({ storedUserId: stored.userId, cred, prior });
-    if (resolved.error) return res.status(401).json({ error: resolved.error });
+    if (resolved.error) return sendError(res, 401, resolved.error);
     const { priorMerge } = resolved;
 
     // Create the (merged) verified session. TTL 30 min — long enough for the
@@ -2870,11 +2912,11 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       hasPasskey:   true,
       // Initial trust placeholder. The final trust is computed in /role/declare
       // via computeVerification (email 20 + passkey 30 + domain + …, capped 100).
-      // We seed with 50 — the human-confirmed threshold (email+passkey) — so a
-      // caller that reads the session before /role/declare sees a sane number.
-      trustScore:   50,
+      // The seed is the human-confirmed threshold (email+passkey) so a caller
+      // that reads the session before /role/declare sees a sane number.
+      trustScore:   PASSKEY_TRUST_SEED,
       ...priorMerge,   // incl. the merged account pseudonym (D3) — written on INSERT
-    }, 1800_000); // 30 min
+    }, PASSKEY_SESSION_TTL_MS);
     // AP3-01: sessions.create writes only the base columns — the merged
     // e-mail/GitHub verification has to be persisted explicitly, otherwise the
     // e-mail-first gate refuses the very next role/declare with 403.
@@ -2892,7 +2934,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       merged:    Object.keys(priorMerge).length > 0,
       message:   'WebAuthn OK. Please declare a role.'
     });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { sendError(res, 400, e.message); }
 });
 
 // ─── Token Refresh ────────────────────────────────────────────────────────────
@@ -2903,7 +2945,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
 app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
   const { refreshToken } = req.body || {};
   if (typeof refreshToken !== 'string' || !refreshToken)
-    return res.status(400).json({ error: 'refreshToken required' });
+    return sendError(res, 400, 'refreshToken required');
 
   try {
     const d = verifyToken(refreshToken);
@@ -2917,11 +2959,15 @@ app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
       const ended = await db.refreshTokens.deleteByUser(d.userId, null);
       for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'refresh-reuse-detected');
       console.warn('[token/refresh] reuse detected — refresh family revoked for user', d.userId);
-      return res.status(401).json({ error: 'refresh_token_reuse_detected' });
+      return sendError(res, 401, 'refresh_token_reuse_detected');
     }
 
-    const stored = await db.refreshTokens.get(d.jti);
-    if (!stored) throw new Error('Refresh-Token nicht aktiv');
+    // AP3-34 (#156): shared with checkTokenValid — the row is looked up and
+    // the "not active" wording produced in exactly one place. The rest of the
+    // refresh branch cannot be delegated to checkTokenValid: a revoked jti is
+    // a ROTATION REUSE here (family kill, 401 refresh_token_reuse_detected),
+    // not the generic 'Token revoked', and `oauth_refresh` is refused above.
+    const stored = await loadActiveRefreshToken(d.jti);
 
     const cred = stored.credential_id ? await db.credentials.get(stored.credential_id) : null;
 
@@ -2944,7 +2990,7 @@ app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
       trustScore,
       method:     'verification-methods',
       deviceType: cred?.deviceType || 'unknown',
-      ...tokenSurface({ emailDomain: domainVal }, { methods }, pseudonym),
+      ...tokenSurface({ methods, emailDomain: domainVal, pseudonym }),
       ...ageCarry
     });
 
@@ -2976,72 +3022,30 @@ app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
       message:   '✓ New access token issued — no re-authentication needed.'
     });
   } catch (e) {
-    res.status(401).json({ error: e.message });
+    sendError(res, 401, e.message);
   }
 });
 
-// ─── Email-First Session ─────────────────────────────────────────────────────
-//
-// POST /hhttps/session/email/start
-//
-// Erstellt eine verified Session ohne WebAuthn-Credential.
-// Passkey bleibt optional und kann nachträglich den trust_score erhöhen.
-//
-// Motivation: Ermöglicht Email-first-Flow auf der Landing Page ohne
-// vorherige Passkey-Registrierung. Sessions werden mit trust_score: 30
-// erstellt (Baseline E-Mail). Nach erfolgreicher E-Mail-Verifikation
-// wertet /hhttps/role/declare den emailTrustBonus aus wie gehabt.
-//
-// Rate-limit: identisch mit limit.email (5 Req / 60 min pro IP).
-// Kein DB-Schema-Change: credential_id, device_type, backed_up sind nullable.
-//
-// Body:     { pseudonym?: string }
-// Response: { sessionId, userId, trustScore: 30, method: "email-pending" }
-//
-app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
-  try {
-    const { pseudonym } = req.body || {};
-
-    const cleanPseudo = sanitizePseudonym(pseudonym); // AK-6: max 32 chars, safe charset
-
-    const userId = uuid();
-    const sid    = uuid();
-
-    // credential_id, device_type, backed_up sind in der DB nullable —
-    // kein ALTER TABLE nötig.
-    await db.sessions.create(sid, {
-      userId,
-      credentialId: null,
-      deviceType:   'email-only',
-      backedUp:     false,
-      verified:     true,   // session gilt als verified für /hhttps/email/send
-      trustScore:   0,      // email pending — 0 until the email is confirmed (then 20)
-      pseudonym:    cleanPseudo, // T4/D3: session carries the wish
-    }, 900_000); // 15 min — ausreichend für E-Mail-Zustellung und Bestätigung
-
-    await db.stats.increment('verifications');
-
-    res.json({
-      sessionId:  sid,
-      userId,
-      trustScore: 0,        // email pending — not yet a verified method
-      method:     'email-pending',
-      pseudonym:  cleanPseudo,
-      message:    'Session erstellt. Bitte E-Mail verifizieren.',
-    });
-  } catch (e) {
-    console.error('[session/email/start]', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── Method-neutral session bootstrap (v0.5) ────────────────────────────────
+// ─── Method-neutral session bootstrap (v0.5) ───────────────────────
 // Any of the equal entry methods (email, passkey, EUDI Wallet, GitHub) may open
-// a session FIRST and then run its own real verification against it. Same
-// primitive as /hhttps/session/email/start, but without the email label: the
+// a session FIRST and then run its own real verification against it. The
 // session carries NO verified method yet (trust 0) until one really lands. The
 // token gate in /hhttps/role/declare requires ≥1 genuinely verified method, so
 // an empty bootstrap session can never mint a token on its own.
+//
+// AP3-30 (#141) / W-8: the near-identical twin POST /hhttps/session/email/start
+// is GONE. It differed only in deviceType ('email-only' vs 'pending') and the
+// `method` label, and nothing called it: neither public/, sites/, extension/,
+// privacy-pass/public/, sdk/ nor the test suite. /hhttps/info no longer
+// advertises it either.
+//
+// AP3-12 (#199): the numbers in the old comment block were wrong — a bootstrap
+// session is created with trustScore 0 (NOT 30) and carries no verified
+// method; the final trust comes from computeVerification() in /role/declare.
+// The rate limit is `limit.email` — see the limiter definition for the window.
+//
+// Body:     { pseudonym?: string }
+// Response: { sessionId, userId, trustScore: 0, method: 'session-pending', pseudonym }
 app.post('/hhttps/session/start', limit.email, async (req, res) => {
   try {
     const { pseudonym } = req.body || {};
@@ -3050,6 +3054,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
     const userId = uuid();
     const sid    = uuid();
 
+    // credential_id / device_type / backed_up are nullable — no schema change.
     await db.sessions.create(sid, {
       userId,
       credentialId: null,
@@ -3058,7 +3063,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
       verified:     true,        // "session exists" — NOT a trust statement (trust stays 0)
       trustScore:   0,
       pseudonym:    cleanPseudo, // T4/D3: session carries the wish
-    }, 900_000); // 15 min
+    }, SESSION_BOOTSTRAP_TTL_MS);
 
     await db.stats.increment('verifications');
 
@@ -3072,7 +3077,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
     });
   } catch (e) {
     console.error('[session/start]', e.message);
-    res.status(500).json({ error: e.message });
+    sendError(res, 500, e.message);
   }
 });
 
@@ -3126,8 +3131,9 @@ async function burnEmailVerification(sessionId, userId, value) {
 // address A would bind the session to whatever address the context holds now.
 function emailContextMatches(ctx, verification) {
   if (!ctx?.email || !verification?.emailHash) return false;
-  const h = crypto.createHash('sha256').update(normalizeEmail(ctx.email)).digest('hex');
-  return h === verification.emailHash;
+  // AP3-35 (#163): the hash contract lives in identity.js — email.js WRITES the
+  // column with the same function, so the two sides can no longer drift.
+  return emailVerificationHash(ctx.email) === verification.emailHash;
 }
 
 // ─── AP4-48 (#231): the verification flag-bag ────────────────────────────────
@@ -3152,12 +3158,7 @@ function sessionFlags(session, overrides = {}) {
   };
 }
 
-/**
- * @returns {{ userId, pseudonym, created, methods, trust }}
- * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
- * An existing anchor always wins (AK-8): its stored userId/pseudonym are returned
- * by resolveOrCreate and the session is rebound to them (AK-2).
- */
+/** A 409-class failure of the anchor binding, carrying the wire error code. */
 function anchorConflict(code) {
   const err = new Error(code);
   err.code = code;
@@ -3165,6 +3166,16 @@ function anchorConflict(code) {
   return err;
 }
 
+/**
+ * AP3-45 (#199): this block documents bindSessionToEmailAnchor — it used to sit
+ * on anchorConflict() above, which returns none of it.
+ *
+ * @returns {{ userId, pseudonym, created, methods, trust }}
+ * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
+ * An existing anchor always wins (AK-8): its stored userId/pseudonym are returned
+ * by resolveOrCreate and the session is rebound to them (AK-2).
+ * @throws a 409 anchorConflict ('email_already_bound' / 'identity_conflict').
+ */
 async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymInput, verification }) {
   const emailHash = emailAnchorHash(email);
   const wish      = sanitizePseudonym(pseudonymInput) ?? session.pseudonym ?? null;
@@ -3219,6 +3230,40 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
   return { userId: anchor.userId, pseudonym: anchor.pseudonym, created: anchor.created, methods: v.methods, trust: v.trust };
 }
 
+/**
+ * AP3-33 (#148): THE confirmation path. /hhttps/email/verify (magic link) and
+ * /hhttps/email/confirm-code (typed code) used to implement everything after
+ * "the proof is valid" twice, in a different ORDER and with two error
+ * vocabularies — which is why the #22 fix (load the session before the proof is
+ * consumed) only ever reached the code path.
+ *
+ * Both routes now: (1) load the session, (2) consume their own proof, (3) call
+ * this. What stays route-specific is only how the proof is obtained and how the
+ * outcome is rendered (302 with a `reason`, or JSON with a status).
+ *
+ * @returns {{ ok: true, bound }} | {{ ok: false, status: number, reason: string }}
+ */
+async function confirmEmailVerification({ session, sessionId, verification }) {
+  // T4: the plaintext address was parked by /email/send in the same session.
+  const ctx = await readEmailContext(sessionId);
+  if (!ctx?.email) return { ok: false, status: 409, reason: 'email_context_missing' };
+  // F-1 (K-1/S-1): the proof must belong to the address the context describes.
+  if (!emailContextMatches(ctx, verification)) return { ok: false, status: 409, reason: 'email_context_mismatch' };
+
+  // Bind the session to the stable identity anchor (AK-1/AK-2), store the
+  // pseudonym (AK-6/7/8) and fill the claims cache (AK-16).
+  try {
+    const bound = await bindSessionToEmailAnchor({
+      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification
+    });
+    return { ok: true, bound };
+  } catch (e) {
+    if (e.status === 409) return { ok: false, status: 409, reason: e.code };
+    console.error('[email/confirm] anchor bind failed:', e.message);
+    return { ok: false, status: 500, reason: 'anchor_failed' };
+  }
+}
+
 app.post('/hhttps/email/send', limit.email, async (req, res) => {
   const { sessionId, email: rawEmail, role, pseudonym } = req.body || {};
   // AK-2: case/whitespace variants of the same address are the same anchor.
@@ -3226,13 +3271,13 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   // AP3-13: strict syntax — no comments/quotes/non-ASCII that the mail
   // transport and classifyDomain would read differently.
   if (!isValidEmail(email))
-    return res.status(400).json({ error: 'Invalid email address.' });
+    return sendError(res, 400, 'Invalid email address.');
 
   // AP3-03 (#46): every await below is inside the try — a DB error answers 500
   // instead of leaving the request without any response.
   try {
     const session = await db.sessions.get(sessionId);
-    if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+    if (!session?.verified) return sendError(res, 401, 'Invalid session.');
 
     // AP3-05 (#61): the code, the parked e-mail context and the SESSION must
     // not outlive each other. The session TTL runs from session start, the mail
@@ -3240,14 +3285,14 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
     // and a session with almost nothing left is refused instead of producing a
     // code that is dead on arrival.
     const remainingMs = Math.max(0, (session.expires || 0) - Date.now());
-    if (remainingMs < 60_000)
-      return res.status(410).json({ error: 'session_expired', detail: 'Start a new session before requesting a code.' });
+    if (remainingMs < MIN_SESSION_REMAINDER_MS)
+      return sendError(res, 410, 'session_expired', { detail: 'Start a new session before requesting a code.' });
     // W-5: code row, magic-link token and the parked context share ONE value.
     const mailTtlMs = Math.min(EMAIL_CONTEXT_TTL_MS, remainingMs);
 
     const sentCount = await db.sessions.incrementEmailsSent(sessionId);
-    if (sentCount > 3)
-      return res.status(429).json({ error: 'Zu viele E-Mail-Anfragen pro Session.' });
+    if (sentCount > MAX_EMAILS_PER_SESSION)
+      return sendError(res, 429, 'Zu viele E-Mail-Anfragen pro Session.');
 
     const classification = classifyDomain(email);
 
@@ -3279,8 +3324,8 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
     res.json(resp);
   } catch (err) {
     // F-3 (S-4): no transport and no explicit dev mode → fail closed, no code.
-    if (err.code === 'email_transport_unavailable') return res.status(503).json({ error: 'email_transport_unavailable' });
-    res.status(500).json({ error: 'E-Mail-Fehler: ' + err.message });
+    if (err.code === 'email_transport_unavailable') return sendError(res, 503, 'email_transport_unavailable');
+    sendError(res, 500, 'E-Mail-Fehler: ' + err.message);
   }
 });
 
@@ -3293,29 +3338,24 @@ app.get('/hhttps/email/verify', async (req, res) => {
   if (typeof token !== 'string' || !token || typeof sessionId !== 'string' || !sessionId)
     return res.redirect('/?email_verify=error&reason=missing_params');
 
+  const fail = (reason) => res.redirect(`/?email_verify=error&reason=${encodeURIComponent(reason)}`);
+
   try {
-    const result = await verifyEmailToken(token);
-    if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
-    // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
-    if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
-
+    // #22 (AP3-33): load the session BEFORE the token is consumed. verifyEmailToken()
+    // marks the row `used`; with an unknown/expired session that used to burn a
+    // token the user could still have redeemed on the real session. The code path
+    // already did this — now both do.
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
+    if (!session) return fail('session_expired');
 
-    const ctx = await readEmailContext(sessionId);
-    if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
-    if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
+    const result = await verifyEmailToken(token);
+    if (!result.valid) return fail(result.error);
+    // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
+    if (result.sessionId !== sessionId) return fail('session_mismatch');
 
-    let bound;
-    try {
-      bound = await bindSessionToEmailAnchor({
-        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
-      });
-    } catch (e) {
-      if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
-      console.error('[email/verify] anchor bind failed:', e.message);
-      return res.redirect('/?email_verify=error&reason=anchor_failed');
-    }
+    const outcome = await confirmEmailVerification({ session, sessionId, verification: result });
+    if (!outcome.ok) return fail(outcome.reason);
+    const bound = outcome.bound;
 
     res.redirect(
       `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
@@ -3341,7 +3381,7 @@ app.get('/hhttps/email/verify', async (req, res) => {
 app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   const { sessionId, code } = req.body || {};
   if (typeof sessionId !== 'string' || !sessionId || typeof code !== 'string' || !code)
-    return res.status(400).json({ error: 'sessionId and code required.' });
+    return sendError(res, 400, 'sessionId and code required.');
 
   // AP3-03 (#46): all awaits inside the try — no unanswered request on a DB error.
   try {
@@ -3349,7 +3389,7 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     // the verification row `used`; with an unknown/expired session that would
     // burn a code the user can still legitimately confirm on the real session.
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+    if (!session) return sendError(res, 404, 'Session not found or expired.');
 
     // AP3-19 (#122): a 6-digit code has 10^6 values, and the only brake used to
     // be the IP rate limit. Wrong guesses are counted PER SESSION; after
@@ -3358,43 +3398,29 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     // request a new mail.
     const attempts = await readEmailAttempts(sessionId);
     if (attempts >= MAX_EMAIL_CODE_ATTEMPTS)
-      return res.status(429).json({ error: 'too_many_attempts' });
+      return sendError(res, 429, 'too_many_attempts');
 
     const result = await verifyEmailCode(code, sessionId);
     if (!result.valid) {
       const used = attempts + 1;
       if (used >= MAX_EMAIL_CODE_ATTEMPTS) {
         await burnEmailVerification(sessionId, session.userId, used);
-        return res.status(429).json({ error: 'too_many_attempts' });
+        return sendError(res, 429, 'too_many_attempts');
       }
       await bumpEmailAttempts(sessionId, session.userId, used);
-      return res.status(400).json({ error: result.error, attemptsLeft: MAX_EMAIL_CODE_ATTEMPTS - used });
+      return sendError(res, 400, result.error, { attemptsLeft: MAX_EMAIL_CODE_ATTEMPTS - used });
     }
-
-    // T4: the plaintext email was parked by /email/send in the same session.
-    const ctx = await readEmailContext(sessionId);
-    if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
-    // F-1 (K-1/S-1): the code must belong to the address the context describes.
-    if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
 
     // The code was right — the guess counter has done its job.
     await db.challenges.delete(emailAttemptsId(sessionId));
 
-    // Bind the session to the stable identity anchor (AK-1/AK-2), store the
-    // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
-    // surface reported here is what the user has RIGHT NOW (before adding more
-    // methods), so the UI can immediately show the confirmed method badges. Trust
-    // is internal/API-only; the UI renders `methods`, never the number.
-    let bound;
-    try {
-      bound = await bindSessionToEmailAnchor({
-        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
-      });
-    } catch (e) {
-      if (e.status === 409) return res.status(409).json({ error: e.code });
-      console.error('[email/confirm-code] anchor bind failed:', e.message);
-      return res.status(500).json({ error: 'anchor_bind_failed' });
-    }
+    // AP3-33: the shared confirmation path (context match + anchor binding).
+    // The verification surface reported below is what the user has RIGHT NOW
+    // (before adding more methods), so the UI can immediately show the confirmed
+    // method badges. Trust is internal/API-only; the UI renders `methods`.
+    const outcome = await confirmEmailVerification({ session, sessionId, verification: result });
+    if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.reason });
+    const bound = outcome.bound;
 
     res.json({
       verified:      true,
@@ -3410,7 +3436,7 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     });
   } catch (e) {
     console.error('[email/confirm-code] failed:', e.message);
-    res.status(500).json({ error: 'internal_error' });
+    sendError(res, 500, 'internal_error');
   }
 });
 
@@ -3419,10 +3445,10 @@ app.post('/hhttps/email/status', async (req, res) => {
   // anything at all — an object sessionId used to reach the query builder).
   const sessionId = req.body?.sessionId;
   if (typeof sessionId !== 'string' || !sessionId)
-    return res.status(400).json({ error: 'sessionId required' });
+    return sendError(res, 400, 'sessionId required');
   try {
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Session not found.' });
+    if (!session) return sendError(res, 404, 'Session not found.');
     res.json({
       emailVerified: session.emailVerified || false,
       emailLevel:    session.emailLevel    || null,
@@ -3431,7 +3457,7 @@ app.post('/hhttps/email/status', async (req, res) => {
     });
   } catch (e) {
     console.error('[email/status] failed:', e.message);
-    res.status(500).json({ error: 'internal_error' });
+    sendError(res, 500, 'internal_error');
   }
 });
 
@@ -3441,6 +3467,10 @@ app.post('/hhttps/email/status', async (req, res) => {
 // score survive. See external-verify.js for the full contract.
 
 app.get('/hhttps/verify/github/start', async (req, res) => {
+  // AP3-37 (#177): this is the only route in this block a BROWSER navigates to
+  // directly (it ends in a 302 to GitHub), so its two pre-flight failures stay
+  // plain text — a JSON body would be shown to the user verbatim. Everything
+  // that answers an XHR uses sendError().
   const { session: sessionId } = req.query;
   if (!sessionId) return res.status(400).send('session parameter required');
 
@@ -3449,17 +3479,15 @@ app.get('/hhttps/verify/github/start', async (req, res) => {
   if (!requireEmailVerified(session, res)) return;   // AK-11: gate BEFORE the config check
 
   if (!isGithubConfigured()) {
-    return res.status(503).json({
-      error: 'github_not_configured',
-      detail: 'This HHTTPS issuer has no GitHub OAuth app configured. Please contact the operator.'
-    });
+    return sendError(res, 503, 'github_not_configured',
+      { detail: 'This HHTTPS issuer has no GitHub OAuth app configured. Please contact the operator.' });
   }
 
   try {
     const authUrl = await startGithubVerify({ sessionId, redirectBase: BASE_URL });
     res.redirect(authUrl);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendError(res, 500, e.message);
   }
 });
 
@@ -3503,9 +3531,13 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
 function renderGithubReturnPage({ ok, title, message }) {
   const color = ok ? '#34d399' : '#f87171';
   const icon  = ok ? '✓'  : '✗';
+  // AP3-41 (#183): `title` is escaped too. Today every caller passes a literal,
+  // but it lands in <title> AND in <h1> — the escaping is part of the contract,
+  // not a property of the current call sites.
+  const safeTitle = escapeHtml(title);
   // v0.5: the trust score is API-only and is NEVER shown to the user — no score line.
   return `<!DOCTYPE html><html lang="en"><head>
-<meta charset="utf-8"><title>${title}</title>
+<meta charset="utf-8"><title>${safeTitle}</title>
 <style>
   body{margin:0;background:#0d1421;color:#e2f0fa;font:14px/1.6 system-ui,sans-serif;
        min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;}
@@ -3520,7 +3552,7 @@ function renderGithubReturnPage({ ok, title, message }) {
 </style></head><body>
   <div class="card">
     <div class="icon">${icon}</div>
-    <h1>${title}</h1>
+    <h1>${safeTitle}</h1>
     <p class="msg">${escapeHtml(message)}</p>
     <p class="lang-de">Du kannst diesen Tab schließen und zu hhttps.org zurückkehren.</p>
     <button onclick="window.close()">Close tab / Tab schließen</button>
@@ -3535,13 +3567,13 @@ function renderGithubReturnPage({ ok, title, message }) {
 
 app.post('/hhttps/verify/github/status', async (req, res) => {
   const { sessionId } = req.body || {};
-  if (typeof sessionId !== 'string' || !sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (typeof sessionId !== 'string' || !sessionId) return sendError(res, 400, 'sessionId required');
   // AP3-03 (#46): a DB error here used to leave the polling tab without any answer.
   try {
     res.json(await getGithubStatus(sessionId));
   } catch (e) {
     console.error('[verify/github/status] failed:', e.message);
-    res.status(500).json({ error: 'internal_error' });
+    sendError(res, 500, 'internal_error');
   }
 });
 
@@ -3654,7 +3686,7 @@ async function roleDeclare(req, res) {
     trustScore,
     method:     'verification-methods',
     deviceType: session.deviceType,
-    ...tokenSurface(session, v, pseudonym),
+    ...tokenSurface({ methods: v.methods, emailDomain: session.emailDomain, pseudonym }),
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
@@ -3887,7 +3919,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       deviceType: session.deviceType,
       // AP4-02: the same surface as role/declare and eid/upgrade (pseudonym,
       // *_verified flags, domain_name) — not a hand-built subset.
-      ...tokenSurface(session, v),
+      ...tokenSurface({ methods: v.methods, emailDomain: session.emailDomain, pseudonym: session.pseudonym }),
       ...(priorEudi ? { eudi_verified: true } : {}),
       // verified age claims (orthogonal, trust-neutral):
       age_group:               ag.id,
@@ -4042,7 +4074,7 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       trustScore: v.trust,
       method:     'verification-methods',
       deviceType: session.deviceType,
-      ...tokenSurface(session, v),
+      ...tokenSurface({ methods: v.methods, emailDomain: session.emailDomain, pseudonym: session.pseudonym }),
       eudi_verified:       true,
       ...ageCarry
     });

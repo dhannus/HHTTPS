@@ -3,14 +3,20 @@
  *
  * Two purposes:
  *   1. User email verification — the MANDATORY first step of every sign-in
- *      (Phase 8, email-anchored identity: the confirmed address is the
- *      identity anchor; passkey/EUDI/GitHub are unlocked only afterwards).
+ *      (spec: docs/specs/email-anchored-identity, AK-10..AK-13 / D4 — the
+ *      confirmed address is the identity anchor; passkey/EUDI/GitHub are
+ *      unlocked only afterwards). AP3-40 (#199): this path is NOT legacy.
  *      Function: sendVerificationEmail({ email, role, sessionId, baseUrl })
  *      Checks:   verifyEmailCode(code, sessionId) / verifyEmailToken(rawToken)
  *
- *   2. Platform registration confirmation (Phase 3b).
+ *   2. Platform lifecycle mails (registration confirmation, verified,
+ *      rejected) and the operator's admin notification.
  *      Function: sendPlatformRegistrationEmail({ to, platformName, homepageUrl,
  *                                                 confirmUrl, kind })
+ *
+ * STRUCTURE (AP3-41, #183): every mail is a pure `render*Email()` returning
+ * { subject, html, text } plus a thin `send*()` that hands that to
+ * deliverMail(). The renderers take no I/O and are unit-tested directly.
  *
  * LANGUAGE: transactional emails are BILINGUAL (English first as the canonical
  * text, German second), because the recipient's locale is generally unknown at
@@ -38,7 +44,9 @@ import nodemailer from 'nodemailer';
 import { emailVerifications } from './db.js';
 import { ROLES } from './roles.js';
 import { roleLabel } from './roles.i18n.js';
-import { normalizeCode, isValidCode } from './identity.js';
+import { normalizeCode, isValidCode, emailVerificationHash } from './identity.js';
+import { escapeHtml } from './html.js';           // AP3-46: one escaper for the whole server
+import { BASE_URL } from './config.js';           // AP3-36: one BASE_URL for the whole server
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 // W-5: single source of truth for the validity of a verification mail (code,
@@ -51,7 +59,6 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
 const SMTP_USER = process.env.SMTP_USER || null;
 const SMTP_PASS = process.env.SMTP_PASS || null;
 const SMTP_FROM = process.env.SMTP_FROM || 'noreply@hhttps.org';
-const BASE_URL  = process.env.BASE_URL  || 'https://hhttps.org';
 const FROM_NAME = process.env.SMTP_FROM_NAME || 'HHTTPS Issuer';
 const REPLY_TO  = process.env.SMTP_REPLY_TO || null;  // optional: separate reply address
 
@@ -60,7 +67,7 @@ const REPLY_TO  = process.env.SMTP_REPLY_TO || null;  // optional: separate repl
 // silently — the feature is opt-in and never blocks the user-facing flow.
 const ADMIN_NOTIFY_EMAIL = process.env.ADMIN_NOTIFY_EMAIL || null;
 
-// ─── Domain classification (for user email verification, legacy flow) ──────
+// ─── Domain classification (for the user e-mail verification step) ─────────
 const DOMAIN_RULES = {
   official: [
     'bundestag.de','bundesregierung.de','bundesrat.de',
@@ -307,7 +314,9 @@ const SHELL_THEMES = {
   }
 };
 
-function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote, theme = 'dark' }) {
+// AP3-47 (#199): no `title` parameter — the shell renders `subtitle` only, so
+// every caller was handing over a string that went straight into the bin.
+function emailShell({ subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote, theme = 'dark' }) {
   const t = SHELL_THEMES[theme] || SHELL_THEMES.dark;
   // AP3-15 (#99): the CTA URL lands in an href attribute AND as text — escape both.
   const safeCta = escapeHtml(ctaUrl);
@@ -340,7 +349,11 @@ function emailShell({ title, subtitle, bodyHtml, ctaUrl, ctaLabel, footerNote, t
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LEGACY: User email verification (role declaration flow)
+// User e-mail verification — the MANDATORY first step of every sign-in.
+// Spec: docs/specs/email-anchored-identity (AK-10..AK-13, D4). NOT legacy:
+// AP3-40 (#199) removed that marker, which contradicted the gate in
+// requireEmailVerified() — passkey, GitHub and EUDI are unlocked only after
+// this step has succeeded.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // Generate a 6-digit verification code that the user types into the SAME tab
@@ -420,7 +433,6 @@ export function renderVerificationEmail({ code, verifyUrl, role, classification,
 
   const html = emailShell({
     theme:     'light',
-    title:     'Verification code',
     subtitle:  'HUMAN-VERIFIED HTTPS · EMAIL VERIFICATION',
     bodyHtml,
     ctaUrl:    verifyUrl,
@@ -461,7 +473,9 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl,
   await emailVerifications.create({
     token:      tokenHash,
     code:       codeHash,
-    email:      crypto.createHash('sha256').update(email.toLowerCase()).digest('hex'),
+    // AP3-35 (#163): ONE definition of the column's contract (identity.js);
+    // /hhttps/email/verify and /email/confirm-code recompute it the same way.
+    email:      emailVerificationHash(email),
     domain:     classification.domain,
     level:      classification.level,
     trustBonus: classification.trustBonus,
@@ -482,23 +496,22 @@ export async function sendVerificationEmail({ email, role, sessionId, baseUrl,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// PHASE 3b: Platform registration confirmation
+// Platform lifecycle mails (developer portal)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Send the platform registration confirmation email.
- * Called from /hhttps/developers/clients (POST) and from email change handlers.
+ * AP3-41 (#183): pure renderer for the platform registration / e-mail-change
+ * confirmation mail. No I/O — unit-testable. Returns { subject, html, text }.
  *
  * @param {object} opts
- * @param {string} opts.to            Recipient email
  * @param {string} opts.platformName  Display name of the platform
  * @param {string} opts.homepageUrl   Platform's homepage URL
  * @param {string} opts.confirmUrl    Full URL with email_token to confirm
  * @param {string} [opts.kind]        'registration' | 'email_change' (default: 'registration')
- * @returns {Promise<{sent: boolean, devMode: boolean}>}
+ * @param {string} [opts.setupUrl]    WordPress plugin setup URL (http(s) only)
  */
-export async function sendPlatformRegistrationEmail({
-  to, platformName, homepageUrl, confirmUrl, kind = 'registration', setupUrl = null
+export function renderPlatformRegistrationEmail({
+  platformName, homepageUrl, confirmUrl, kind = 'registration', setupUrl = null
 }) {
   const isChange = kind === 'email_change';
 
@@ -547,7 +560,6 @@ export async function sendPlatformRegistrationEmail({
   );
 
   const html = emailShell({
-    title:     titleEn,
     subtitle:  'HUMAN-VERIFIED HTTPS · PLATFORM REGISTRATION',
     bodyHtml,
     ctaUrl:    confirmUrl,
@@ -566,6 +578,19 @@ export async function sendPlatformRegistrationEmail({
     ? `[HHTTPS] Confirm new email for platform "${platformName}" / Neue Email bestätigen`
     : `[HHTTPS] Confirm your platform registration: ${platformName}`;
 
+  return { subject, html, text };
+}
+
+/**
+ * Send the platform registration confirmation email.
+ * Called from /hhttps/developers/clients (POST) and from email change handlers.
+ * @returns {Promise<{sent: boolean, devMode: boolean}>}
+ */
+export async function sendPlatformRegistrationEmail({
+  to, platformName, homepageUrl, confirmUrl, kind = 'registration', setupUrl = null
+}) {
+  const { subject, html, text } =
+    renderPlatformRegistrationEmail({ platformName, homepageUrl, confirmUrl, kind, setupUrl });
   return deliverMail({
     kind: 'Platform registration', to, link: confirmUrl,
     meta: { platformName, homepageUrl, kind }, subject, text, html
@@ -573,9 +598,10 @@ export async function sendPlatformRegistrationEmail({
 }
 
 /**
- * Notify the platform owner that their submission was verified by admin.
+ * AP3-41 (#183): pure renderer for the "platform verified" mail.
+ * AP3-47: `homepageUrl` is NOT a parameter — the mail never showed it.
  */
-export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl }) {
+export function renderPlatformVerifiedEmail({ platformName }) {
   const bodyHtml = biHtml(
     `<p>Congratulations! Your platform <strong>${escapeHtml(platformName)}</strong> is now officially <strong style="color:#00e5ff">verified</strong>.</p>
     <div class="info-box">
@@ -600,7 +626,6 @@ export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl 
   );
 
   const html = emailShell({
-    title:     'Platform verified',
     subtitle:  'HUMAN-VERIFIED HTTPS · VERIFICATION APPROVED',
     bodyHtml,
     ctaUrl:    `${BASE_URL}/developers`,
@@ -617,19 +642,26 @@ export async function sendPlatformVerifiedEmail({ to, platformName, homepageUrl 
      `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n')
   );
 
+  const subject = `[HHTTPS] ✓ ${platformName} is now verified / ist jetzt verifiziert`;
+  return { subject, html, text };
+}
+
+/** Notify the platform owner that their submission was verified by admin. */
+export async function sendPlatformVerifiedEmail({ to, platformName }) {
+  const { subject, html, text } = renderPlatformVerifiedEmail({ platformName });
   return deliverMail({
     kind: 'Platform verified', to, link: `${BASE_URL}/developers`, meta: { platformName },
-    subject: `[HHTTPS] ✓ ${platformName} is now verified / ist jetzt verifiziert`,
-    text, html
+    subject, text, html
   });
 }
 
 /**
- * Notify the platform owner that their submission was rejected.
+ * AP3-41 (#183): pure renderer for the "verification request rejected" mail.
+ * AP3-47: the German block does not repeat the reason box, so there is no
+ * second, unused `reasonDe` variable any more.
  */
-export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
+export function renderPlatformRejectedEmail({ platformName, reason }) {
   const reasonEn = escapeHtml(reason || '(no reason given)');
-  const reasonDe = escapeHtml(reason || '(kein Grund angegeben)');
 
   const bodyHtml = biHtml(
     `<p>We reviewed your request to verify the platform <strong>${escapeHtml(platformName)}</strong> and unfortunately have to reject it.</p>
@@ -643,7 +675,6 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
   );
 
   const html = emailShell({
-    title:     'Request rejected',
     subtitle:  'HUMAN-VERIFIED HTTPS · VERIFICATION REJECTED',
     bodyHtml,
     ctaUrl:    `${BASE_URL}/developers`,
@@ -658,10 +689,16 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
      '', `Dashboard: ${BASE_URL}/developers`, '', `— HHTTPS Project · hhttps.org`].join('\n')
   );
 
+  const subject = `[HHTTPS] Request for "${platformName}" rejected / Antrag abgelehnt`;
+  return { subject, html, text };
+}
+
+/** Notify the platform owner that their submission was rejected. */
+export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
+  const { subject, html, text } = renderPlatformRejectedEmail({ platformName, reason });
   return deliverMail({
     kind: 'Platform rejected', to, link: `${BASE_URL}/developers`, meta: { platformName, reason },
-    subject: `[HHTTPS] Request for "${platformName}" rejected / Antrag abgelehnt`,
-    text, html
+    subject, text, html
   });
 }
 
@@ -679,7 +716,8 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
 // break a developer's registration.
 
 /**
- * Notify the issuer operator about a platform lifecycle event.
+ * AP3-41 (#183): pure renderer for the operator notification. No I/O, no
+ * recipient resolution — unit-testable. Returns { subject, html, text, adminUrl }.
  *
  * @param {object}  p
  * @param {'registered'|'review'} p.kind
@@ -689,15 +727,11 @@ export async function sendPlatformRejectedEmail({ to, platformName, reason }) {
  * @param {string}  p.contactEmail
  * @param {string} [p.impressumUrl]
  * @param {boolean} [p.domainEmailMatch]
- * @param {string} [p.to]  override recipient (defaults to ADMIN_NOTIFY_EMAIL)
  */
-export async function sendAdminPlatformNotification({
+export function renderAdminPlatformNotification({
   kind = 'review', platformName, clientId, homepageUrl,
-  contactEmail, impressumUrl, domainEmailMatch, to
+  contactEmail, impressumUrl, domainEmailMatch
 }) {
-  const recipient = to || ADMIN_NOTIFY_EMAIL;
-  if (!recipient) return { sent: false, skipped: 'ADMIN_NOTIFY_EMAIL not configured' };
-
   const isReview  = kind === 'review';
   const adminUrl  = `${BASE_URL}/developers/admin.html`;
   const safeName  = escapeHtml(platformName || '(ohne Namen)');
@@ -743,7 +777,6 @@ export async function sendAdminPlatformNotification({
        ${rows}`;
 
   const html = emailShell({
-    title:     isReview ? 'Plattform wartet auf Prüfung' : 'Neue Plattform registriert',
     subtitle:  isReview ? 'ADMIN · REVIEW ERFORDERLICH' : 'ADMIN · NEUE REGISTRIERUNG',
     bodyHtml,
     ctaUrl:    adminUrl,
@@ -773,18 +806,38 @@ export async function sendAdminPlatformNotification({
     '— HHTTPS Project · hhttps.org'
   ].join('\n');
 
+  const subject = isReview
+    ? `[HHTTPS Admin] Prüfung erforderlich: "${platformName}"`
+    : `[HHTTPS Admin] Neue Plattform: "${platformName}"`;
+  return { subject, html, text, adminUrl };
+}
+
+/**
+ * Notify the issuer operator about a platform lifecycle event.
+ * Without ADMIN_NOTIFY_EMAIL (and without an explicit `to`) the notification
+ * is skipped silently — the feature is opt-in and never blocks a developer.
+ *
+ * @param {string} [p.to]  override recipient (defaults to ADMIN_NOTIFY_EMAIL)
+ */
+export async function sendAdminPlatformNotification({
+  kind = 'review', platformName, clientId, homepageUrl,
+  contactEmail, impressumUrl, domainEmailMatch, to
+}) {
+  const recipient = to || ADMIN_NOTIFY_EMAIL;
+  if (!recipient) return { sent: false, skipped: 'ADMIN_NOTIFY_EMAIL not configured' };
+
+  const { subject, html, text, adminUrl } = renderAdminPlatformNotification({
+    kind, platformName, clientId, homepageUrl, contactEmail, impressumUrl, domainEmailMatch
+  });
   const r = await deliverMail({
-    kind: isReview ? 'Admin review request' : 'Admin new platform',
+    kind: kind === 'review' ? 'Admin review request' : 'Admin new platform',
     to: recipient, link: adminUrl, meta: { platformName, clientId },
-    subject: isReview
-      ? `[HHTTPS Admin] Prüfung erforderlich: "${platformName}"`
-      : `[HHTTPS Admin] Neue Plattform: "${platformName}"`,
-    text, html
+    subject, text, html
   });
   return { ...r, to: recipient };
 }
 
-// ─── Verify token (used by /hhttps/email/verify, legacy user flow) ─────────
+// ─── Verify token (used by /hhttps/email/verify — the magic-link path) ─────
 
 export async function verifyEmailToken(rawToken) {
   const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
@@ -860,12 +913,3 @@ export function httpUrlOrNull(u) {
   } catch { return null; }
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
