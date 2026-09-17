@@ -1,0 +1,91 @@
+/* Consent page (OAuth authorize) — AP2-31 (#165): extracted from the
+   renderConsentPage template literal in server.js. Served from
+   server/public/ as /consent.css. */
+  :root{
+    --bg:#F9F9F8; --surface:#FFFFFF; --ink:#0A0A0A; --ink-2:#5C5C5C;
+    --line:#8A8A8A; --line-subtle:#E6E6E4;
+    --ok:#1C6B3F; --ok-bg:#EDF6F0;
+    --warn:#8A4A12; --warn-bg:#FDF3E8;
+    --font-display:'Syne',system-ui,sans-serif;
+    --font-ui:'Inter',system-ui,sans-serif;
+    --font-mono:'JetBrains Mono',ui-monospace,monospace;
+    --r-card:24px; --r-pill:999px;
+    --sh-md:0 4px 16px rgba(10,10,10,.08);
+    --sh-lg:0 12px 40px rgba(10,10,10,.10);
+    --ease:cubic-bezier(.22,1,.36,1);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:var(--font-ui);background:var(--bg);color:var(--ink);
+    min-height:100vh;display:flex;align-items:center;justify-content:center;
+    padding:40px 20px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{width:100%;max-width:480px}
+
+  /* Brand — same dot mark and Syne wordmark as the sign-in page */
+  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);
+    font-weight:800;font-size:22px;letter-spacing:-.02em;color:inherit;text-decoration:none}
+  .brand .dot{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--ink);
+    position:relative;flex:none}
+  .brand .dot::after{content:'';position:absolute;inset:5px;border-radius:50%;background:var(--ink)}
+  .lang-toggle{display:inline-flex;gap:2px;border:1.5px solid var(--line-subtle);
+    border-radius:var(--r-pill);padding:2px}
+  .lang-toggle button{border:none;background:none;color:var(--ink-2);
+    font:500 12px/1 var(--font-mono);letter-spacing:.5px;padding:6px 11px;
+    border-radius:var(--r-pill);cursor:pointer;transition:all .16s var(--ease)}
+  .lang-toggle button:hover{color:var(--ink)}
+  .lang-toggle button.active{background:var(--ink);color:#fff}
+
+  .card{background:var(--surface);border:1.5px solid var(--ink);
+    border-radius:var(--r-card);box-shadow:var(--sh-lg);overflow:hidden}
+  .card-head{padding:32px 28px 24px;text-align:center;border-bottom:1px solid var(--line-subtle)}
+  .client-logo{width:56px;height:56px;border-radius:16px;border:1.5px solid var(--line-subtle);
+    background:var(--bg);margin:0 auto 18px;display:flex;align-items:center;
+    justify-content:center;font-size:26px;overflow:hidden}
+  h1{font-family:var(--font-display);font-weight:800;font-size:1.6rem;
+    line-height:1.15;letter-spacing:-.02em}
+  /* the platform name carries the same shimmer accent as the home page hero */
+  h1 .name{background:linear-gradient(100deg,#0A7C99 0%,#B05A1E 32%,#FFD9A8 50%,#B05A1E 68%,#0A7C99 100%);
+    background-size:200% auto;-webkit-background-clip:text;background-clip:text;
+    -webkit-text-fill-color:transparent;animation:shimmer 6.5s ease-in-out infinite}
+  @keyframes shimmer{0%,100%{background-position:0% center}50%{background-position:100% center}}
+  @media (prefers-reduced-motion:reduce){h1 .name{animation:none}}
+  .client-url{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);margin-top:12px;
+    word-break:break-all}
+  .badge{display:inline-block;font:500 11px/1 var(--font-mono);letter-spacing:.4px;
+    padding:6px 12px;border-radius:var(--r-pill);margin-top:14px}
+  .badge-ok{background:var(--ok-bg);color:var(--ok)}
+  .badge-warn{background:var(--warn-bg);color:var(--warn)}
+
+  .warning{background:var(--warn-bg);border-bottom:1px solid var(--line-subtle);
+    padding:16px 28px;font-size:13px;color:var(--ink-2)}
+  .warning strong{color:var(--warn);display:block;margin-bottom:4px;font-weight:600}
+  .warning code{font-family:var(--font-mono);font-size:11px;background:#fff;
+    padding:2px 6px;border-radius:6px;border:1px solid var(--line-subtle)}
+
+  .scope-list{padding:22px 28px}
+  .scope-list-head{font-family:var(--font-mono);font-size:10px;color:var(--ink-2);
+    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px}
+  .scope-row{display:flex;gap:14px;padding:12px 0;align-items:flex-start;
+    border-bottom:1px solid var(--line-subtle)}
+  .scope-row:last-child{border-bottom:none;padding-bottom:0}
+  .scope-icon{font-size:22px;line-height:1.2}
+  .scope-title{font-weight:600;margin-bottom:2px}
+  .scope-desc{font-size:13px;color:var(--ink-2);line-height:1.45}
+
+  .status{padding:14px 28px;font-size:13px;text-align:center;display:none}
+  .status.error{background:var(--warn-bg);color:var(--warn);display:block;font-weight:500}
+
+  .actions{padding:8px 28px 28px;display:flex;gap:10px}
+  .btn{flex:1;min-height:52px;border-radius:var(--r-pill);font-family:var(--font-ui);
+    font-size:15px;font-weight:700;cursor:pointer;transition:transform .16s var(--ease),opacity .16s}
+  .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+  .btn-allow{background:var(--ink);color:#fff;border:none;box-shadow:var(--sh-md)}
+  .btn-allow:hover{transform:translateY(-1px)}
+  .btn-allow:disabled{opacity:.35;cursor:not-allowed;transform:none;box-shadow:none}
+  .btn-deny{background:none;color:var(--ink);border:1.5px solid var(--line-subtle);font-weight:500}
+  .btn-deny:hover{border-color:var(--ink)}
+
+  .footer-note{padding:16px 28px;background:var(--bg);border-top:1px solid var(--line-subtle);
+    text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--ink-2);line-height:1.6}
+  .footer-note a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+  @media (max-width:420px){.actions{flex-direction:column-reverse}}
