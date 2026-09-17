@@ -248,9 +248,10 @@ HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
 
     // Edit is allowed for any state except 'pending_review' (admin is looking at it).
     const canEdit   = p.verification_status !== 'pending_review';
-    // Delete is destructive — only for clients that haven't been reviewed yet.
-    const canDelete = p.verification_status === 'email_pending' ||
-                      p.verification_status === 'unverified';
+    // Delete is destructive — only while the e-mail is still unconfirmed
+    // (AP5-06: the server's deleteIfDraft accepts exactly this state; an
+    // `unverified` platform has to be suspended by an admin).
+    const canDelete = p.verification_status === 'email_pending';
     // Resend only makes sense while the email is still unconfirmed.
     const canResend = p.verification_status === 'email_pending';
 
@@ -406,11 +407,12 @@ HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
     if (badRedirect) {
       HHTTPS.ui.toast(`Redirect URI must be https://: ${badRedirect}`, 'error'); return;
     }
-    if (!/^https?:\/\//i.test(raw.impressum_url || '')) {
-      HHTTPS.ui.toast('Impressum URL must start with https:// or http://', 'error'); return;
+    // AP5-23: mirrors the server rule (https only; the logo may also be a data:image/* URI)
+    if (!/^https:\/\//i.test(raw.impressum_url || '')) {
+      HHTTPS.ui.toast('Impressum URL must start with https://', 'error'); return;
     }
-    if (raw.logo_url && !/^https?:\/\//i.test(raw.logo_url)) {
-      HHTTPS.ui.toast('Logo URL must start with https:// or http://', 'error'); return;
+    if (raw.logo_url && !/^(https:\/\/|data:image\/)/i.test(raw.logo_url)) {
+      HHTTPS.ui.toast('Logo URL must start with https:// (or be a data:image/… URI)', 'error'); return;
     }
 
     const payload = {
@@ -427,8 +429,12 @@ HHTTPS_JWKS=https://hhttps.org/.well-known/jwks.json</pre>
     btn.textContent = 'Saving…';
 
     try {
-      await HHTTPS.api.developers.update(clientId, payload);
-      HHTTPS.ui.toast('Saved ✓', 'success');
+      const r = await HHTTPS.api.developers.update(clientId, payload);
+      // AP5-20: editing name/redirects/logo/impressum of a verified platform
+      // drops it back to `unverified` — say so instead of a bare "Saved".
+      HHTTPS.ui.toast(r && r.downgraded
+        ? 'Saved ✓ — the platform is now "unverified" again and needs a new admin review.'
+        : 'Saved ✓', r && r.downgraded ? 'info' : 'success');
       load();
     } catch (e) {
       // Backend often returns { error: 'invalid_xyz', uri: '...' }

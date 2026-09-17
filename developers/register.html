@@ -343,6 +343,18 @@ https://example.org/login/return"></textarea>
       HHTTPS.ui.toast('At least one redirect URI is required', 'error');
       return;
     }
+    // AP5-23: mirror the server rule (https only; the logo may also be a
+    // data:image/* URI) so the wizard does not lose a filled-in step to a 400.
+    const impressum = (raw.impressum_url || '').trim();
+    if (impressum && !/^https:\/\//i.test(impressum)) {
+      HHTTPS.ui.toast('Impressum URL must start with https://', 'error');
+      return;
+    }
+    const logo = (raw.logo_url || '').trim();
+    if (logo && !/^(https:\/\/|data:image\/)/i.test(logo)) {
+      HHTTPS.ui.toast('Logo URL must start with https:// (or be a data:image/… URI)', 'error');
+      return;
+    }
 
     // Compose description from category + volume + use-case (backend has no
     // separate fields for these, so we fold them into the description).

@@ -3998,7 +3998,13 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     const apiKey     = 'mk-' + crypto.randomBytes(24).toString('hex');
     const apiKeyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
 
+    // AP5-11: a supplied key that is not an EC P-256 public JWK used to be
+    // dropped silently — the operator then got tokens without cnf.jkt and
+    // `token_not_bound` at /pop/challenge, with no way to fix the key.
     const keyJkt = jwkThumbprint(publicKeyJwk);
+    if (publicKeyJwk !== undefined && publicKeyJwk !== null && !keyJkt)
+      return res.status(400).json({ error: 'invalid_public_key_jwk',
+        detail: 'publicKeyJwk must be an EC P-256 public JWK ({ kty:"EC", crv:"P-256", x, y }).' });
     await db.machineOperators.create({
       operatorId, operatorName, operatorUrl, purpose, contactEmail, apiKeyHash,
       role: normalizedRole, roleLabel, roleIcon, keyJkt,
@@ -4007,6 +4013,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     res.status(201).json({
       hhttps: { version: '0.5.0' },
       operatorId, apiKey,
+      keyJkt: keyJkt || null,
       role: normalizedRole,
       roleLabel,
       warning: 'Store the API key securely — it is shown only once.',
@@ -4074,14 +4081,14 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 // AP5-16 / AP1-21 / AP1-22 (Review 2026-09): webhooks belong to the authenticated
 // user (HHTTPS token), the list never contains the HMAC secret, delete is
 // owner-scoped, and the target URL passes the SSRF guard in webhooks.js.
-app.get('/hhttps/webhooks', limit.webhooks, async (req, res) => {
+app.get('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   try {
     res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks(u.userId) });
   } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
-});
+}));
 
-app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
+app.post('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   const { url, events = ['*'], secret } = req.body || {};
   if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url is required.' });
@@ -4097,16 +4104,16 @@ app.post('/hhttps/webhooks', limit.webhooks, async (req, res) => {
       note: 'Speichere das Secret — es wird nur dieses eine Mal ausgegeben. Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
     });
   } catch (e) { res.status(400).json({ error: e.message }); }
-});
+}));
 
-app.delete('/hhttps/webhooks/:id', limit.webhooks, async (req, res) => {
+app.delete('/hhttps/webhooks/:id', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   try {
     const ok = await removeWebhook(req.params.id, u.userId);
     ok ? res.json({ deleted: true, id: req.params.id })
        : res.status(404).json({ error: 'Webhook not found.' });
   } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
-});
+}));
 
 app.post('/hhttps/webhooks/verify', (req, res) => {
   const { payload, signature, secret } = req.body;
@@ -4122,12 +4129,17 @@ app.post('/hhttps/webhooks/verify', (req, res) => {
 // without manual admin intervention, and for admins (operator of this
 // HHTTPS issuer) to verify, reject, and suspend platforms.
 //
-// State machine for oauth_clients.verification_status:
-//   draft → email_pending → unverified → pending_review → verified
-//                                                       ↘ rejected
-//                              ↑
-//                              └── (after email change, drops back)
+// State machine for oauth_clients.verification_status (AP5-08: the start
+// state is `email_pending` — createDraft writes it directly, there is no
+// `draft` row any more; the transitions are enforced server-side in
+// assertTransition() below, the UI only mirrors them):
+//   email_pending → unverified → pending_review → verified
+//                                               ↘ rejected
+//        ↑
+//        └── (after email change, drops back)
 // Plus: verified/unverified/pending_review → suspended (admin action)
+// Plus: verified → unverified when the owner edits a security-relevant field
+//       (AP5-20: redirect_uris, name, logo_url, impressum_url).
 //
 // Hard requirements for `verified`:
 //   1. email_verified_at IS NOT NULL    (user clicked confirmation link)
@@ -4164,6 +4176,33 @@ function randomToken(bytes = 24) {
   return crypto.randomBytes(bytes).toString('base64url');
 }
 
+// AP5-09: Express 4 does not catch a rejected async handler — the request
+// hung until the client gave up. wrap() forwards the rejection to the
+// central error handler (installed in main(), after every route).
+// (function declaration, not a const: it is hoisted, so routes registered
+// ABOVE this line — the webhook block — can use it too.)
+function wrap(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+/** Central error handler (AP5-09). Never echoes the error to the client. */
+function centralErrorHandler(err, req, res, next) {
+  if (res.headersSent) return next(err);
+  const status = Number(err?.status || err?.statusCode) || 500;
+  if (status >= 500) console.error(`[ERROR] ${req.method} ${req.path}:`, err);
+  res.status(status).json(status >= 500
+    ? { error: 'internal' }
+    : { error: err?.type || 'bad_request' });
+}
+
+/** AP5-21: a machine token (sub:'machine', actorType:'bot') is a valid HHTTPS
+ *  token but never a USER — it carries no user id, so every operator would
+ *  collapse onto the literal userId 'machine'. Rejected wherever a user
+ *  context is required (portal, admin, whoami, webhooks). */
+function isMachineClaims(d) {
+  return d?.sub === 'machine' || d?.actorType === 'bot';
+}
+
 /** Resolve current user from request (Authorization header). Returns null
  *  if no token, throws if token invalid/expired. */
 async function authenticatedUser(req) {
@@ -4171,6 +4210,11 @@ async function authenticatedUser(req) {
                 req.headers['authorization']?.replace('Bearer ', '');
   if (!token) return null;
   const d = await checkTokenValid(token);  // throws on invalid/revoked
+  if (isMachineClaims(d)) {
+    const e = new Error('A machine token cannot act as a user.');
+    e.code = 'machine_token_not_allowed';
+    throw e;
+  }
   return {
     userId:     d.uid || d.userId || d.sub,
     role:       d.role,
@@ -4190,6 +4234,10 @@ async function requireUser(req, res) {
     }
     return u;
   } catch (err) {
+    if (err.code === 'machine_token_not_allowed') {
+      res.status(403).json({ error: 'machine_token_not_allowed', message: err.message });
+      return null;
+    }
     res.status(401).json({ error: 'invalid_token', message: err.message });
     return null;
   }
@@ -4255,6 +4303,47 @@ function isValidRedirectUri(uri) {
   }
 }
 
+// AP5-23: logo_url / impressum_url are rendered by the dashboard (href / img
+// src) and impressum_url is a hard requirement for `verified` — both were
+// stored unchecked. Impressum: https only (http://localhost for dev), ≤ 2048
+// chars. Logo: the same, or an inline `data:image/*` up to 64 KiB.
+const MAX_URL_LENGTH       = 2048;
+const MAX_LOGO_DATA_LENGTH = 64 * 1024;
+
+function isValidHttpsUrl(value) {
+  if (typeof value !== 'string' || value.length > MAX_URL_LENGTH) return false;
+  let u;
+  try { u = new URL(value); } catch { return false; }
+  if (u.username || u.password) return false;
+  if (u.protocol === 'https:') return true;
+  return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+}
+function isValidImpressumUrl(value) { return isValidHttpsUrl(value); }
+function isValidLogoUrl(value) {
+  if (typeof value !== 'string') return false;
+  if (/^data:image\/(png|jpeg|gif|webp|svg\+xml);base64,[a-z0-9+/=]+$/i.test(value))
+    return value.length <= MAX_LOGO_DATA_LENGTH;
+  return isValidHttpsUrl(value);
+}
+
+// AP5-08: the verification state machine, enforced server-side. `null` means
+// "any state" (the transition is always allowed).
+const ALLOWED_TRANSITIONS = Object.freeze({
+  approve: ['pending_review'],
+  reject:  ['pending_review'],
+  suspend: ['verified', 'unverified', 'pending_review'],
+});
+/** 409 wrong_state unless the client is in a state the action may leave. */
+function assertTransition(res, client, action) {
+  const allowed = ALLOWED_TRANSITIONS[action];
+  if (allowed.includes(client.verification_status)) return true;
+  res.status(409).json({ error: 'wrong_state',
+    message: `Cannot ${action} a client in state '${client.verification_status}'. ` +
+             `Allowed: ${allowed.join(', ')}.`,
+    current: client.verification_status, allowed });
+  return false;
+}
+
 /** Slug-ify a platform name for client_id generation.
  *  Returns something like "my-platform-x4z7". */
 function generateClientId(name) {
@@ -4276,7 +4365,7 @@ function generateClientId(name) {
 // email-only sign-in mints a fresh uuid every time, so admin rights granted to
 // such an id evaporate with the session. This endpoint makes that visible
 // instead of leaving the operator guessing why their admin access vanished.
-app.get('/hhttps/whoami', async (req, res) => {
+app.get('/hhttps/whoami', wrap(async (req, res) => {
   const u = await requireUser(req, res);
   if (!u) return;
 
@@ -4313,10 +4402,10 @@ app.get('/hhttps/whoami', async (req, res) => {
     grant_admin_command:
       `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
   });
-});
+}));
 
 // ─── POST /hhttps/developers/clients — Register a new platform ─────────────
-app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
+app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4346,9 +4435,20 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
     return res.status(400).json({ error: 'invalid_email',
       message: 'Valid contact_email required' });
   }
-  if (description && description.length > 2000) {
+  if (description !== undefined && description !== null &&
+      (typeof description !== 'string' || description.length > 2000)) {
     return res.status(400).json({ error: 'description_too_long',
       message: 'Description must be ≤ 2000 chars' });
+  }
+  // AP5-23: optional URLs are validated server-side (https, length, data:image for the logo)
+  if (impressum_url !== undefined && impressum_url !== null && impressum_url !== '' &&
+      !isValidImpressumUrl(impressum_url)) {
+    return res.status(400).json({ error: 'invalid_impressum_url',
+      message: 'impressum_url must be an https:// URL (≤ 2048 chars)' });
+  }
+  if (logo_url !== undefined && logo_url !== null && logo_url !== '' && !isValidLogoUrl(logo_url)) {
+    return res.status(400).json({ error: 'invalid_logo_url',
+      message: 'logo_url must be an https:// URL (≤ 2048 chars) or a data:image/* URI (≤ 64 KiB)' });
   }
 
   // Rate limit: max 3 new clients per user per 24h
@@ -4371,8 +4471,8 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
       name, description, homepageUrl: homepage_url,
       redirectUris: redirect_uris,
       contactEmail: contact_email,
-      impressumUrl: impressum_url,
-      logoUrl: logo_url,
+      impressumUrl: impressum_url || null,
+      logoUrl: logo_url || null,
       ownerUserId: u.userId,
       domainEmailMatch: domainMatch,
       emailToken, emailTokenExpiresAt: emailExpires,
@@ -4431,11 +4531,11 @@ app.post('/hhttps/developers/clients', limit.check, async (req, res) => {
       'Submit for review once email confirmed, domain matches, and DNS verified.'
     ]
   });
-});
+}));
 
 // ─── GET /hhttps/developers/confirm-email?token=... ────────────────────────
 // User clicks this link in their email. Returns HTML for visual feedback.
-app.get('/hhttps/developers/confirm-email', async (req, res) => {
+app.get('/hhttps/developers/confirm-email', wrap(async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(400).send('Missing token');
 
@@ -4482,10 +4582,10 @@ app.get('/hhttps/developers/confirm-email', async (req, res) => {
         `Du kannst dich jetzt einloggen unter <a href="${BASE_URL}/developers">developers</a> und ` +
         `den DNS-TXT-Record setzen, um die Verifikation zu beantragen.</span>`
   ));
-});
+}));
 
 // ─── GET /hhttps/developers/clients — List my platforms ────────────────────
-app.get('/hhttps/developers/clients', async (req, res) => {
+app.get('/hhttps/developers/clients', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const clients = await db.oauthClients.listAllByOwner(u.userId);
@@ -4493,10 +4593,10 @@ app.get('/hhttps/developers/clients', async (req, res) => {
     success: true,
     clients: clients.map(serializeClientForOwner)
   });
-});
+}));
 
 // ─── GET /hhttps/developers/clients/:id — Detail ───────────────────────────
-app.get('/hhttps/developers/clients/:id', async (req, res) => {
+app.get('/hhttps/developers/clients/:id', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const client = await db.oauthClients.get(req.params.id);
@@ -4504,10 +4604,10 @@ app.get('/hhttps/developers/clients/:id', async (req, res) => {
     return res.status(404).json({ error: 'not_found' });
   }
   res.json({ success: true, client: serializeClientForOwner(client) });
-});
+}));
 
 // ─── PATCH /hhttps/developers/clients/:id — Update metadata ────────────────
-app.patch('/hhttps/developers/clients/:id', async (req, res) => {
+app.patch('/hhttps/developers/clients/:id', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4516,14 +4616,32 @@ app.patch('/hhttps/developers/clients/:id', async (req, res) => {
     return res.status(404).json({ error: 'not_found' });
   }
 
+  // AP5-20: while an admin is looking at the platform nothing may change
+  // underneath the review (TOCTOU) — the dashboard hides "Edit" here, the
+  // server now enforces it.
+  if (client.verification_status === 'pending_review') {
+    return res.status(409).json({ error: 'wrong_state',
+      message: 'The platform is in admin review and cannot be edited until the review is done.' });
+  }
+
   const { name, description, redirect_uris, logo_url, impressum_url, contact_email } = req.body || {};
 
-  // Validate updates
+  // Validate updates. AP5-07: `undefined` = leave unchanged, `null` (or '')
+  // = clear the field — description and logo_url are optional and clearable.
   if (name !== undefined && (typeof name !== 'string' || name.length < 2 || name.length > 120)) {
     return res.status(400).json({ error: 'invalid_name' });
   }
-  if (description !== undefined && description !== null && description.length > 2000) {
+  if (description !== undefined && description !== null &&
+      (typeof description !== 'string' || description.length > 2000)) {
     return res.status(400).json({ error: 'description_too_long' });
+  }
+  if (impressum_url !== undefined && !isValidImpressumUrl(impressum_url)) {
+    return res.status(400).json({ error: 'invalid_impressum_url',
+      message: 'impressum_url must be an https:// URL (≤ 2048 chars)' });
+  }
+  if (logo_url !== undefined && logo_url !== null && logo_url !== '' && !isValidLogoUrl(logo_url)) {
+    return res.status(400).json({ error: 'invalid_logo_url',
+      message: 'logo_url must be an https:// URL (≤ 2048 chars) or a data:image/* URI (≤ 64 KiB)' });
   }
   if (redirect_uris !== undefined) {
     if (!Array.isArray(redirect_uris) || redirect_uris.length === 0 || redirect_uris.length > 10) {
@@ -4557,28 +4675,67 @@ app.patch('/hhttps/developers/clients/:id', async (req, res) => {
     } catch (err) { console.warn('[DEVELOPERS] email change email failed:', err.message); }
   }
 
-  // Metadata updates
+  // Metadata updates (updateMetadata treats null as "unchanged")
   await db.oauthClients.updateMetadata(client.client_id, {
     name, description, redirectUris: redirect_uris, logoUrl: logo_url, impressumUrl: impressum_url
   });
+  // AP5-07: explicit null / '' clears the optional fields.
+  const clear = [];
+  if (description === null || description === '') clear.push('description');
+  if (logo_url === null || logo_url === '')       clear.push('logo_url');
+  if (clear.length) {
+    await db.pool().query(
+      `UPDATE oauth_clients SET ${clear.map(c => `${c} = NULL`).join(', ')} WHERE client_id = $1`,
+      [client.client_id]);
+  }
+
+  // AP5-20: a verified platform that changes what users see on the consent
+  // screen or where tokens are sent falls back to `unverified` — the DNS and
+  // e-mail proofs stay, only the admin approval has to be repeated.
+  const changed = (a, b) => JSON.stringify(a ?? null) !== JSON.stringify(b ?? null);
+  const securityRelevant =
+    (name !== undefined && changed(name, client.name)) ||
+    (redirect_uris !== undefined && changed(redirect_uris, client.redirect_uris)) ||
+    (impressum_url !== undefined && changed(impressum_url, client.impressum_url)) ||
+    (logo_url !== undefined && changed(logo_url || null, client.logo_url));
+  let downgraded = false;
+  if (client.verification_status === 'verified' && securityRelevant) {
+    const { rowCount } = await db.pool().query(
+      `UPDATE oauth_clients SET verification_status = 'unverified', verified = FALSE
+        WHERE client_id = $1 AND verification_status = 'verified'`, [client.client_id]);
+    downgraded = rowCount > 0;
+  }
 
   const updated = await db.oauthClients.get(client.client_id);
-  res.json({ success: true, client: serializeClientForOwner(updated) });
-});
+  res.json({ success: true, downgraded, client: serializeClientForOwner(updated) });
+}));
 
 // ─── DELETE /hhttps/developers/clients/:id — Delete draft ──────────────────
-app.delete('/hhttps/developers/clients/:id', async (req, res) => {
+app.delete('/hhttps/developers/clients/:id', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const deleted = await db.oauthClients.deleteIfDraft(req.params.id, u.userId);
+  // AP5-06: deleteIfDraft removes only `email_pending` rows; the dashboard now
+  // offers "Delete" for exactly that state.
   if (!deleted) return res.status(409).json({ error: 'cannot_delete',
-    message: 'Only draft/email_pending clients can be deleted. Use suspend instead.' });
+    message: 'Only clients still awaiting e-mail confirmation (email_pending) can be deleted. Ask an admin to suspend it instead.' });
   res.json({ success: true });
-});
+}));
 
 // ─── POST /hhttps/developers/clients/:id/dns-check ────────────────────────
 // Triggers a DNS lookup for _hhttps-verify.<apex> and matches against dns_token.
-app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
+// AP5-31: the lookup has a timeout, the route a limiter and a minimum
+// interval per client (dns_last_checked_at).
+const DNS_TIMEOUT_MS      = 3000;
+const DNS_MIN_INTERVAL_MS = 15_000;
+limit.dnsCheck = rl(10, 60_000);
+
+function dnsCheckTooSoon(client) {
+  const last = client.dns_last_checked_at ? new Date(client.dns_last_checked_at).getTime() : 0;
+  return last && (Date.now() - last) < DNS_MIN_INTERVAL_MS;
+}
+
+app.post('/hhttps/developers/clients/:id/dns-check', limit.dnsCheck, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4590,6 +4747,11 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
     return res.status(400).json({ error: 'no_dns_token',
       message: 'This client does not have a DNS token. Internal inconsistency.' });
   }
+  if (dnsCheckTooSoon(client)) {
+    return res.status(429).json({ error: 'dns_check_too_soon',
+      message: `Wait ${Math.ceil(DNS_MIN_INTERVAL_MS / 1000)} s between DNS checks.`,
+      retry_after: Math.ceil(DNS_MIN_INTERVAL_MS / 1000) });
+  }
 
   const apex = apexDomainFromUrl(client.homepage_url);
   if (!apex) {
@@ -4597,15 +4759,21 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
       message: 'Cannot resolve apex domain from homepage_url' });
   }
 
-  // DNS lookup via Node's dns/promises
+  // DNS lookup via Node's dns/promises — bounded by the resolver timeout AND
+  // a hard deadline (the resolver timeout is per attempt / per server).
   const { Resolver } = await import('dns/promises');
-  const resolver = new Resolver();
+  const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
   resolver.setServers(['1.1.1.1', '8.8.8.8']);
 
   let found = false;
   let records = [];
   try {
-    records = await resolver.resolveTxt(`_hhttps-verify.${apex}`);
+    records = await Promise.race([
+      resolver.resolveTxt(`_hhttps-verify.${apex}`),
+      new Promise((_, reject) => setTimeout(() => {
+        const e = new Error('DNS lookup timed out'); e.code = 'ETIMEOUT'; reject(e);
+      }, DNS_TIMEOUT_MS * 2 + 500).unref())
+    ]);
     // records is array of arrays of strings (TXT can have multiple chunks)
     for (const recordChunks of records) {
       const joined = recordChunks.join('');
@@ -4641,11 +4809,11 @@ app.post('/hhttps/developers/clients/:id/dns-check', async (req, res) => {
     expected_host: `_hhttps-verify.${apex}`,
     found_records: records.map(r => r.join(''))
   });
-});
+}));
 
 // ─── POST /hhttps/developers/clients/:id/submit-review ─────────────────────
 // Owner asks for admin verification. Checks all hard requirements first.
-app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
+app.post('/hhttps/developers/clients/:id/submit-review', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4692,13 +4860,13 @@ app.post('/hhttps/developers/clients/:id/submit-review', async (req, res) => {
   }
 
   res.json({ success: true, verification_status: 'pending_review' });
-});
+}));
 
 // ─── POST /hhttps/developers/clients/:id/resend-email ─────────────────────
 // The dashboard offers a "resend confirmation" button; without this route it
 // 404s. Only valid while the platform is still waiting for its first e-mail
 // confirmation — afterwards there is nothing to resend.
-app.post('/hhttps/developers/clients/:id/resend-email', limit.email, async (req, res) => {
+app.post('/hhttps/developers/clients/:id/resend-email', limit.email, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
 
@@ -4739,44 +4907,43 @@ app.post('/hhttps/developers/clients/:id/resend-email', limit.email, async (req,
     .replace(/^(.)(.*)(@.*)$/, (m, a, b, c) => a + '*'.repeat(Math.max(b.length, 1)) + c);
 
   res.json({ success: true, sent_to: masked, expires_at: emailExpires.toISOString() });
-});
+}));
 
 // ─── GET /hhttps/developers/clients/:id/stats ─────────────────────────────
-app.get('/hhttps/developers/clients/:id/stats', async (req, res) => {
+app.get('/hhttps/developers/clients/:id/stats', wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
   if (!u) return;
   const client = await db.oauthClients.get(req.params.id);
   if (!client || client.owner_user_id !== u.userId) {
     return res.status(404).json({ error: 'not_found' });
   }
-  const days = Math.min(parseInt(req.query.days || '30', 10), 90);
+  // AP5-09 / AP5-15: `?days=abc` used to reach Postgres as 'NaN days'.
+  const parsedDays = parseInt(req.query.days, 10);
+  const days = Number.isFinite(parsedDays) ? Math.min(Math.max(parsedDays, 1), 90) : 30;
   const [daily, total] = await Promise.all([
     db.clientStats.getDaily(client.client_id, days),
     db.clientStats.getTotal(client.client_id)
   ]);
   res.json({ success: true, client_id: client.client_id, days, total, daily });
-});
+}));
 
 // ─── Admin endpoints ──────────────────────────────────────────────────────
 
 // GET /hhttps/admin/clients/pending — admin queue
-app.get('/hhttps/admin/clients/pending', async (req, res) => {
+app.get('/hhttps/admin/clients/pending', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const clients = await db.oauthClients.listPendingReview();
   res.json({ success: true, clients: clients.map(serializeClientForAdmin) });
-});
+}));
 
 // POST /hhttps/admin/clients/:id/approve
-app.post('/hhttps/admin/clients/:id/approve', async (req, res) => {
+app.post('/hhttps/admin/clients/:id/approve', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const client = await db.oauthClients.get(req.params.id);
   if (!client) return res.status(404).json({ error: 'not_found' });
-  if (client.verification_status !== 'pending_review') {
-    return res.status(409).json({ error: 'wrong_state',
-      message: `Can only approve clients in 'pending_review' state. Current: ${client.verification_status}` });
-  }
+  if (!assertTransition(res, client, 'approve')) return;
   await db.oauthClients.adminApprove(client.client_id, a.userId);
   await db.adminActions.log('verify_client', 'oauth_client', client.client_id, a.userId,
     { previous_status: 'pending_review' });
@@ -4789,16 +4956,17 @@ app.post('/hhttps/admin/clients/:id/approve', async (req, res) => {
     }).catch(err => console.warn('[ADMIN] verified email failed:', err.message));
   }
   res.json({ success: true });
-});
+}));
 
 // POST /hhttps/admin/clients/:id/reject  body: { reason }
-app.post('/hhttps/admin/clients/:id/reject', async (req, res) => {
+app.post('/hhttps/admin/clients/:id/reject', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const reason = (req.body?.reason || '').toString().slice(0, 1000).trim();
   if (!reason) return res.status(400).json({ error: 'reason_required' });
   const client = await db.oauthClients.get(req.params.id);
   if (!client) return res.status(404).json({ error: 'not_found' });
+  if (!assertTransition(res, client, 'reject')) return;   // AP5-08
   await db.oauthClients.adminReject(client.client_id, a.userId, reason);
   await db.adminActions.log('reject_client', 'oauth_client', client.client_id, a.userId,
     { previous_status: client.verification_status, reason });
@@ -4810,24 +4978,25 @@ app.post('/hhttps/admin/clients/:id/reject', async (req, res) => {
     }).catch(err => console.warn('[ADMIN] rejected email failed:', err.message));
   }
   res.json({ success: true });
-});
+}));
 
 // POST /hhttps/admin/clients/:id/suspend  body: { reason }
-app.post('/hhttps/admin/clients/:id/suspend', async (req, res) => {
+app.post('/hhttps/admin/clients/:id/suspend', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const reason = (req.body?.reason || '').toString().slice(0, 1000).trim();
   if (!reason) return res.status(400).json({ error: 'reason_required' });
   const client = await db.oauthClients.get(req.params.id);
   if (!client) return res.status(404).json({ error: 'not_found' });
+  if (!assertTransition(res, client, 'suspend')) return;  // AP5-08
   await db.oauthClients.adminSuspend(client.client_id, a.userId, reason);
   await db.adminActions.log('suspend_client', 'oauth_client', client.client_id, a.userId,
     { previous_status: client.verification_status, reason });
   res.json({ success: true });
-});
+}));
 
 // GET /hhttps/admin/clients — list all (with filter)
-app.get('/hhttps/admin/clients', async (req, res) => {
+app.get('/hhttps/admin/clients', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const status = req.query.status;
@@ -4843,10 +5012,10 @@ app.get('/hhttps/admin/clients', async (req, res) => {
     return serializeClientForAdmin(r);
   });
   res.json({ success: true, clients });
-});
+}));
 
 // GET /hhttps/admin/stats — system overview
-app.get('/hhttps/admin/stats', async (req, res) => {
+app.get('/hhttps/admin/stats', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const { rows } = await db.pool().query(
@@ -4860,7 +5029,7 @@ app.get('/hhttps/admin/stats', async (req, res) => {
     clients_by_status: rows,
     recent_admin_actions: recentActions
   });
-});
+}));
 
 // ─── Helpers used by Phase 3b endpoints ────────────────────────────────────
 
@@ -4940,7 +5109,13 @@ function renderSimplePage(title, body) {
 
 // ─── Public Stats ─────────────────────────────────────────────────────────────
 
-app.get('/hhttps/stats', async (req, res) => {
+// AP5-30: eight queries (four COUNT(*)) per anonymous call — cached for 60 s
+// in the module and marked cacheable for proxies. Webhooks are COUNTed
+// instead of loaded (listWebhooks() is owner-scoped since AP5-16).
+const STATS_CACHE_TTL_MS = 60_000;
+let _statsCache = { at: 0, data: null, pending: null };
+
+async function computePublicStats() {
   const [s, dist, c] = await Promise.all([
     db.stats.getAll(),
     db.rolesDeclared.distribution(),
@@ -4948,13 +5123,11 @@ app.get('/hhttps/stats', async (req, res) => {
       db.tokens.count(), db.refreshTokens.count(),
       db.credentials.count(), db.revokedTokens.count(),
       db.machineOperators.count(),
-      listWebhooks().then(w => w.length)
+      db.pool().query(`SELECT COUNT(*)::int AS n FROM webhooks WHERE active = TRUE`).then(r => r.rows[0].n)
     ])
   ]);
-
   const total = dist.reduce((sum, r) => sum + r.n, 0);
-
-  sendJson(req, res, {
+  return {
     hhttps: { version: '0.5.0' },
     stats: {
       verifications:       s.verifications      || 0,
@@ -4973,11 +5146,28 @@ app.get('/hhttps/stats', async (req, res) => {
       ),
       uptime: Math.floor(process.uptime()) + 's'
     }
-  }, {
+  };
+}
+
+async function cachedPublicStats() {
+  const now = Date.now();
+  if (_statsCache.data && now - _statsCache.at < STATS_CACHE_TTL_MS) return _statsCache.data;
+  if (!_statsCache.pending) {              // one in-flight computation, shared by concurrent callers
+    _statsCache.pending = computePublicStats()
+      .then(data => { _statsCache = { at: Date.now(), data, pending: null }; return data; })
+      .catch(err => { _statsCache.pending = null; throw err; });
+  }
+  return _statsCache.pending;
+}
+
+app.get('/hhttps/stats', wrap(async (req, res) => {
+  const data = await cachedPublicStats();
+  res.set('Cache-Control', `public, max-age=${STATS_CACHE_TTL_MS / 1000}`);
+  sendJson(req, res, data, {
     title:    'Public Stats',
     subtitle: 'Aggregated server statistics — no personal data, no individual user info.'
   });
-});
+}));
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
@@ -5012,8 +5202,12 @@ async function main() {
     process.exit(1);
   }
 
-mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
-mountPopVerify(app, { db, verifyToken, RP_ID, BASE_URL }); // POP-VERIFY
+  mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
+  // AP5-05: PoP checks the token like every other route (signature + exp +
+  // revocation + active), not just the signature.
+  mountPopVerify(app, { db, checkTokenValid, RP_ID, BASE_URL }); // POP-VERIFY
+  // AP5-09: last — catches every forwarded async rejection.
+  app.use(centralErrorHandler);
   app.listen(PORT, () => {
     console.log(`\n🔐 HHTTPS v4.1 · Port ${PORT}`);
     console.log(`   RP_ID:   ${RP_ID}`);

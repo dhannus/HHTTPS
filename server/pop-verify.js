@@ -73,14 +73,33 @@ function rawToDer(r, s) {
   ]);
 }
 
+// AP5-04: compare-and-delete in ONE statement. `get` + `delete` was a
+// check-then-act — two requests with the same proof both saw the nonce and
+// both passed. Only the request whose DELETE removed the row wins.
+// (A db.challenges.consume() helper would be the cleaner home — db.js is
+// outside this change; db.q is the module's parameterised query.)
+async function consumeNonce(db, chId, nonce) {
+  if (typeof nonce !== 'string' || !nonce) return false;
+  const { rowCount } = await db.q(
+    `DELETE FROM challenges
+      WHERE challenge_id = $1 AND challenge = $2 AND expires_at > NOW()`,
+    [chId, nonce]
+  );
+  return rowCount === 1;
+}
+
 /**
  * Verify a PoP proof for a given access token.
  * @returns {ok:true, jkt, claims} | {ok:false, error}
  */
-async function verifyPoP({ popHeader, token, verifyToken, db, expect }) {
+async function verifyPoP({ popHeader, token, verifyToken, checkTokenValid, db, expect }) {
   if (!popHeader) return { ok: false, error: 'pop_missing' };
+  // AP5-05: the full check (signature + exp + revocation + active row), so a
+  // revoked machine token cannot pass the possession proof. `verifyToken`
+  // (signature only) is kept as a fallback for callers without a DB check.
+  const check = checkTokenValid || verifyToken;
   let decoded;
-  try { decoded = verifyToken(token); }
+  try { decoded = await check(token); }
   catch { return { ok: false, error: 'token_invalid' }; }
   const boundJkt = decoded && decoded.cnf && decoded.cnf.jkt;
   if (!boundJkt) return { ok: false, error: 'token_not_bound' }; // no cnf → nothing to prove
@@ -108,11 +127,9 @@ async function verifyPoP({ popHeader, token, verifyToken, db, expect }) {
   }
   // (3) nonce is the one we issued for this (jti,jkt), and still valid
   const chId = 'pop:' + decoded.jti + ':' + boundJkt;
-  const stored = await db.challenges.get(chId);
-  if (!stored || stored.challenge !== pc.nonce) {
+  if (!(await consumeNonce(db, chId, pc.nonce))) {
     return { ok: false, error: 'nonce_mismatch' };
   }
-  await db.challenges.delete(chId); // single-use
   // (4) target binding
   if (expect) {
     if (expect.htm && pc.htm !== expect.htm) return { ok: false, error: 'htm_mismatch' };
@@ -125,15 +142,19 @@ async function verifyPoP({ popHeader, token, verifyToken, db, expect }) {
   return { ok: true, jkt: boundJkt, claims: decoded };
 }
 
+// AP5-09: forward async rejections to the app's central error handler.
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 export function mountPopVerify(app, deps) {
-  const { db, verifyToken, RP_ID, BASE_URL } = deps;
+  const { db, verifyToken, checkTokenValid, BASE_URL } = deps;
+  const check = checkTokenValid || verifyToken;
 
   // ── POST /hhttps/pop/challenge ─────────────────────────────────────────────
-  app.post('/hhttps/pop/challenge', async (req, res) => {
+  app.post('/hhttps/pop/challenge', wrap(async (req, res) => {
     const { token } = req.body || {};
     if (!token) return res.status(400).json({ error: 'token required' });
     let decoded;
-    try { decoded = verifyToken(token); }
+    try { decoded = await check(token); }                      // AP5-05
     catch { return res.status(401).json({ error: 'token_invalid' }); }
     const jkt = decoded && decoded.cnf && decoded.cnf.jkt;
     if (!jkt) return res.status(400).json({ error: 'token_not_bound',
@@ -144,17 +165,17 @@ export function mountPopVerify(app, deps) {
     await db.challenges.create(chId, nonce, decoded.operatorId || null, 'pop', 120_000);
     return res.json({ challenge: nonce, expires_in: 120,
       htu: `${BASE_URL}/hhttps/pop/demo`, htm: 'POST' });
-  });
+  }));
 
   // ── POST /hhttps/pop/demo (PoP-gated example) ──────────────────────────────
-  app.post('/hhttps/pop/demo', async (req, res) => {
+  app.post('/hhttps/pop/demo', wrap(async (req, res) => {
     const auth = req.headers['authorization'] || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : (req.body && req.body.token);
     if (!token) return res.status(401).json({ error: 'bearer_token_required' });
 
     const r = await verifyPoP({
       popHeader: req.headers['hhttps-pop'],
-      token, verifyToken, db,
+      token, verifyToken, checkTokenValid, db,
       expect: { htm: 'POST', htu: `${BASE_URL}/hhttps/pop/demo` }
     });
     if (!r.ok) return res.status(401).json({ error: 'pop_failed', reason: r.error });
@@ -166,7 +187,7 @@ export function mountPopVerify(app, deps) {
       actorType:  r.claims.actorType || null,
       jkt: r.jkt
     });
-  });
+  }));
 }
 
-export { verifyPoP, jwkThumbprint };
+export { verifyPoP, jwkThumbprint, rawToDer, consumeNonce };
