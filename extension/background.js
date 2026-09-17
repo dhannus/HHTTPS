@@ -34,9 +34,12 @@ chrome.tabs.onRemoved.addListener((tabId) => tabState.delete(tabId));
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Identity captured from hhttps.org page
   if (msg.type === 'IDENTITY_CAPTURED' && msg.identity) {
+    // AP8-04 (#72): schedule the refresh for the STORED identity — only that
+    // one carries the `id` the alarm name and refreshIdentity() need. The raw
+    // page object has none, which produced `refresh_undefined` alarms.
     storeIdentity(msg.identity)
-      .then(() => {
-        scheduleRefreshFor(msg.identity);
+      .then((stored) => {
+        scheduleRefreshFor(stored);
         updateAllBadges();
         sendResponse({ ok: true });
       })
@@ -138,6 +141,7 @@ async function storeIdentity(rawIdentity) {
     [STORAGE_IDENTITIES]: list,
     [STORAGE_ACTIVE_ID]:  id
   });
+  return enriched;
 }
 
 async function setActiveIdentity(id) {
@@ -157,11 +161,19 @@ async function removeIdentity(id) {
 }
 
 function computeIdentityId(identity) {
-  // Stable id = issuer + role  → switching roles produces different ids,
-  // re-issuing same role overwrites the previous entry
-  const issuer = identity.issuer || 'hhttps://hhttps.org';
-  const role   = identity.role || 'unknown';
-  return `${issuer}#${role}`;
+  // AP8-05 (#80): the id used to be `issuer#role`. Since v0.5 the server no
+  // longer echoes a role (`role: null`), so every identity — human AND bot —
+  // collapsed onto `issuer#unknown` and overwrote the previous one. The id is
+  // now taken from the signed token: actor type plus the stable subject
+  // (`userId` for humans, `operatorId` for machines). Both are pseudonymous,
+  // and both survive a re-issuance, so re-issuing replaces the right entry.
+  const issuer  = identity.issuer || 'hhttps://hhttps.org';
+  const payload = decodeJwtPayload(identity.token) || {};
+  const actor   = payload.actorType || identity.actorType
+                || (payload.human === false ? 'bot' : payload.human === true ? 'human' : 'unknown');
+  const subject = payload.userId || payload.operatorId || payload.sub || payload.jti
+                || identity.role || 'unknown';
+  return `${issuer}#${actor}#${subject}`;
 }
 
 // ─── Auto-refresh ────────────────────────────────────────────────────────────
