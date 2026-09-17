@@ -29,9 +29,12 @@ test.after(async () => { if (!skip) await closeDb(); });
 /** A throwaway install tree: scripts/make-admin.sh next to an .env. */
 function makeAdminTree() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ap6-admin-'));
-  fs.mkdirSync(path.join(dir, 'scripts'));
+  fs.mkdirSync(path.join(dir, 'scripts', 'lib'), { recursive: true });
   fs.copyFileSync(path.join(SERVER_DIR, 'scripts', 'make-admin.sh'),
                   path.join(dir, 'scripts', 'make-admin.sh'));
+  // AP6-48 (#192) / AP6-57 (#213): the script sources the shared library.
+  fs.copyFileSync(path.join(SERVER_DIR, 'scripts', 'lib', 'common.sh'),
+                  path.join(dir, 'scripts', 'lib', 'common.sh'));
   fs.writeFileSync(path.join(dir, '.env'),
     `DB_HOST=${TEST_DB.host}\nDB_PORT=5432\nDB_NAME=${TEST_DB.database}\n` +
     `DB_USER=${TEST_DB.user}\nDB_PASSWORD=${TEST_DB.password}\n`);
@@ -104,12 +107,18 @@ test('AP6-08: no silent superuser fallback, ownership file present and wired', (
   const deploy = read(REPO_DIR, 'scripts', 'deploy-all.sh');
   const ownership = read(SERVER_DIR, 'sql', 'ownership-hhttps.sql');
 
-  for (const [name, src] of [['install-pg.sh', install], ['deploy-all.sh', deploy]]) {
-    assert.ok(!/sudo -u postgres psql[^\n]*-f[^\n]*schema\.sql/.test(src),
-      `${name} still applies schema.sql as postgres`);
-    assert.match(src, /ownership-hhttps\.sql/, `${name} does not run the ownership repair`);
-    assert.match(src, /owner_role=/, `${name} does not pass the app role to the repair`);
-  }
+  assert.ok(!/sudo -u postgres psql[^\n]*-f[^\n]*schema\.sql/.test(install),
+    'install-pg.sh still applies schema.sql as postgres');
+  assert.match(install, /ownership-hhttps\.sql/, 'install-pg.sh does not run the ownership repair');
+  assert.match(install, /owner_role=/, 'install-pg.sh does not pass the app role to the repair');
+  // AP6-47 (#186): deploy-all.sh no longer has its own copy of any of this —
+  // it delegates the whole provisioning to install-pg.sh.
+  assert.ok(!/sudo -u postgres psql[^\n]*-f[^\n]*schema\.sql/.test(deploy),
+    'deploy-all.sh still applies schema.sql as postgres');
+  assert.match(deploy, /bash "\$\{SERVER_DIR\}\/scripts\/install-pg\.sh"/,
+    'deploy-all.sh does not delegate to install-pg.sh');
+  assert.ok(!/ownership-hhttps\.sql/.test(deploy),
+    'deploy-all.sh still has its own ownership-repair copy');
   assert.match(ownership, /ALTER TABLE public\.%I OWNER TO %I/);
   assert.match(ownership, /ALTER DEFAULT PRIVILEGES FOR ROLE postgres/);
 });
@@ -130,14 +139,18 @@ test('AP6-09: deploy-phase8.sh documents and implements --rollback <sha>', () =>
 // ─── AP6-17: the .env is never sourced into a pm2 environment ───────────────
 
 test('AP6-17: no deploy script sources the .env', () => {
-  for (const f of [path.join(SERVER_DIR, 'scripts', 'migrate.sh'),
-                   path.join(REPO_DIR, 'scripts', 'deploy-all.sh'),
-                   path.join(SERVER_DIR, 'scripts', 'install-pg.sh')]) {
+  // AP6-46 (#213): scripts/migrate.sh (the ZIP-based v4.0 -> v4.1 migration)
+  // was deleted in Welle 3; the remaining deploy scripts are checked here.
+  for (const f of [path.join(REPO_DIR, 'scripts', 'deploy-all.sh'),
+                   path.join(SERVER_DIR, 'scripts', 'install-pg.sh'),
+                   path.join(SERVER_DIR, 'scripts', 'deploy-phase8.sh'),
+                   path.join(SERVER_DIR, 'scripts', 'make-admin.sh')]) {
     const src = fs.readFileSync(f, 'utf8');
     assert.ok(!/^\s*(set -a;\s*)?(source|\.)\s+\.env/m.test(src), `${path.basename(f)} sources the .env`);
   }
-  // install-pg.sh reads single keys as data instead.
-  assert.match(read(SERVER_DIR, 'scripts', 'install-pg.sh'), /env_get\(\)/);
+  // AP6-48 (#192): they all read single keys as data, through the ONE env_get
+  // in scripts/lib/common.sh.
+  assert.match(read(SERVER_DIR, 'scripts', 'lib', 'common.sh'), /env_get\(\)/);
 });
 
 // ─── AP6-18: nginx header inheritance ───────────────────────────────────────

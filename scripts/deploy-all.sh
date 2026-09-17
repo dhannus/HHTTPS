@@ -7,7 +7,8 @@
 # Nutzung: sudo bash scripts/deploy-all.sh
 # ═════════════════════════════════════════════════════════════════════════════
 
-set -e
+# AP6-57 (#213): the same shell options as every other script in the project.
+set -euo pipefail
 
 SERVER_DIR="/var/www/hhttps"
 IAMHMN_DIR="/var/www/iamhmn"
@@ -20,16 +21,16 @@ DOMAIN_HHTTPS="hhttps.org"
 DOMAIN_IAMHMN="iamhmn.org"
 EMAIL_CERTBOT="daniel.hannuschka@tweakz.de"
 
-G=$'\033[0;32m'; Y=$'\033[0;33m'; R=$'\033[0;31m'; B=$'\033[0;36m'; N=$'\033[0m'
-ok()   { printf "  ${G}✓${N} %s\n" "$1"; }
-warn() { printf "  ${Y}⚠${N}  %s\n" "$1"; }
-err()  { printf "  ${R}✗${N} %s\n" "$1"; exit 1; }
-step() { printf "\n${B}════════ %s ════════${N}\n" "$1"; }
-ask()  { read -p "  $1 [y/N]: " a; [[ "${a,,}" == "y" ]]; }
+# AP6-57 (#213) / AP6-48 (#192): Farben, Log-Helfer und der .env-Leser aus
+# der einen gemeinsamen Bibliothek statt aus fünf Kopien.
+RELEASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${RELEASE_DIR}/server/scripts/lib/common.sh"
+# In diesem Skript bricht `err` den Lauf ab (wie bisher). Nicht über `fail`
+# aus der Bibliothek definieren — `fail` ruft selbst `err` auf.
+err()  { printf "  ${R}✗${N} %s\n" "$1" >&2; exit 1; }
+ask()  { read -r -p "  $1 [y/N]: " a; [[ "${a,,}" == "y" ]]; }
 
 [[ $EUID -ne 0 ]] && err "Bitte als root ausführen oder mit sudo"
-
-RELEASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 step "HumanProof HHTTPS — Master Deployment v2"
 echo ""
@@ -48,8 +49,17 @@ step "[1/9] System-Pakete"
 apt-get update -qq
 
 if ! command -v node >/dev/null || [[ $(node -v | sed 's/v//;s/\..*//') -lt 20 ]]; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1
-  apt-get install -y nodejs >/dev/null
+  # AP6-23 (#213): kein `curl … | bash`. Das NodeSource-Repo wird mit seinem
+  # GPG-Schlüssel eingetragen; ab da prüft apt jede Signatur selbst.
+  install -d -m 0755 /usr/share/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
+    || err "NodeSource-GPG-Schlüssel konnte nicht geholt werden"
+  chmod 0644 /usr/share/keyrings/nodesource.gpg
+  echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list
+  apt-get update -qq
+  apt-get install -y nodejs >/dev/null || err "nodejs konnte nicht installiert werden"
 fi
 ok "Node.js $(node -v)"
 
@@ -69,40 +79,8 @@ ok "PM2 $(pm2 -v)"
 apt-get install -y unzip rsync curl >/dev/null
 ok "Tools (unzip, rsync, curl)"
 
-# ─── 2. PostgreSQL ───────────────────────────────────────────────────────────
-step "[2/9] PostgreSQL"
-
-if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" 2>/dev/null | grep -q 1; then
-  warn "User '${DB_USER}' existiert bereits"
-  if ask "Passwort neu generieren?"; then
-    DB_PASSWORD=$(openssl rand -hex 24)
-    sudo -u postgres psql -c "ALTER USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';" >/dev/null
-    ok "Neues Passwort gesetzt"
-    RESET_PW=1
-  else
-    DB_PASSWORD=""
-    RESET_PW=0
-    warn "Behalte bestehendes Passwort (muss in .env stimmen)"
-  fi
-else
-  DB_PASSWORD=$(openssl rand -hex 24)
-  sudo -u postgres psql -c "CREATE USER ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';" >/dev/null
-  ok "DB-User '${DB_USER}' angelegt"
-  RESET_PW=1
-fi
-
-if sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" 2>/dev/null | grep -q 1; then
-  ok "DB '${DB_NAME}' existiert"
-else
-  sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER};" >/dev/null
-  ok "DB '${DB_NAME}' angelegt"
-fi
-
-sudo -u postgres psql -d "${DB_NAME}" -c "GRANT ALL PRIVILEGES ON DATABASE ${DB_NAME} TO ${DB_USER}; GRANT ALL ON SCHEMA public TO ${DB_USER};" >/dev/null
-ok "Berechtigungen erteilt"
-
-# ─── 3. HHTTPS Server ────────────────────────────────────────────────────────
-step "[3/9] HHTTPS Server v4.1"
+# ─── 2. HHTTPS Server ─────────────────────────────────────────────────
+step "[2/9] HHTTPS Server v4.1"
 
 [[ ! -d "${RELEASE_DIR}/server" ]] && err "Server-Quellen fehlen"
 
@@ -117,10 +95,8 @@ rsync -a --exclude='.env' --exclude='keys/' --exclude='node_modules/' \
   "${RELEASE_DIR}/server/" "${SERVER_DIR}/"
 ok "Server-Code installiert"
 
-if [[ ! -f "${SERVER_DIR}/.env" ]] || [[ "${RESET_PW}" == "1" ]]; then
-  if [[ -f "${SERVER_DIR}/.env" ]]; then
-    sed -i '/^DB_HOST=/d; /^DB_PORT=/d; /^DB_NAME=/d; /^DB_USER=/d; /^DB_PASSWORD=/d; /^PORT=/d; /^RP_ID=/d; /^ORIGIN=/d; /^BASE_URL=/d' "${SERVER_DIR}/.env"
-  fi
+# Anwendungs-Teil der .env (der DB-Teil kommt aus install-pg.sh, Schritt 3).
+if [[ ! -f "${SERVER_DIR}/.env" ]] || [[ -z "$(env_get RP_ID "${SERVER_DIR}/.env")" ]]; then
   cat >> "${SERVER_DIR}/.env" <<EOF
 
 # === HHTTPS Server v4.1 ===
@@ -128,50 +104,28 @@ PORT=3000
 RP_ID=${DOMAIN_HHTTPS}
 ORIGIN=https://${DOMAIN_HHTTPS}
 BASE_URL=https://${DOMAIN_HHTTPS}
-
-# === PostgreSQL ===
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=${DB_NAME}
-DB_USER=${DB_USER}
-DB_PASSWORD=${DB_PASSWORD}
 EOF
   chmod 600 "${SERVER_DIR}/.env"
-  ok ".env aktualisiert"
+  ok ".env: Anwendungswerte geschrieben"
 else
-  ok ".env unverändert"
+  ok ".env: Anwendungswerte unverändert"
 fi
-
-# AP6-08 (#85): repair object ownership BEFORE the migration chain. Older
-# installs applied the schema through a silent `sudo -u postgres` fallback,
-# which left postgres as the table owner; every later ALTER then failed with
-# "must be owner of table". Idempotent, a no-op on a clean install.
-OWNERSHIP_FILE="${SERVER_DIR}/sql/ownership-hhttps.sql"
-if [[ -f "${OWNERSHIP_FILE}" ]]; then
-  sudo -u postgres psql -d "${DB_NAME}" -v ON_ERROR_STOP=1 -v owner_role="${DB_USER}" -q \
-    -f "${OWNERSHIP_FILE}" >/dev/null \
-    || { err "Ownership-Reparatur fehlgeschlagen — siehe Fehler oben"; exit 1; }
-  ok "Objekt-Eigentümer: ${DB_USER}"
-else
-  err "Ownership-Datei fehlt: ${OWNERSHIP_FILE}"
-  exit 1
-fi
-
-# AP6-01: apply the whole migration chain (ledger in schema_migrations), not
-# just schema.sql — a fresh DB is otherwise missing authorization_codes & Co.
-# The chain runs AS THE APP USER; there is no superuser fallback (AP6-08).
-# The password is read as data (AP6-17), never by sourcing the .env: `cut -d=
-# -f2` alone would also truncate a password containing '='.
-ENV_PW=$(grep -E '^[[:space:]]*(export[[:space:]]+)?DB_PASSWORD[[:space:]]*=' "${SERVER_DIR}/.env" \
-         | tail -1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")
-[[ -n "${ENV_PW}" ]] || { err "DB_PASSWORD fehlt in ${SERVER_DIR}/.env"; exit 1; }
-(cd "${SERVER_DIR}" && \
-  DB_HOST=localhost DB_NAME="${DB_NAME}" DB_USER="${DB_USER}" DB_PASSWORD="${ENV_PW}" \
-  node scripts/migrate.js) && ok "Migrationen angewendet als ${DB_USER}" || { err "Migration fehlgeschlagen"; exit 1; }
 
 cd "${SERVER_DIR}"
-npm install --production --silent 2>&1 | tail -2
+# AP6-57 (#213): `--production` ist seit npm 7 deprecated.
+npm ci --omit=dev --no-audit --no-fund >/dev/null || err "npm ci fehlgeschlagen"
 ok "Dependencies installiert"
+
+# ─── 3. PostgreSQL ────────────────────────────────────────────────────
+step "[3/9] PostgreSQL (server/scripts/install-pg.sh)"
+
+# AP6-47 (#186): Dieses Skript hatte eine eigene, bereits driftende Kopie der
+# Provisionierung (User/DB/Grants, .env-Zeilen, Ownership-Reparatur,
+# Migrationslauf). Es gibt jetzt EINE Quelle: server/scripts/install-pg.sh —
+# dasselbe Skript, das auch einzeln aufgerufen wird. Es ist idempotent, läuft
+# als App-User und wendet die ganze Migrationskette über das Ledger an.
+bash "${SERVER_DIR}/scripts/install-pg.sh" "${SERVER_DIR}" \
+  || err "PostgreSQL-Setup fehlgeschlagen"
 
 mkdir -p "${SERVER_DIR}/keys"
 chown -R www-data:www-data "${SERVER_DIR}/keys"
@@ -497,7 +451,9 @@ else
 fi
 
 for url in https://${DOMAIN_HHTTPS}/ https://${DOMAIN_HHTTPS}/spec https://${DOMAIN_IAMHMN}/ https://www.${DOMAIN_HHTTPS}/ https://www.${DOMAIN_IAMHMN}/; do
-  code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "${url}" || echo "000")
+  # AP6-24 (#213): kein -k. Der Live-Check soll gerade feststellen, ob das
+  # ausgelieferte Zertifikat gültig ist — mit -k wäre ein kaputtes TLS grün.
+  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${url}" || echo "000")
   if [[ "${code}" =~ ^[23] ]]; then
     ok "${url} → ${code}"
   else

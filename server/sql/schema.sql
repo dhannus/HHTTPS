@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- HHTTPS v4.1 — PostgreSQL Schema
 -- HumanProof Initiative · daniel.hannuschka@tweakz.de
 --
@@ -47,12 +59,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS sessions_user_id_idx    ON sessions(user_id);
 
--- ─── WebAuthn challenges (short-lived) ──────────────────────────────────────
+-- ─── Short-lived challenges / parked context ────────────────────────────────
+-- Despite the name this is the generic short-lived key/value store: the two
+-- WebAuthn challenges plus the e-mail flow's parked state (AP6-56).
 CREATE TABLE IF NOT EXISTS challenges (
-  challenge_id       TEXT PRIMARY KEY,            -- userId or sessionId
-  challenge          TEXT NOT NULL,
+  challenge_id       TEXT PRIMARY KEY,            -- userId, sessionId or a derived key
+  challenge          TEXT NOT NULL,               -- challenge, counter or JSON payload
   user_id            TEXT,
   context            TEXT NOT NULL,               -- 'registration' | 'authentication'
+                                                  -- | 'email-pending' | 'email-attempts'
   expires_at         TIMESTAMPTZ NOT NULL,
   created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -228,5 +243,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- ─── Grant access to application role (set in install-pg.sh) ────────────────
--- This is a placeholder; real grants happen in install-pg.sh after role creation.
+-- No GRANT/OWNER block here on purpose (AP6-49): every migration runs AS THE
+-- APP USER via scripts/migrate.js, so the app user owns what it creates.
+-- sql/ownership-hhttps.sql repairs older installs whose objects ended up owned
+-- by postgres.

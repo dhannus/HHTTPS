@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- HHTTPS — Migration phase 8: E-Mail-verankerte, stabile Identität
 -- (feature `email-anchored-identity`, see docs/specs/email-anchored-identity)
@@ -31,9 +43,6 @@
 --                  the deploy (or remove the UPDATE if you do not want every
 --                  existing client to get scope `email`).
 --
--- IMPORTANT: run this migration AS THE APP USER, not postgres:
---   PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
---     -f server/sql/migration-phase-8-email-anchored-identity.sql
 -- ════════════════════════════════════════════════════════════════════════════
 
 -- ════════════════════════════ 1. BOOT-DDL ══════════════════════════════════
@@ -84,13 +93,8 @@ UPDATE oauth_clients
    SET allowed_scopes = (allowed_scopes::jsonb || '["email"]'::jsonb)::text
  WHERE NOT (allowed_scopes::jsonb ? 'email');
 
--- ─── Grants for application user ───────────────────────────────────────────
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hhttps') THEN
-    ALTER TABLE identity_anchors      OWNER TO hhttps;
-    ALTER TABLE identity_claims_cache OWNER TO hhttps;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON
-      identity_anchors, identity_claims_cache TO hhttps;
-  END IF;
-END$$;
+-- ─── Ownership / grants ────────────────────────────────────────────────────
+-- None (AP6-49, #200). The convention is: every migration runs AS THE APP
+-- USER via `node scripts/migrate.js`, so the app user owns what it creates.
+-- sql/ownership-hhttps.sql repairs installations where a historical
+-- `sudo -u postgres psql -f …` made postgres the owner.

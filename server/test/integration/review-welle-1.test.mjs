@@ -15,7 +15,7 @@ import pg from 'pg';
 import { startServer, pgAvailable } from '../helpers/server.mjs';
 import { closeDb, sql, TEST_DB, TEST_EUDI_SECRET } from '../helpers/db.mjs';
 import { rnd, freshEmail, verifyEmail, decodeJwtPayload, createTracker } from '../helpers/identity-flow.mjs';
-import { migrate } from '../../scripts/migrate.js';
+import { migrate, MIGRATION_ORDER } from '../../scripts/migrate.js';
 
 const skip = !pgAvailable() && 'TEST_PG_HOST not set';
 const REDIRECT_URI = 'http://localhost/cb';
@@ -231,8 +231,11 @@ test('AP6-01: a fresh database migrated by scripts/migrate.js has everything the
   try {
     await client.connect();
     const first = await migrate({ client, log: { log() {} } });
-    // 15 since Welle 2 added migration-phase-10-review-welle-2.sql (AP6).
-    assert.equal(first.applied.length, 15, 'all 15 files applied on a fresh DB');
+    // The registry (db.js: MIGRATIONS) is the single source of the chain —
+    // AP6-40 (#160). Asserting against it instead of a hard-coded count keeps
+    // this test from failing every time a phase is added.
+    assert.equal(first.applied.length, MIGRATION_ORDER.length,
+      `all ${MIGRATION_ORDER.length} registered files applied on a fresh DB`);
     const again = await migrate({ client, log: { log() {} } });
     assert.equal(again.applied.length, 0, 'idempotent: nothing applied the second time');
     const cols = async (t, c) => (await client.query(
