@@ -7,7 +7,7 @@
 //
 //   initTransaction(minAge)          → { transaction_id, nonce, uri, crossDeviceUri }
 //   buildWalletLink(tx)              → openid4vp:// URL (already built by EUDIPLO)
-//   pollWalletResponse(id, code)     → { status:'pending' } | { status:'done', walletResponse }
+//   pollWalletResponse(id, code)     → { status:'pending' } | { status:'done', walletResponse } | { status:'failed', reason }
 //   extractAgeClaims(walletResponse) → { age_over_14?, age_over_16?, age_over_18? }
 //   config                           → { BACKEND, AV_DOCTYPE, AUTH_SCHEME }
 //
@@ -54,7 +54,15 @@ const CONFIG_PREFIX = process.env.EUDIPLO_CONFIG_PREFIX || 'age-over-';
 const EID_CONFIG_ID = process.env.EUDIPLO_EID_CONFIG_ID || 'eid-identity';
 const EID_CLAIM     = process.env.EUDI_EID_CLAIM        || 'issuing_country';
 
-const DEBUG = process.env.EUDI_DEBUG === '1';
+// AP4-28 (#189): EUDI_DEBUG is a development aid only — ignored in production,
+// and even then it logs status/keys, never the wallet response body.
+const DEBUG = process.env.EUDI_DEBUG === '1' && process.env.NODE_ENV !== 'production';
+
+// AP4-39 (#222): every upstream call is bounded — a hung EUDIPLO must not pin a
+// polled or login-critical request for undici's ~300 s default.
+const FETCH_TIMEOUT_MS = Number(process.env.EUDIPLO_FETCH_TIMEOUT_MS) || 8000;
+const withTimeout = (init = {}) =>
+  (init.signal ? init : Object.assign({}, init, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }));
 
 // ── Token (client-credentials, cached, re-auth on expiry) ────────────────────
 
@@ -65,11 +73,11 @@ async function getToken() {
   if (tokenCache.value && now < tokenCache.expiresAt - 60_000) return tokenCache.value;
   if (!CLIENT_SECRET) throw new Error('EUDIPLO_CLIENT_SECRET not configured');
 
-  const r = await fetch(`${BACKEND}/oauth2/token`, {
+  const r = await fetch(`${BACKEND}/oauth2/token`, withTimeout({
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET })
-  });
+  }));
   if (!r.ok) {
     const text = await r.text().catch(() => '');
     throw new Error(`EUDIPLO token failed (${r.status}): ${text.slice(0, 200)}`);
@@ -82,13 +90,28 @@ async function getToken() {
   return tokenCache.value;
 }
 
-async function authed(path, init = {}) {
+/** Drop the cached client-credentials token (AP4-10: a 401/403 means it is no longer valid upstream). */
+export function resetTokenCache() {
+  tokenCache = { value: null, expiresAt: 0 };
+}
+
+async function authedOnce(path, init) {
   const token = await getToken();
   const headers = Object.assign({ Accept: 'application/json' }, init.headers, {
     Authorization: `Bearer ${token}`
   });
   if (init.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-  return fetch(`${BACKEND}${path}`, Object.assign({}, init, { headers }));
+  return fetch(`${BACKEND}${path}`, withTimeout(Object.assign({}, init, { headers })));
+}
+
+// AP4-10 (#102): the token cache is only time-based; when EUDIPLO answers
+// 401/403 (token revoked / secret rotated / instance restarted) invalidate it
+// and retry exactly once with a fresh token.
+async function authed(path, init = {}) {
+  const r = await authedOnce(path, init);
+  if (r.status !== 401 && r.status !== 403) return r;
+  resetTokenCache();
+  return authedOnce(path, init);
 }
 
 // ── Verifier config (one per age threshold, created on demand) ───────────────
@@ -376,24 +399,52 @@ export function buildWalletLink(tx) {
 
 // ── 3. Poll the EUDIPLO session for the wallet's response ────────────────────
 
-// **CONFIRM**: the session/result endpoint path. We auto-discover it across the
-// candidates below on the first poll and cache the one that answers; set
-// EUDIPLO_SESSION_PATH to pin it explicitly. Run the check in the chat to lock
-// this. While the wallet hasn't responded the session reports a non-terminal
-// status (no age claims yet) → 'pending'.
+// The session/result endpoint path. Set EUDIPLO_SESSION_PATH to pin it
+// explicitly (recommended for production); otherwise the documented EUDIPLO
+// path `/verifier/session/{id}` is the default candidate and the legacy
+// alternatives are probed ONCE (AP4-38 #217): the path is resolved on the
+// first poll that answers 2xx, or — when the first candidate answers 404 —
+// taken as resolved-and-pending (a session that is not yet known upstream
+// looks identical to a wrong path, and re-probing three URLs every 2.5 s
+// per client is what the autodiscovery used to do).
 const SESSION_PATHS = (process.env.EUDIPLO_SESSION_PATH
   ? [process.env.EUDIPLO_SESSION_PATH]
   : ['/verifier/session/{id}', '/session/{id}', '/presentations/{id}']);
 let resolvedSessionPath = process.env.EUDIPLO_SESSION_PATH || null;
 
-const TERMINAL = ['verified', 'completed', 'success', 'valid', 'done', 'submitted'];
+// AP4-24 (#166): only documented POSITIVE terminal states count as "presentation
+// valid". `submitted` (wallet posted, not yet validated) is NOT one of them.
+const TERMINAL = ['verified', 'completed', 'success', 'valid', 'done'];
+// AP4-09 (#92): negative terminal states — surfaced as { status:'failed' } so
+// the browser stops polling instead of waiting for the 10-min TTL.
+const FAILED = ['failed', 'rejected', 'expired', 'error', 'cancelled', 'canceled',
+                'declined', 'denied', 'aborted', 'invalid'];
 
-// Done = explicit terminal status OR disclosed age_over_* claims present.
-function sessionLooksDone(body) {
+function sessionStatus(body) {
+  if (!body || typeof body !== 'object') return '';
+  return String(body.status || body.state || '').toLowerCase();
+}
+
+// Done = an explicit positive terminal status. A body without a status field is
+// only "done" when it carries VERIFIED disclosure data (the EUDIPLO session
+// result fields, never an arbitrary nested age_over_* key — AP4-24).
+const DISCLOSURE_FIELDS = ['credentials', 'verifiedCredentials', 'presentation', 'claims', 'disclosed'];
+export function sessionLooksDone(body) {
   if (!body || typeof body !== 'object') return false;
-  const status = String(body.status || body.state || '').toLowerCase();
+  const status = sessionStatus(body);
   if (TERMINAL.includes(status)) return true;
-  return Object.keys(extractAgeClaims(body)).length > 0;
+  if (status) return false;                              // explicit non-terminal status
+  if (body.error || body.errorCode) return false;
+  return DISCLOSURE_FIELDS.some(f => body[f] && typeof body[f] === 'object'
+                                     && Object.keys(extractAgeClaims(body[f])).length > 0);
+}
+
+export function sessionLooksFailed(body) {
+  if (!body || typeof body !== 'object') return null;
+  const status = sessionStatus(body);
+  if (FAILED.includes(status)) return status;
+  if (body.error || body.errorCode) return String(body.error || body.errorCode).slice(0, 80);
+  return null;
 }
 
 async function fetchSession(sessionId, tpl) {
@@ -404,28 +455,52 @@ async function fetchSession(sessionId, tpl) {
   return { ok: r.ok, status: r.status, body, raw };
 }
 
+// Transactions that were seen by the session endpoint at least once: a later
+// 404 for them means the session is gone upstream (expired/cleaned) → failed,
+// not "pending forever" (AP4-09).
+const seenSessions = new Set();
+export function forgetSession(transactionId) { seenSessions.delete(transactionId); }
+
 export async function pollWalletResponse(transactionId, _responseCode) {
   const tag = String(transactionId).slice(0, 8);
 
-  // Resolve the session endpoint once (first 2xx wins), then reuse it.
+  // Resolve the session endpoint once (first 2xx wins, else first candidate on
+  // 404), then reuse it for the process lifetime.
   if (!resolvedSessionPath) {
+    let firstStatus = null;
     for (const tpl of SESSION_PATHS) {
       const res = await fetchSession(transactionId, tpl);
       if (DEBUG) console.log(`[EUDI-DEBUG] probe ${tpl} tx=${tag}… HTTP ${res.status} bodyLen=${res.raw.length}`);
+      if (firstStatus === null) firstStatus = res.status;
       if (res.ok) { resolvedSessionPath = tpl; break; }
     }
-    if (!resolvedSessionPath) return { status: 'pending' }; // no path answered yet; retry next poll
+    if (!resolvedSessionPath && firstStatus === 404) resolvedSessionPath = SESSION_PATHS[0];
+    if (!resolvedSessionPath) return { status: 'pending' }; // nothing answered; retry next poll
   }
 
   const res = await fetchSession(transactionId, resolvedSessionPath);
   if (DEBUG) {
-    console.log(`[EUDI-DEBUG] poll tx=${tag}… HTTP ${res.status} bodyLen=${res.raw.length} body=${res.raw.slice(0, 500)}`);
+    // AP4-28: status + top-level keys only — never the wallet response body.
+    console.log(`[EUDI-DEBUG] poll tx=${tag}… HTTP ${res.status} keys=${JSON.stringify(Object.keys(res.body || {}))} status=${sessionStatus(res.body)}`);
   }
 
-  if (res.status === 404) return { status: 'pending' };
+  if (res.status === 404) {
+    if (seenSessions.has(transactionId)) {
+      seenSessions.delete(transactionId);
+      return { status: 'failed', reason: 'session_gone' };
+    }
+    return { status: 'pending' };
+  }
   if (!res.ok) throw new Error(`EUDIPLO session poll failed (${res.status}): ${res.raw.slice(0, 200)}`);
+  seenSessions.add(transactionId);
 
+  const failedReason = sessionLooksFailed(res.body);
+  if (failedReason) {
+    seenSessions.delete(transactionId);
+    return { status: 'failed', reason: failedReason };
+  }
   if (sessionLooksDone(res.body)) {
+    seenSessions.delete(transactionId);
     if (DEBUG) console.log(`[EUDI-DEBUG] tx=${tag}… → DONE, keys=${JSON.stringify(Object.keys(res.body || {}))}`);
     return { status: 'done', walletResponse: res.body };
   }
@@ -437,6 +512,22 @@ export async function pollWalletResponse(transactionId, _responseCode) {
 // Defensive recursive scan for any age_over_* keys, so a PID-vs-AV doctype
 // difference still yields the booleans. Returns { age_over_14?, age_over_16?,
 // age_over_18? } with only present ones set; ageGroupFromEudiClaims maps the rest.
+// AP4-24 (#166): the claims the bridge acts on come from the session result's
+// disclosure fields (the data EUDIPLO validated). Only when the backend reports
+// an explicit positive terminal status and none of the known disclosure fields
+// is present do we fall back to the whole body (field naming is instance-
+// specific — see **CONFIRM** above).
+export function extractVerifiedAgeClaims(sessionBody) {
+  if (!sessionBody || typeof sessionBody !== 'object') return {};
+  for (const f of DISCLOSURE_FIELDS) {
+    if (sessionBody[f] && typeof sessionBody[f] === 'object') {
+      const found = extractAgeClaims(sessionBody[f]);
+      if (Object.keys(found).length) return found;
+    }
+  }
+  return TERMINAL.includes(sessionStatus(sessionBody)) ? extractAgeClaims(sessionBody) : {};
+}
+
 export function extractAgeClaims(walletResponse) {
   const out = {};
   const scan = (obj) => {
