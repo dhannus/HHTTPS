@@ -1050,6 +1050,15 @@ async function restoreIdentity(){
           if(d.token){
             identity.token=d.token;
             identity.expiresAt=d.expiresAt||identity.expiresAt||null;
+            /* AP3-18 (#116): /hhttps/token/refresh ROTATES the refresh token —
+               every call returns a new one and invalidates the old one, and
+               re-using an invalidated token trips the reuse detection. Storing
+               only the new access token made the silent refresh work exactly
+               once; the second attempt logged the user out. */
+            if(d.refreshToken){
+              identity.refreshToken=storableRefreshToken(d.refreshToken,d.refreshExpiresAt||identity.refreshExpiresAt);
+              identity.refreshExpiresAt=d.refreshExpiresAt||identity.refreshExpiresAt||null;
+            }
             try{ localStorage.setItem('hhttps_identity',JSON.stringify(identity)); }catch(e){}
           } else { canRefresh=false; }
         } else { canRefresh=false; }

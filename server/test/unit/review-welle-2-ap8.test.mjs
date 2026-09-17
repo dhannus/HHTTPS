@@ -316,6 +316,40 @@ test('AP8-27: a failed batch is cached and the seals leave the pending state', (
     'both the HTTP error and the thrown error cache the failure');
 });
 
+// ── AP3-18 (#116): the refresh token rotates — the client has to keep it ───
+test('AP3-18: the silent refresh adopts the rotated refresh token', () => {
+  const js = scriptText(SIGNIN);
+  const restore = fnSource(js, 'restoreIdentity');
+  assert.match(restore, /identity\.token=d\.token/, 'the new access token is stored');
+  assert.match(restore, /if\(d\.refreshToken\)\{/,
+    'the answer is checked for a rotated refresh token');
+  assert.match(restore, /identity\.refreshToken=storableRefreshToken\(d\.refreshToken/,
+    'the rotated refresh token replaces the used one (through the AP8-20 guard)');
+  assert.match(restore, /identity\.refreshExpiresAt=d\.refreshExpiresAt/,
+    'the new refresh expiry is carried over, so canRefresh stays correct');
+  // The store must happen AFTER the refresh token was updated, otherwise the
+  // invalidated one is persisted and the next refresh trips reuse detection.
+  const rotateAt = restore.indexOf('identity.refreshToken=storableRefreshToken(');
+  const storeAt  = restore.indexOf("localStorage.setItem('hhttps_identity'", rotateAt);
+  assert.ok(rotateAt > 0 && storeAt > rotateAt, 'localStorage is written after the rotation');
+});
+
+// The extension refreshes on its own schedule — same requirement there.
+test('AP3-18: the extension keeps the rotated refresh token too', () => {
+  const refresh = fnSource(BG, 'refreshIdentity');
+  assert.match(refresh, /refreshToken:\s*data\.refreshToken \|\| ident\.refreshToken/,
+    'a rotated refresh token replaces the stored one');
+  assert.match(refresh, /refreshExpiresAt:\s*data\.refreshExpiresAt \|\| ident\.refreshExpiresAt/,
+    'the new refresh expiry is carried over');
+});
+
+// The landing page has no refresh path of its own — it must not grow one
+// silently, because a second implementation would have to rotate as well.
+test('AP3-18: the landing page does not call /hhttps/token/refresh', () => {
+  assert.doesNotMatch(LANDING, /token\/refresh/,
+    'sites/hhttps.html has no refresh logic that could drop the rotated token');
+});
+
 // ── AP1-06 (client side): the card issuer's reserved-profession matching ────
 // server/public/iamhmn-card-issuer.js keeps its own copy of the reserved
 // stems. It used a plain includes() and therefore produced exactly the false

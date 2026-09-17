@@ -380,8 +380,12 @@ test('AP1-34/35: cleanup_expired() retires old revoked_tokens and webhook_delive
     assert.ok(cols.includes('deleted_revoked'), `cleanup_expired columns: ${cols.join(', ')}`);
     assert.ok(cols.includes('deleted_webhook_deliveries'), `cleanup_expired columns: ${cols.join(', ')}`);
 
+    // Retention is 90 days, not 8: the longest token in the system is the OAuth
+    // refresh token (OAUTH_REFRESH_TTL = 30 days). A jti that leaves the
+    // revocation list while the token it belongs to is still presentable would
+    // silently become valid again — see the merged phase-10 migration.
     await client.query(
-      `INSERT INTO revoked_tokens (jti, revoked_at) VALUES ('old', NOW() - INTERVAL '9 days'), ('fresh', NOW())`);
+      `INSERT INTO revoked_tokens (jti, revoked_at) VALUES ('old', NOW() - INTERVAL '91 days'), ('fresh', NOW())`);
     await client.query(
       `INSERT INTO webhook_deliveries (event, status, delivered_at)
        VALUES ('token.issued', 'success', NOW() - INTERVAL '31 days'), ('token.issued', 'success', NOW())`);

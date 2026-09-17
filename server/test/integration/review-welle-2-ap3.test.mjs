@@ -236,13 +236,13 @@ test('AP3-10: auth/start offers a SQL-created credential and finish refuses a fo
 test('AP3-24: the phase-10 boot DDL indexes the lookups and cleans consumed rows', { skip }, async () => {
   const file = path.join(SERVER_DIR, 'sql', 'migration-phase-10-review-welle-2.sql');
   const ddl = fs.readFileSync(file, 'utf8').split('-- >>> BOOT-DDL END')[0];
-  assert.ok(ddl.includes('CREATE INDEX IF NOT EXISTS email_verifications_session_idx'));
+  assert.ok(ddl.includes('CREATE INDEX IF NOT EXISTS email_verifications_session_id_idx'));
   await sql(ddl);            // idempotent — applied twice on purpose
   await sql(ddl);
 
   const idx = await sql(
     `SELECT indexname FROM pg_indexes WHERE tablename = 'email_verifications' AND indexname = ANY($1)`,
-    [['email_verifications_session_idx', 'email_verifications_code_session_idx']]
+    [['email_verifications_session_id_idx', 'email_verifications_code_session_idx']]
   );
   assert.equal(idx.length, 2, 'both indexes exist');
 
