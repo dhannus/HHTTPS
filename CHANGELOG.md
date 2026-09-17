@@ -5,6 +5,17 @@ All notable changes to the HHTTPS protocol and reference implementation are docu
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — Review 2026-09, Welle 0
+
+### Removed
+- **Privacy-Pass module** (`server/privacy-pass/`, `/privacy-pass/*`, wallet, `@cloudflare/voprf-ts`, `scripts/deploy-privacy-pass.sh`): the review found the module unusable as a trust anchor — the public `token-request` issued role tokens without any session, eligibility or quota check (AP7-20), the role-requirement domain regexes were unanchored substrings (AP7-05), and a client-chosen `method` turned an e-mail click into an "approbation-id" verification (AP7-04); the regular `/issue` path had been permanently 403 since v0.5 (AP7-01). Its tables are dropped by the OPERATOR section of `sql/migration-phase-9-review-welle-0.sql`.
+- `server/public/email-verify.html` (dead page with DOM-XSS via URL parameters, AP8-15) and `server/public/email-patch.js` (empty, AP8-11).
+
+### Security
+- **Strict e-mail syntax** (`isValidEmail` in `server/identity.js`, AP3-13): `/hhttps/email/send`, the developer portal and the plugin registration now reject addresses with comments, quotes, brackets or non-ASCII characters. `x@evil.com(bundestag.de` used to be delivered to evil.com by nodemailer while `classifyDomain` awarded the bundestag.de bonus.
+- **`classifyDomain` matches on label boundaries only** (AP3-02): `notbundestag.de`, `umwelt.de` and `a.uni-b.evil.com` no longer count as official / press / university domains.
+- **Webhooks** (AP5-16, AP1-21, AP1-22): `GET/POST/DELETE /hhttps/webhooks` require an HHTTPS token, webhooks belong to the registering user (`webhooks.owner_user_id`, boot DDL), the list never contains the HMAC secret, the target URL must be a public https host (SSRF guard with DNS check, no redirects). Pre-existing ownerless webhooks are deactivated by the OPERATOR section of the phase-9 migration.
+
 ## [Unreleased] — Phase 8: email-anchored identity
 
 ### Added

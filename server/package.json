@@ -1,7 +1,7 @@
 {
   "name": "hhttps-role-api",
   "version": "4.1.0",
-  "description": "HHTTPS — Role Identity API v4.1 (PostgreSQL persistence + 14 roles + Privacy Pass extension)",
+  "description": "HHTTPS — Role Identity API v4.1 (PostgreSQL persistence + role identity)",
   "type": "module",
   "scripts": {
     "start": "node server.js",
@@ -13,7 +13,6 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@cloudflare/voprf-ts": "^1.0.0",
     "@simplewebauthn/server": "^9.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",

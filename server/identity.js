@@ -11,6 +11,23 @@ export function normalizeEmail(email) {
   return String(email).trim().toLowerCase();
 }
 
+/**
+ * AP3-13 / AP3-02 (Review 2026-09): strict ASCII e-mail syntax. The previous
+ * check (`^[^\s@]+@[^\s@]+\.[^\s@]+$`) accepted `x@evil.com(bundestag.de`,
+ * which nodemailer's address parser delivers to evil.com while classifyDomain
+ * saw a bundestag.de suffix. Only `local@label(.label)+`, ASCII, no comments,
+ * quotes, brackets or full-width characters; ≤ 254 chars, local part ≤ 64.
+ * Expects the normalized (trimmed, lower-cased) address.
+ */
+const EMAIL_RE = /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+export function isValidEmail(email) {
+  if (typeof email !== 'string') return false;
+  if (email.length > 254) return false;
+  const at = email.indexOf('@');
+  if (at < 1 || at > 64) return false;
+  return EMAIL_RE.test(email);
+}
+
 /** D1: hex HMAC-SHA256(pepper, normalizeEmail(email)). Missing pepper → warn once, use 'dev-pepper'. */
 export function emailAnchorHash(email, pepper = process.env.HHTTPS_VERIFICATION_PEPPER) {
   let key = pepper;

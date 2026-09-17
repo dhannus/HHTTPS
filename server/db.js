@@ -395,6 +395,7 @@ ensureCodeColumn().catch(() => {});
 // separated by the marker below: BOOT-DDL above it, OPERATOR below it.
 const PHASE8_MIGRATION_FILE = 'migration-phase-8-email-anchored-identity.sql';
 const PHASE8_BOOT_DDL_END   = '-- >>> BOOT-DDL END';
+const PHASE9_MIGRATION_FILE = 'migration-phase-9-review-welle-0.sql';
 
 /** The DDL-only section of the phase-8 migration file (everything above the marker). */
 export function phase8BootDdl() {
@@ -436,6 +437,9 @@ export const BOOT_DDL_FILES = [
   { file: 'migration-phase-4b-machine-key-jkt.sql', columns: [['machine_operators', 'key_jkt']] },
   // #31: state/nonce/pkce_challenge were VARCHAR(128); longer client values broke the login.
   { file: 'migration-phase-3a1-authcodes-text.sql', applied: authCodesTextApplied },
+  // Review 2026-09 Welle 0: webhooks get an owner (AP5-16); Privacy-Pass tables are
+  // dropped by the OPERATOR section of the same file (never at boot).
+  { file: PHASE9_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END, columns: [['webhooks', 'owner_user_id']] },
 ];
 
 function bootDdlOf({ file, endMarker }) {
@@ -646,20 +650,23 @@ export const machineOperators = {
 // ─── WEBHOOKS ─────────────────────────────────────────────────────────────────
 
 export const webhooks = {
-  async create({ id, url, events, secret }) {
+  async create({ id, url, events, secret, ownerUserId }) {
     await q(
-      `INSERT INTO webhooks (webhook_id, url, events, secret) VALUES ($1, $2, $3, $4)`,
-      [id, url, events, secret]
+      `INSERT INTO webhooks (webhook_id, url, events, secret, owner_user_id) VALUES ($1, $2, $3, $4, $5)`,
+      [id, url, events, secret, ownerUserId]
     );
   },
 
-  async list() {
-    const { rows } = await q(`SELECT * FROM webhooks WHERE active = TRUE ORDER BY created_at DESC`);
+  /** AP5-16 / AP1-22: only the owner's webhooks, never the secret. */
+  async list(ownerUserId) {
+    const { rows } = await q(
+      `SELECT * FROM webhooks WHERE active = TRUE AND owner_user_id = $1 ORDER BY created_at DESC`,
+      [ownerUserId]
+    );
     return rows.map(r => ({
       id:           r.webhook_id,
       url:          r.url,
       events:       r.events,
-      secret:       r.secret,
       failures:     r.failures,
       deliveries:   r.deliveries,
       lastDelivery: r.last_delivery_at,
@@ -677,8 +684,10 @@ export const webhooks = {
     }));
   },
 
-  async delete(id) {
-    const { rowCount } = await q(`DELETE FROM webhooks WHERE webhook_id = $1`, [id]);
+  async delete(id, ownerUserId) {
+    const { rowCount } = await q(
+      `DELETE FROM webhooks WHERE webhook_id = $1 AND owner_user_id = $2`, [id, ownerUserId]
+    );
     return rowCount > 0;
   },
 

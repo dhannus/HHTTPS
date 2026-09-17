@@ -97,7 +97,7 @@ if [[ $DO_LINK -eq 1 ]]; then
     ok "nginx liest nicht direkt aus $INSTALL_DIR (nur Proxy) — Symlink-Ziel darf unter /root liegen"
   fi
   # Lokale Zustände/Extras, die nicht im Git-Repo liegen, mit übernehmen
-  for f in .env keys eudi-keys developers privacy-pass/public/demo.html force-verify-client.mjs; do
+  for f in .env keys eudi-keys developers force-verify-client.mjs; do
     if [[ -e "$INSTALL_DIR/$f" && ! -e "$SRC_DIR/$f" ]]; then
       run mkdir -p "$(dirname "$SRC_DIR/$f")"
       run cp -a "$INSTALL_DIR/$f" "$SRC_DIR/$f"; ok "übernommen: $f"

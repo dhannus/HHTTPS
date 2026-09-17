@@ -111,7 +111,7 @@ POST /hhttps/email/send
   → sendet Verifikations-E-Mail (oder gibt Link im Dev-Mode aus)
 
 GET  /hhttps/email/verify?token=<raw>&session=<sid>
-  → bestätigt Token, upgradet Session, redirect zu /email-verify.html
+  → bestätigt Token, upgradet Session, redirect auf /?email_verify=…
 
 POST /hhttps/email/status
   Body: { sessionId }
