@@ -37,18 +37,18 @@ Reproduziert: `x@notbundestag.de` → `official-email +40`; `x@a.uni-b.evil.com`
 **Auswirkung:** Bei SMTP-Ausfall/-Fehlkonfiguration in Produktion landen Einmal-Tokens und E-Mail-Adressen in pm2-/Journal-Logs (Datenschutz, Token-Leak an jeden mit Log-Zugriff); Aufrufer melden „versandt“ (privacy-pass/verifications-api.js L112 nur `console.warn`), die Nutzer erhalten nichts.
 **Empfehlung:** Die F-3-Logik zentralisieren (`getTransportOrThrow()`), in allen fünf Funktionen ohne `emailDevModeAllowed()` fail-closed werfen, und `devLog` niemals Tokens/Links loggen, wenn nicht explizit `EMAIL_DEV_MODE=1` gesetzt ist.
 
-### [S3] [Sicherheit] server/server.js:L482-513 — Identity-Cookie-Middleware prüft nur die Signatur, nicht die Revocation: widerrufene Tokens liefern bis zu 1 h weiter „verified“-Header
-**Begründung:** `verifyToken(cookieToken)` (L489) prüft ES256-Signatur und `exp`; `db.revokedTokens`/`db.tokens.exists` (wie in `checkTokenValid`, L710-719) werden nicht konsultiert. `/hhttps/revoke` (L3676-3695) trägt die jti in `revoked_tokens` ein und löscht das Cookie nur in **dieser** Antwort; ein anderswo gespeichertes/kopiertes Cookie bleibt bis `ACCESS_TTL` (3600 s, L93) gültig.
+### [S3] [Sicherheit] server/server.js:L485-516 — Identity-Cookie-Middleware prüft nur die Signatur, nicht die Revocation: widerrufene Tokens liefern bis zu 1 h weiter „verified“-Header
+**Begründung:** `verifyToken(cookieToken)` (L492) prüft ES256-Signatur und `exp`; `db.revokedTokens`/`db.tokens.exists` (wie in `checkTokenValid`, L702-711) werden nicht konsultiert. `/hhttps/revoke` (L3678-3697) trägt die jti in `revoked_tokens` ein und löscht das Cookie nur in **dieser** Antwort; ein anderswo gespeichertes/kopiertes Cookie bleibt bis `ACCESS_TTL` (3600 s, L93) gültig.
 **Auswirkung:** Nach Revoke (z. B. Gerät verloren, Token in Logs aufgetaucht) zeigt hhttps.org dem Cookie-Inhaber weiterhin `HHTTPS-Status: verified`, Rolle, Alter, Methoden; die Zusage „revoked“ des Revoke-Endpunkts gilt für diesen Kanal nicht.
 **Empfehlung:** In der Middleware `checkTokenValid` (oder mindestens `db.revokedTokens.has(jti)`) verwenden, ggf. mit kurzem In-Memory-Cache der Revocation-Liste, und bei Treffer `clearIdentityCookie` aufrufen.
 
 ### [S3] [Sicherheit] server/server.js:L2606-2656 — Refresh-Token: 7-Tage-Bearer ohne Rotation, ohne Reuse-Erkennung, ohne Bindung
-**Begründung:** `/hhttps/token/refresh` prüft Signatur, Revocation und Existenz in `refresh_tokens` (L2611-2616), stellt dann ein neues Access-Token aus (L2628) und gibt **denselben** Refresh-Token weiter (kein neuer Token, kein Löschen der jti). `issueRefreshToken` (L678-702) erzeugt reine Bearer-Token (`REFRESH_TTL = 7 d`, L94) ohne Client-/Gerätebindung; der Endpunkt hat keinen Rate-Limiter außer `limit.global`.
+**Begründung:** `/hhttps/token/refresh` prüft Signatur, Revocation und Existenz in `refresh_tokens` (L2611-2616), stellt dann ein neues Access-Token aus (L2628) und gibt **denselben** Refresh-Token weiter (kein neuer Token, kein Löschen der jti). `issueRefreshToken` (L680-700) erzeugt reine Bearer-Token (`REFRESH_TTL = 7 d`, L94) ohne Client-/Gerätebindung; der Endpunkt hat keinen Rate-Limiter außer `limit.global`.
 **Auswirkung:** Ein einmal abgeflossener Refresh-Token (Extension-Storage, Log, XSS auf einer RP) erlaubt 7 Tage lang unbemerkt die Ausstellung frischer Access-Tokens mit allen `verified_methods`; der legitime Nutzer bemerkt nichts, da kein Reuse-Alarm existiert.
 **Empfehlung:** Rotation implementieren (neuen Refresh-Token ausgeben, alte jti sofort in `revoked_tokens`), Wiederverwendung einer rotierten jti als Kompromittierung werten und die gesamte Familie widerrufen (RFC 6819 §5.2.2.3); optional Bindung an `credentialId`/PoP.
 
 ### [S3] [Sicherheit] server/server.js:L2940-2951 — 6-stelliger Code ohne Fehlversuchszähler pro Session
-**Begründung:** `verifyEmailCode` → `getAndConsumeByCode` (db.js L358-366) prüft nur `code = sha256 AND session_id = … AND used = FALSE`. Ein falscher Code hat keine Konsequenz für die Verification-Zeile; die einzige Bremse ist `limit.email` (30 Req / 60 min pro IP, L427) — der Zähler ist IP-basiert, nicht sessionbasiert. Bei 15 min Gültigkeit (email.js L45) und 10^6 Codes ist ein verteilter Angriff (viele IPs, ein `sessionId`) nicht ausgeschlossen; die `sessionId` steht im Magic-Link und in jeder Antwort.
+**Begründung:** `verifyEmailCode` → `getAndConsumeByCode` (db.js L358-366) prüft nur `code = sha256 AND session_id = … AND used = FALSE`. Ein falscher Code hat keine Konsequenz für die Verification-Zeile; die einzige Bremse ist `limit.email` (30 Req / 60 min pro IP, L428) — der Zähler ist IP-basiert, nicht sessionbasiert. Bei 15 min Gültigkeit (email.js L45) und 10^6 Codes ist ein verteilter Angriff (viele IPs, ein `sessionId`) nicht ausgeschlossen; die `sessionId` steht im Magic-Link und in jeder Antwort.
 **Auswirkung:** Kein direkter Exploit (hohe IP-Zahl nötig), aber der Standard-Schutz für kurze OTPs (≤ 5-10 Versuche pro Code, dann Invalidierung) fehlt.
 **Empfehlung:** Spalte `attempts` in `email_verifications`; bei jedem Fehlversuch inkrementieren und ab z. B. 5 Versuchen die Zeile auf `used = TRUE` setzen (bzw. den Session-Kontext löschen), sodass ein neuer Code angefordert werden muss.
 
@@ -62,8 +62,8 @@ Reproduziert: `x@notbundestag.de` → `official-email +40`; `x@a.uni-b.evil.com`
 **Auswirkung:** Kein Crash, aber Verbindungen bleiben bis zum Client-/nginx-Timeout offen (Slot-Bindung), und die Fehlerpfade sind nicht kontrolliert.
 **Empfehlung:** Typprüfung (`typeof token === 'string'`, `response?.id`) bzw. einen `asyncHandler`-Wrapper/`express-async-errors` einsetzen.
 
-### [S4] [Sicherheit] server/server.js:L469-479 — `readIdentityCookie` wirft bei fehlerhaft kodiertem Cookie-Wert `URIError`
-**Begründung:** `decodeURIComponent(part.slice(i + 1).trim())` ohne `try/catch`; ein Cookie `hhttps_id=%E0` lässt die globale Middleware (L482) synchron werfen → Express antwortet 500 auf **jede** Route für diesen Client, bis das Cookie entfernt ist.
+### [S4] [Sicherheit] server/server.js:L468-479 — `readIdentityCookie` wirft bei fehlerhaft kodiertem Cookie-Wert `URIError`
+**Begründung:** `decodeURIComponent(part.slice(i + 1).trim())` ohne `try/catch`; ein Cookie `hhttps_id=%E0` lässt die globale Middleware (L485) synchron werfen → Express antwortet 500 auf **jede** Route für diesen Client, bis das Cookie entfernt ist.
 **Auswirkung:** Selbst-DoS des Browsers (kein Cross-User-Effekt, da Cookies nicht fremdgesetzt werden können; `SameSite=Lax`, `Secure`, `HttpOnly` sind korrekt).
 **Empfehlung:** `decodeURIComponent` in `try/catch` kapseln und bei Fehler `null` zurückgeben + Cookie löschen.
 
@@ -88,7 +88,7 @@ Fazit: Der Upgrade-Bedarf (nodemailer ≥ 9.1.0) ist real, aber der eigentliche 
 ## Positiv geprüft (keine Findings)
 
 - Cookie-Flags (`httpOnly`, `secure`, `sameSite: 'lax'`, L455-462); Token-Signatur ES256 mit fixiertem `algorithms` (keys.js L172).
-- WebAuthn: Registrierung nur auf E-Mail-verifizierter Session mit Session/userId-Bindung (L2464-2468), `attestationType: 'none'` (Advisory GHSA-6hxq-p678-4hr2 daher nicht relevant), Origin/RP-ID-Prüfung, Counter-Update, Challenge-Verbrauch; `resolvePasskeySession` (identity.js L104-127) verhindert Fremd-Merge und userId-Spoofing aus `auth/start`.
+- WebAuthn: Registrierung nur auf E-Mail-verifizierter Session mit Session/userId-Bindung (L2464-2468), `attestationType: 'none'` (Advisory GHSA-6hxq-p678-4hr2 daher nicht relevant), Origin/RP-ID-Prüfung, Counter-Update, Challenge-Verbrauch; `resolvePasskeySession` (identity.js L112-132) verhindert Fremd-Merge und userId-Spoofing aus `auth/start`.
 - E-Mail-Anker: Code/Token nur als SHA-256 gespeichert, Session-Bindung des Codes (db.js L358), Kontext-Hash-Abgleich `emailContextMatches` (L2773-2777), Invalidierung älterer Codes pro Session (L2866), Anchor-Konfliktprüfung (L2798-2810), 256-Bit-Magic-Link-Token, alle Redirects relativ (`/?email_verify=…`) — kein Open Redirect.
 - identity.js: Pepper-Pflicht in Produktion (`assertPepperConfigured`, aufgerufen in server.js L4778; deploy-phase8.sh erzwingt `NODE_ENV=production`), `crypto.randomInt` für Pseudonyme, `sanitizePseudonym` mit Whitelist.
 - Alle SQL-Zugriffe in den geprüften db.js-Helfern sind parametrisiert; `sessions.update` verwendet eine Spalten-Whitelist.
