@@ -61,7 +61,7 @@
 
 <section class="container">
   <div class="card card-bracketed" style="padding: 56px 40px;">
-    <span class="eyebrow">HHTTPS · v4 · public beta</span>
+    <span class="eyebrow">HHTTPS · v0.5 · public beta</span>
     <h1 style="max-width: 820px;" data-i18n="hero.title">Mit nachgewiesener Menschlichkeit bauen.<br/>Ohne Menschen zu speichern.</h1>
     <p class="lede mt-4" data-i18n="hero.lead">
       HHTTPS ist ein offenes Internet-Protokoll — der Nachfolger von HTTPS — mit dem deine Plattform
@@ -264,9 +264,12 @@ app.use(<span style="color: var(--info);">async</span> (req, res, next) => {
     // Access hint: signed in but no confirmed e-mail (and not admin)?
     const id = HHTTPS.auth.getIdentity();
     if (id && HHTTPS.auth.isLoggedIn() && !HHTTPS.auth.hasPortalAccess()) {
-      // verifyAdmin will update is_admin shortly — check both sync + async
-      const renderHint = () => {
-        if (HHTTPS.auth.isAdmin()) return; // admin bypass
+      // AP5-47: the hint used to render immediately and then re-render behind a
+      // 600 ms setTimeout, hoping the admin probe had finished by then — on a
+      // slow link an admin saw the warning, on a fast one it flickered. It now
+      // waits for the actual answer.
+      const renderHint = (isAdmin) => {
+        if (isAdmin) return;               // admin bypass
         const host = document.getElementById('role-hint-host');
         host.style.display = '';
         host.innerHTML = `
@@ -278,9 +281,7 @@ app.use(<span style="color: var(--info);">async</span> (req, res, next) => {
             </div>
           </div>`;
       };
-      renderHint();
-      // re-check after admin probe completes
-      setTimeout(renderHint, 600);
+      HHTTPS.auth.verifyAdmin().then(renderHint).catch(() => renderHint(false));
     }
 
     // ── Identity panel ────────────────────────────────────────────────────
