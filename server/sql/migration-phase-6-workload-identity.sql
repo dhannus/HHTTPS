@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- HHTTPS — Migration phase 6: Workload Identity Federation
 --
@@ -16,11 +28,6 @@
 -- intentionally ATTRIBUTABLE: the whole point is that a platform can see exactly
 -- which repo/workflow/run minted the token. That transparency is the feature.
 --
--- IMPORTANT: run this migration AS THE APP USER, not postgres:
---   PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
---     < server/sql/migration-phase-6-workload-identity.sql
--- Running it via `sudo -u postgres` makes postgres the table owner and the app
--- gets "permission denied" / "must be owner" errors.
 --
 -- Safe to re-run.
 -- ════════════════════════════════════════════════════════════════════════════

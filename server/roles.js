@@ -67,7 +67,16 @@ export const ROLES = {
   }
 };
 
-// Verification level definitions with trust scores.
+// LEGACY — LABEL MAP ONLY (AP1-50, #191).
+//
+// This table predates the v0.5 verification model. Today it is read in exactly
+// one way: `VERIFICATION_LEVELS[x]?.label`, to put a human-readable name next to
+// a stored roleLevel (in /hhttps/check and in the signature snapshot). The
+// `level` and `trustScore` fields are INERT — trust is computed by
+// computeVerification() from VERIFICATION_METHODS, and nothing reads them any
+// more. `resolveVerification()`, the last consumer, was removed with this
+// finding. Do not add new entries here; add a VERIFICATION_METHODS entry.
+//
 // `label` is the English canonical; German lives in roles.i18n.js.
 export const VERIFICATION_LEVELS = {
   'self-declared':         { level: 1, label: 'Self-declared',              trustScore: 30 },
@@ -259,33 +268,6 @@ export const VERIFICATION_CHECKS = {
   // gone; this is the ONLY path that grants a professional role.
   'eudi-wallet-role':   { implemented: true,  status: 'verified', note: 'EUDI Wallet (Q)EAA role attestation (German Sandbox).' },
 };
-
-// Helper: resolve the effective verification given a requested method.
-// Returns { method, status, trustScore, note, downgraded }.
-//   - real verified check  → keep method, grant its trust (or cap)
-//   - unimplemented check   → BREAK: downgrade to self-declared, trust 30,
-//                             status 'claimed', original method kept as claimedAs
-export function resolveVerification(requestedMethod, baseTrust = 30) {
-  const SELF = { method: 'self-declared', status: 'self-declared',
-                 trustScore: VERIFICATION_LEVELS['self-declared'].trustScore };
-  if (!requestedMethod || requestedMethod === 'self-declared') return { ...SELF, downgraded: false };
-
-  const level = VERIFICATION_LEVELS[requestedMethod];
-  const check = VERIFICATION_CHECKS[requestedMethod];
-  if (!level || !check) return { ...SELF, downgraded: false };
-
-  if (check.implemented) {
-    const trust = check.cap ? Math.min(level.trustScore, check.cap) : level.trustScore;
-    return { method: requestedMethod, status: check.status || 'verified',
-             trustScore: trust, note: check.note, downgraded: false };
-  }
-
-  // BREAK — no real check yet. Trust stays self-declared; record what was claimed.
-  return { method: 'self-declared', status: 'claimed',
-           trustScore: VERIFICATION_LEVELS['self-declared'].trustScore,
-           claimedAs: requestedMethod, targetTrust: check.targetTrust,
-           note: check.note, downgraded: true };
-}
 
 // ─── Age groups (orthogonal claim, EUDI-aligned) ──────────────────────────────
 //

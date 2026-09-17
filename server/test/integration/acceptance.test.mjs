@@ -411,7 +411,9 @@ test('AK-19 (approve): scope without openid → 400; unknown client → 400; gar
 
   const noOpenid = await approve(token, clientId, 'email', challenge);
   assert.equal(noOpenid.status, 400, noOpenid.text);
-  assert.equal(noOpenid.json.error, 'openid scope required');
+  // AP2-33 (#175): RFC 6749 code + human text in error_description.
+  assert.equal(noOpenid.json.error, 'invalid_scope');
+  assert.match(noOpenid.json.error_description, /openid/);
 
   const unknownClient = await approve(token, 'does-not-exist', 'openid email', challenge);
   assert.equal(unknownClient.status, 400, unknownClient.text);

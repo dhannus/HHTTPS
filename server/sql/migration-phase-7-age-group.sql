@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- HHTTPS — Migration phase 7: Age group (orthogonal, EUDI-aligned)
 --
@@ -17,9 +29,6 @@
 --
 -- Idempotent: safe to run multiple times (ADD COLUMN IF NOT EXISTS).
 --
--- IMPORTANT: run this migration AS THE APP USER, not postgres:
---   PGPASSWORD=$DB_PASSWORD psql -U hhttps -d hhttps -h localhost \
---     -f server/sql/migration-phase-7-age-group.sql
 -- ════════════════════════════════════════════════════════════════════════════
 
 ALTER TABLE authorization_codes

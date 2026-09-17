@@ -1,11 +1,22 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ============================================================================
 -- HHTTPS — Migration Phase 9 (Projekt-Review 2026-09, Welle 0)
 -- ============================================================================
 -- Two sections (same convention as phase 8):
 --   1. BOOT-DDL  — idempotent DDL, applied by the server at boot when the
 --                  applied-check (webhooks.owner_user_id) fails.
---   2. OPERATOR  — run manually:  psql -U hhttps -d hhttps -f <this file>
---                  (psql runs BOTH sections; the DDL is idempotent).
+--   2. OPERATOR  — the data part; the migration runner applies it too.
 --
 -- Findings: AP5-16 / AP1-22 (webhooks bound to an owner, secrets never listed),
 --           AP2-01 / AP4-03 (refresh tokens bound to a platform),

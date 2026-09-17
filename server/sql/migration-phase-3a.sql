@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- HHTTPS Phase 3a — OAuth 2.0 / OpenID Connect Provider
 --
@@ -82,20 +94,8 @@ CREATE TABLE IF NOT EXISTS connected_platforms (
 CREATE INDEX IF NOT EXISTS idx_connections_user   ON connected_platforms(user_id);
 CREATE INDEX IF NOT EXISTS idx_connections_client ON connected_platforms(client_id);
 
--- ─── Stats counters ────────────────────────────────────────────────────────
-ALTER TABLE stats ADD COLUMN IF NOT EXISTS oauth_authorizations INTEGER DEFAULT 0;
-ALTER TABLE stats ADD COLUMN IF NOT EXISTS oauth_tokens_issued  INTEGER DEFAULT 0;
-ALTER TABLE stats ADD COLUMN IF NOT EXISTS oauth_logins         INTEGER DEFAULT 0;
-
--- ─── Grants for application user ───────────────────────────────────────────
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hhttps') THEN
-    ALTER TABLE oauth_clients         OWNER TO hhttps;
-    ALTER TABLE authorization_codes   OWNER TO hhttps;
-    ALTER TABLE connected_platforms   OWNER TO hhttps;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON
-      oauth_clients, authorization_codes, connected_platforms TO hhttps;
-    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO hhttps;
-  END IF;
-END$$;
+-- ─── Ownership / grants ────────────────────────────────────────────────────
+-- None (AP6-49, #200). The convention is: every migration runs AS THE APP
+-- USER via `node scripts/migrate.js`, so the app user owns what it creates.
+-- sql/ownership-hhttps.sql repairs installations where a historical
+-- `sudo -u postgres psql -f …` made postgres the owner.

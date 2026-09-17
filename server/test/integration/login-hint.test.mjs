@@ -55,10 +55,13 @@ async function authorize(clientId, extra = {}) {
   });
   const res = await fetch(`${srv.baseUrl}/hhttps/oauth/authorize?${q}`, { redirect: 'manual' });
   const body = await res.text();
-  // The consent page embeds `const params = new URLSearchParams("…");`
-  const m = body.match(/new URLSearchParams\((".*?")\)/);
-  const paramsStr = m ? JSON.parse(m[1]) : '';
-  const params = m ? new URLSearchParams(paramsStr) : null;
+  // AP2-31 (#165): the consent page carries its parameters in a JSON block
+  // (<script type="application/json" id="consent-config">), which the script
+  // in server/consent-client.js reads — nothing is interpolated into code.
+  const m = body.match(/id="consent-config">([\s\S]*?)<\/script>/);
+  const cfg = m ? JSON.parse(m[1]) : null;
+  const paramsStr = cfg ? cfg.params : '';
+  const params = cfg ? new URLSearchParams(paramsStr) : null;
   return { status: res.status, body, params, paramsStr };
 }
 
@@ -123,12 +126,19 @@ test('AK-30: consent page relogin() forwards login_hint/pseudonym and pre-fills 
   const clientId = await createClient();
   const { status, body } = await authorize(clientId, { login_hint: 'anna@example.org', pseudonym: 'Anna' });
   assert.equal(status, 200);
-  const fn = body.match(/function relogin\(\)\{([\s\S]*?)\n\}/);
-  assert.ok(fn, 'relogin() is defined in the consent page');
+  assert.doesNotMatch(body, /id="pseudoInput"[^>]*value=/, 'pseudonym is NOT interpolated into the HTML value attribute');
+
+  // AP2-31 (#165): the page's script is served as its own module — fetch the
+  // file the page actually loads instead of reading it out of the HTML.
+  const tag = body.match(/<script type="module" src="([^"]+)"><\/script>/);
+  assert.ok(tag, 'the consent page loads its script as a module');
+  const script = await (await fetch(new URL(tag[1], srv.baseUrl))).text();
+
+  const fn = script.match(/function relogin\(\) \{([\s\S]*?)\n {2}\}/);
+  assert.ok(fn, 'relogin() is defined in the consent script');
   assert.match(fn[1], /returnTo=/, 'relogin keeps returnTo');
   assert.match(fn[1], /login_hint/, 'relogin forwards login_hint');
   assert.match(fn[1], /pseudonym/, 'relogin forwards pseudonym');
   assert.match(fn[1], /encodeURIComponent/, 'values are URL-encoded');
-  assert.match(body, /getElementById\('pseudoInput'\)[\s\S]{0,120}params\.get\('pseudonym'\)/, '#pseudoInput is pre-filled via DOM from params');
-  assert.doesNotMatch(body, /id="pseudoInput"[^>]*value=/, 'pseudonym is NOT interpolated into the HTML value attribute');
+  assert.match(script, /getElementById\('pseudoInput'\)[\s\S]{0,160}params\.get\('pseudonym'\)/, '#pseudoInput is pre-filled via DOM from params');
 });

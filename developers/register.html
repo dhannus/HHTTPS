@@ -333,10 +333,10 @@ https://example.org/login/return"></textarea>
     const redirectUris = (raw.redirect_uris || '')
       .split('\n').map(s => s.trim()).filter(Boolean);
 
-    // Validate redirect URIs are HTTPS
-    const badRedirect = redirectUris.find(u => !/^https:\/\//i.test(u));
+    // AP5-48: same rule as the server (server/client-registration.js).
+    const badRedirect = redirectUris.find(u => !HHTTPS.rules.isValidRedirectUri(u));
     if (badRedirect) {
-      HHTTPS.ui.toast(`Redirect URI must be https://: ${badRedirect}`, 'error');
+      HHTTPS.ui.toast(`${HHTTPS.rules.REDIRECT_URI_HINT}: ${badRedirect}`, 'error');
       return;
     }
     if (redirectUris.length === 0) {

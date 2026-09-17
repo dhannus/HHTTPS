@@ -14,7 +14,7 @@
  * document) — never RAL0.
  */
 
-import { buildRoleClaim, guardReservedRole, resolveRole, RESERVED_REGISTRY } from './roles.taxonomy.js';
+import { buildRoleClaim, resolveRole, RESERVED_REGISTRY } from './roles.taxonomy.js';
 
 /**
  * @param {object} args
@@ -45,17 +45,6 @@ export function buildRoleEaaClaims({ roleInput = {}, ral = 2, humanVerified = tr
     ...(built.verification ? { role_verification: built.verification } : {})
   };
   return { ok: true, claims, role: built.role, ral: built.ral };
-}
-
-/**
- * Set HHTTPS-Role-* response headers (ASCII-safe; pass server.js's hdrSafe).
- */
-export function setRoleHeaders(res, { ral, role } = {}, hdrSafe = (v) => String(v)) {
-  if (!role) return;
-  if (role.id)    res.setHeader('HHTTPS-Role', hdrSafe(role.id));
-  if (role.label) res.setHeader('HHTTPS-Role-Label', hdrSafe(role.label));
-  if (typeof ral === 'number') res.setHeader('HHTTPS-RAL', String(ral));
-  if (role.taxonomy?.isco08) res.setHeader('HHTTPS-Role-ISCO08', hdrSafe(role.taxonomy.isco08));
 }
 
 /**

@@ -36,6 +36,10 @@ export async function startEudiploStub() {
     tokenCalls: 0,
     sessionGets: 0,          // GETs on ANY of the session-path candidates
     offerCalls: 0,
+    configPosts: [],         // request bodies of POST /verifier/config
+    configPatches: [],       // { id, body } of PATCH /verifier/config/:id
+    /** status POST /verifier/config answers (409 ⇒ "already exists") */
+    configCreateStatus: 201,
     issuerOffers: [],        // request bodies of POST /issuer/offer
     lastAuthorization: null,
     /** token values that must be answered with 401 (AP4-10 cache invalidation) */
@@ -63,8 +67,14 @@ export async function startEudiploStub() {
     const bearer = String(req.headers.authorization || '').replace(/^Bearer /, '');
     if (state.rejectTokens.has(bearer)) return send(res, 401, { error: 'invalid_token' });
 
-    if (req.method === 'POST' && p === '/verifier/config') { await readBody(req); return send(res, 201, {}); }
-    if (req.method === 'PATCH' && p.startsWith('/verifier/config/')) { await readBody(req); return send(res, 200, {}); }
+    if (req.method === 'POST' && p === '/verifier/config') {
+      state.configPosts.push(await readBody(req));
+      return send(res, state.configCreateStatus, state.configCreateStatus === 409 ? { error: 'already exists' } : {});
+    }
+    if (req.method === 'PATCH' && p.startsWith('/verifier/config/')) {
+      state.configPatches.push({ id: decodeURIComponent(p.slice('/verifier/config/'.length)), body: await readBody(req) });
+      return send(res, 200, {});
+    }
     if (req.method === 'POST' && p === '/verifier/offer') {
       state.offerCalls += 1;
       await readBody(req);

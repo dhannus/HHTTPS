@@ -1,11 +1,22 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ============================================================================
 -- HHTTPS — Migration Phase 10 (Projekt-Review 2026-09, Welle 2 / AP6)
 -- ============================================================================
 -- Two sections (same convention as phase 8 and 9):
 --   1. BOOT-DDL  — idempotent DDL, applied by the server at boot when the
 --                  applied-check (db.js: phase10SchemaApplied) fails.
---   2. OPERATOR  — run manually:  psql -U hhttps -d hhttps -f <this file>
---                  (psql runs BOTH sections; the DDL is idempotent).
+--   2. OPERATOR  — the data part; the migration runner applies it too.
 --
 -- Findings:
 --   AP6-06 (#73)  email_verifications.code was created only by a
@@ -24,10 +35,6 @@
 --   AP5 (Welle 2) the workload-identity module was deleted in this wave; its
 --                 table is dropped in the OPERATOR section.
 --
--- Run AS THE APP USER (hhttps), not as postgres. If an older install has
--- postgres-owned tables (the former superuser fallback, AP6-08 / #85), first
--- run server/sql/ownership-hhttps.sql as postgres — otherwise the statements
--- below fail with "must be owner of …".
 -- ════════════════════════════ 1. BOOT-DDL ══════════════════════════════════
 
 -- ─── AP6-06: the `code` column is part of the schema ────────────────────────

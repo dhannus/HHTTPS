@@ -1,3 +1,15 @@
+-- ─── HOW TO RUN (uniform for every file in sql/ — AP6-49, #200) ─────
+--   cd /var/www/hhttps && node scripts/migrate.js
+-- That runner is the ONE supported way (db.js: MIGRATIONS is the registry,
+-- `schema_migrations` the ledger). It applies pending files in order AS THE
+-- APP USER. Do NOT use `sudo -u postgres psql -f …`: postgres then owns the
+-- objects and the app fails on the next ALTER with "must be owner of …".
+-- sql/ownership-hhttps.sql repairs an installation where that happened.
+-- Consequence of the convention: no file here carries OWNER/GRANT blocks.
+-- Files with a "BOOT-DDL / OPERATOR" split: the runner applies BOTH sections;
+-- the server applies only the BOOT-DDL part at boot.
+-- ─────────────────────────────────────────────────────────────────────────
+
 -- ════════════════════════════════════════════════════════════════════════════
 -- HHTTPS Phase 2.5 — Signatures with Domain Binding
 --
@@ -81,29 +93,8 @@ INSERT INTO reserved_slugs (slug) VALUES
   ('api'), ('www'), ('mail'), ('email')
 ON CONFLICT (slug) DO NOTHING;
 
--- Stats counter
-ALTER TABLE stats ADD COLUMN IF NOT EXISTS signatures_created INTEGER DEFAULT 0;
-ALTER TABLE stats ADD COLUMN IF NOT EXISTS signatures_verified INTEGER DEFAULT 0;
-ALTER TABLE stats ADD COLUMN IF NOT EXISTS signatures_revoked  INTEGER DEFAULT 0;
-
--- ════════════════════════════════════════════════════════════════════════════
--- Grant ownership to the application user.
---
--- When this script is executed via `sudo -u postgres psql -f ...`, the new
--- tables are created with the postgres superuser as owner. Without this
--- block, the application user `hhttps` would get "permission denied" on
--- INSERT/UPDATE. We grant explicit ownership so future ALTER statements
--- also work without manual intervention.
---
--- Skips silently if the role doesn't exist (e.g. when running on a dev box
--- with a different user). Safe to re-run.
--- ════════════════════════════════════════════════════════════════════════════
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hhttps') THEN
-    ALTER TABLE signatures      OWNER TO hhttps;
-    ALTER TABLE reserved_slugs  OWNER TO hhttps;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON signatures      TO hhttps;
-    GRANT SELECT, INSERT, UPDATE, DELETE ON reserved_slugs  TO hhttps;
-  END IF;
-END$$;
+-- ─── Ownership / grants ────────────────────────────────────────────────────
+-- None (AP6-49, #200). The convention is: every migration runs AS THE APP
+-- USER via `node scripts/migrate.js`, so the app user owns what it creates.
+-- sql/ownership-hhttps.sql repairs installations where a historical
+-- `sudo -u postgres psql -f …` made postgres the owner.

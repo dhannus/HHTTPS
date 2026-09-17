@@ -1,113 +1,108 @@
 /**
- * HHTTPS Extension — Background Service Worker (v1.2.0)
+ * HHTTPS Extension — Background Service Worker
+ *
+ * AP8-48 (#249): the version is NOT repeated here. `chrome.runtime.getManifest()
+ * .version` is the single source; manifest.json is the only place it is written.
  *
  * Identity-first architecture:
  *   - Stores the user's HHTTPS identity (token + refresh token + role)
  *   - Auto-refreshes tokens 5 minutes before expiry via chrome.alarms
  *   - Supports multiple identities (different roles, e.g. citizen + developer)
- *   - Tracks per-tab page HHTTPS state (separate concern from identity)
- *   - Responds to popup queries about identity and current page
+ *   - Responds to popup queries about the identity
+ *   - Signs selected text through the context menu
+ *
+ * AP8-45 (#240): the per-tab page-state cache, the message that fed it and
+ * the query that read it back were removed — nothing ever read them, because
+ * the popup asks the tab directly (GET_PAGE_STATE). The unused logout
+ * message went with them: the popup revokes instead of just removing.
+ * AP8-53 (#249): ONE message router instead of three listeners, and the issuer
+ * base comes from lib/identity.js instead of six inline replace() calls.
  */
 
-// ─── Storage keys ────────────────────────────────────────────────────────────
-const STORAGE_IDENTITIES = 'hhttps_identities';   // array of identity objects
-const STORAGE_ACTIVE_ID  = 'hhttps_active_id';    // id of currently-active identity
-const ISSUER_BASE        = 'https://hhttps.org';
-const REFRESH_AHEAD_MS   = 5 * 60_000;            // refresh 5 min before expiry
-
-// ─── Per-tab page state (for showing current page's HHTTPS support) ─────────
-const tabState = new Map();
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'loading') {
-    tabState.set(tabId, {
-      status: 'unknown',
-      url:    tab.url || ''
-    });
-    updateBadge(tabId);
-  }
-});
-
-chrome.tabs.onRemoved.addListener((tabId) => tabState.delete(tabId));
+import {
+  ISSUER_BASE, STORAGE_IDENTITIES, STORAGE_ACTIVE_ID, STORAGE_SIGN_MODE,
+  issuerBase, computeIdentityId, refreshFireAt,
+  alarmNameFor, idFromAlarmName, normaliseSignMode, bindingTypeFor, applyRefresh
+} from './lib/identity.js';
 
 // ─── Message router ──────────────────────────────────────────────────────────
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Identity captured from hhttps.org page
-  if (msg.type === 'IDENTITY_CAPTURED' && msg.identity) {
+// Every handler returns either undefined (answered synchronously) or a promise
+// (the router then keeps the message channel open and answers with its value).
+const HANDLERS = {
+  // Identity captured from the hhttps.org page.
+  IDENTITY_CAPTURED: (msg) => {
+    if (!msg.identity) return { ok: false, error: 'no identity' };
     // AP8-04 (#72): schedule the refresh for the STORED identity — only that
     // one carries the `id` the alarm name and refreshIdentity() need. The raw
     // page object has none, which produced `refresh_undefined` alarms.
-    storeIdentity(msg.identity)
-      .then((stored) => {
-        scheduleRefreshFor(stored);
-        updateAllBadges();
-        sendResponse({ ok: true });
-      })
-      .catch((e) => sendResponse({ ok: false, error: e.message }));
-    return true;
-  }
-
-  // Page state from any tab's content script
-  if (msg.type === 'PAGE_STATE' && sender.tab?.id) {
-    tabState.set(sender.tab.id, { ...msg.state, url: sender.tab.url });
-    updateBadge(sender.tab.id);
-    sendResponse({ ok: true });
-    return;
-  }
+    return storeIdentity(msg.identity).then((stored) => {
+      scheduleRefreshFor(stored);
+      updateBadge();
+      return { ok: true };
+    });
+  },
 
   // Popup asks: what's my identity?
-  if (msg.type === 'GET_ACTIVE_IDENTITY') {
-    getActiveIdentity()
-      .then((id) => sendResponse({ identity: id }))
-      .catch(() => sendResponse({ identity: null }));
-    return true;
-  }
+  GET_ACTIVE_IDENTITY: () =>
+    getActiveIdentity().then((id) => ({ identity: id })).catch(() => ({ identity: null })),
 
-  // Popup asks: all identities (for role-switch UI)
-  if (msg.type === 'GET_ALL_IDENTITIES') {
-    getAllIdentities()
-      .then((arr) => sendResponse({ identities: arr }))
-      .catch(() => sendResponse({ identities: [] }));
-    return true;
-  }
+  // Popup asks: all identities (for the role-switch UI)
+  GET_ALL_IDENTITIES: () =>
+    getAllIdentities().then((arr) => ({ identities: arr })).catch(() => ({ identities: [] })),
 
   // Popup: switch active identity
-  if (msg.type === 'SET_ACTIVE_IDENTITY' && msg.id) {
-    setActiveIdentity(msg.id)
-      .then(() => { updateAllBadges(); sendResponse({ ok: true }); })
-      .catch((e) => sendResponse({ ok: false, error: e.message }));
-    return true;
-  }
-
-  // Popup: remove identity (logout)
-  if (msg.type === 'REMOVE_IDENTITY' && msg.id) {
-    removeIdentity(msg.id)
-      .then(() => { updateAllBadges(); sendResponse({ ok: true }); })
-      .catch((e) => sendResponse({ ok: false, error: e.message }));
-    return true;
-  }
-
-  // Popup: get current page state
-  if (msg.type === 'GET_TAB_STATE' && msg.tabId) {
-    sendResponse(tabState.get(msg.tabId) || { status: 'none' });
-    return;
-  }
+  SET_ACTIVE_IDENTITY: (msg) => {
+    if (!msg.id) return { ok: false, error: 'no id' };
+    return setActiveIdentity(msg.id).then(() => { updateBadge(); return { ok: true }; });
+  },
 
   // Popup: refresh now (manual)
-  if (msg.type === 'REFRESH_NOW' && msg.id) {
-    refreshIdentity(msg.id)
-      .then((id) => sendResponse({ ok: true, identity: id }))
-      .catch((e) => sendResponse({ ok: false, error: e.message }));
-    return true;
-  }
+  REFRESH_NOW: (msg) => {
+    if (!msg.id) return { ok: false, error: 'no id' };
+    return refreshIdentity(msg.id).then((id) => ({ ok: true, identity: id }));
+  },
 
-  // Popup: revoke current token at server
-  if (msg.type === 'REVOKE_IDENTITY' && msg.id) {
-    revokeAndRemove(msg.id)
-      .then(() => { updateAllBadges(); sendResponse({ ok: true }); })
-      .catch((e) => sendResponse({ ok: false, error: e.message }));
-    return true;
+  // Popup: revoke the current token at the server, then forget it
+  REVOKE_IDENTITY: (msg) => {
+    if (!msg.id) return { ok: false, error: 'no id' };
+    return revokeAndRemove(msg.id).then(() => { updateBadge(); return { ok: true }; });
+  },
+
+  // Popup: signature mode preference. AP8-44 (#237): the context menu really
+  // reads this now — there is one menu entry, and it signs in the stored mode.
+  GET_SIGN_MODE: () => getSignMode().then((mode) => ({ mode })),
+  SET_SIGN_MODE: (msg) => {
+    if (!msg.mode) return { ok: false, error: 'no mode' };
+    return chrome.storage.local.set({ [STORAGE_SIGN_MODE]: normaliseSignMode(msg.mode) })
+      .then(() => ({ ok: true }));
+  },
+
+  // Content script: text to sign, coming back from REQUEST_TEXT_FOR_SIGN.
+  SIGN_REQUEST: (msg, sender) => {
+    if (msg.text == null || !msg.domain) return { ok: false, error: 'no text or domain' };
+    const tabId = sender.tab?.id;
+    return createSignatureSlug(msg.text, msg.domain, msg.mode)
+      .then((marker) => {
+        if (tabId) chrome.tabs.sendMessage(tabId, { type: 'INSERT_SIGNATURE', mode: msg.mode, marker });
+        return { ok: true };
+      })
+      .catch((e) => {
+        if (tabId) chrome.tabs.sendMessage(tabId, { type: 'SIGN_ERROR', error: e.message });
+        return { ok: false, error: e.message };
+      });
   }
+};
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  const handler = msg && HANDLERS[msg.type];
+  if (!handler) return;
+  let result;
+  try { result = handler(msg, sender); } catch (e) { sendResponse({ ok: false, error: e.message }); return; }
+  if (result && typeof result.then === 'function') {
+    result.then(sendResponse, (e) => sendResponse({ ok: false, error: e.message }));
+    return true;   // keep the channel open
+  }
+  sendResponse(result);
 });
 
 // ─── Identity storage primitives ─────────────────────────────────────────────
@@ -160,44 +155,17 @@ async function removeIdentity(id) {
   }
 }
 
-function computeIdentityId(identity) {
-  // AP8-05 (#80): the id used to be `issuer#role`. Since v0.5 the server no
-  // longer echoes a role (`role: null`), so every identity — human AND bot —
-  // collapsed onto `issuer#unknown` and overwrote the previous one. The id is
-  // now taken from the signed token: actor type plus the stable subject
-  // (`userId` for humans, `operatorId` for machines). Both are pseudonymous,
-  // and both survive a re-issuance, so re-issuing replaces the right entry.
-  const issuer  = identity.issuer || 'hhttps://hhttps.org';
-  const payload = decodeJwtPayload(identity.token) || {};
-  const actor   = payload.actorType || identity.actorType
-                || (payload.human === false ? 'bot' : payload.human === true ? 'human' : 'unknown');
-  const subject = payload.userId || payload.operatorId || payload.sub || payload.jti
-                || identity.role || 'unknown';
-  return `${issuer}#${actor}#${subject}`;
-}
-
 // ─── Auto-refresh ────────────────────────────────────────────────────────────
-async function scheduleRefreshFor(identity) {
-  if (!identity?.refreshToken) return;
-  try {
-    const payload = decodeJwtPayload(identity.token);
-    if (!payload?.exp) return;
-    const expMs   = payload.exp * 1000;
-    const fireAt  = expMs - REFRESH_AHEAD_MS;
-    const alarmName = `refresh_${identity.id}`;
-    if (fireAt <= Date.now() + 1000) {
-      refreshIdentity(identity.id).catch(() => {});
-      return;
-    }
-    chrome.alarms.create(alarmName, { when: fireAt });
-  } catch (e) {}
+function scheduleRefreshFor(identity) {
+  const fireAt = refreshFireAt(identity);
+  if (fireAt === null) return;
+  if (fireAt <= Date.now()) { refreshIdentity(identity.id).catch(() => {}); return; }
+  try { chrome.alarms.create(alarmNameFor(identity.id), { when: fireAt }); } catch (e) { /* no alarms API */ }
 }
 
 chrome.alarms?.onAlarm.addListener((alarm) => {
-  if (alarm.name.startsWith('refresh_')) {
-    const id = alarm.name.replace(/^refresh_/, '');
-    refreshIdentity(id).catch(() => {});
-  }
+  const id = idFromAlarmName(alarm.name);
+  if (id) refreshIdentity(id).catch(() => {});
 });
 
 async function refreshIdentity(id) {
@@ -207,8 +175,7 @@ async function refreshIdentity(id) {
   const ident = list[idx];
   if (!ident.refreshToken) throw new Error('no refresh token');
 
-  const issuerBase = (ident.issuer || ISSUER_BASE).replace(/^hhttps:\/\//, 'https://').replace(/\/$/, '');
-  const res = await fetch(`${issuerBase}/hhttps/token/refresh`, {
+  const res = await fetch(`${issuerBase(ident)}/hhttps/token/refresh`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ refreshToken: ident.refreshToken })
@@ -220,16 +187,8 @@ async function refreshIdentity(id) {
   const data = await res.json();
   if (!data.token) throw new Error('no token in refresh response');
 
-  // Update identity with new tokens
-  list[idx] = {
-    ...ident,
-    token:            data.token,
-    refreshToken:     data.refreshToken || ident.refreshToken,
-    trustScore:       data.role?.trustScore || ident.trustScore,
-    expiresAt:        data.expiresAt || null,
-    refreshExpiresAt: data.refreshExpiresAt || ident.refreshExpiresAt,
-    lastRefreshAt:    Date.now()
-  };
+  // AP3-18 (#116): the refresh token ROTATES — keep the new one.
+  list[idx] = applyRefresh(ident, data);
   await chrome.storage.local.set({ [STORAGE_IDENTITIES]: list });
   scheduleRefreshFor(list[idx]);
   return list[idx];
@@ -240,9 +199,8 @@ async function revokeAndRemove(id) {
   const ident = list.find(i => i.id === id);
   if (!ident) return;
 
-  const issuerBase = (ident.issuer || ISSUER_BASE).replace(/^hhttps:\/\//, 'https://').replace(/\/$/, '');
   try {
-    await fetch(`${issuerBase}/hhttps/revoke`, {
+    await fetch(`${issuerBase(ident)}/hhttps/revoke`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ token: ident.token })
@@ -254,14 +212,10 @@ async function revokeAndRemove(id) {
 }
 
 // ─── Badge logic ─────────────────────────────────────────────────────────────
-async function updateAllBadges() {
-  const tabs = await chrome.tabs.query({});
-  for (const t of tabs) {
-    if (t.id) updateBadge(t.id);
-  }
-}
-
-async function updateBadge(tabId) {
+// AP8-30 (#249): the badge shows the ACTIVE IDENTITY, which is the same on
+// every tab. It used to be set per tab, which meant one chrome.storage.local
+// read per open tab on every identity change. One read, one global badge.
+async function updateBadge() {
   const ident = await getActiveIdentity();
   let text, color, title;
 
@@ -278,121 +232,67 @@ async function updateBadge(tabId) {
   }
 
   try {
-    chrome.action.setBadgeText({ tabId, text });
-    chrome.action.setBadgeBackgroundColor({ tabId, color });
-    chrome.action.setTitle({ tabId, title });
-  } catch (e) {}
+    chrome.action.setBadgeText({ text });
+    chrome.action.setBadgeBackgroundColor({ color });
+    chrome.action.setTitle({ title });
+  } catch (e) { /* action API unavailable (tests, teardown) */ }
 }
 
-// ─── Utilities ───────────────────────────────────────────────────────────────
-function decodeJwtPayload(token) {
-  try {
-    const p = token.split('.')[1];
-    const padded = p + '='.repeat((4 - p.length % 4) % 4);
-    return JSON.parse(atob(padded.replace(/-/g, '+').replace(/_/g, '/')));
-  } catch (e) {
-    return null;
-  }
-}
-
-// ─── Lifecycle: rebuild refresh schedule on startup ──────────────────────────
-chrome.runtime.onStartup?.addListener(rebuildSchedules);
-chrome.runtime.onInstalled?.addListener(rebuildSchedules);
-
-async function rebuildSchedules() {
+// ─── Lifecycle ───────────────────────────────────────────────────────────────
+async function onWake() {
+  setupContextMenu();
   const list = await getAllIdentities();
   for (const ident of list) scheduleRefreshFor(ident);
-  updateAllBadges();
+  updateBadge();
+}
+chrome.runtime.onStartup?.addListener(onWake);
+chrome.runtime.onInstalled?.addListener(onWake);
+onWake();
+
+// ─── Context menu ────────────────────────────────────────────────────────────
+// AP8-44 (#237): ONE entry. Which flavour it signs in comes from the popup's
+// signature-mode switch, which is what the popup has always claimed to do —
+// two hard-wired menu entries meant the switch was written but never read.
+function setupContextMenu() {
+  try {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: 'hhttps-sign',
+        title: chrome.i18n.getMessage('ctxSign'),
+        contexts: ['editable']
+      });
+    });
+  } catch (e) { /* contextMenus API unavailable */ }
 }
 
-// Initial badge setup when service worker wakes
-updateAllBadges();
-
-// ─── Context Menu ────────────────────────────────────────────────────────────
-// Right-click on any editable field → "Mit HHTTPS signieren"
-chrome.runtime.onInstalled.addListener(() => {
-  setupContextMenu();
-});
-chrome.runtime.onStartup?.addListener(() => {
-  setupContextMenu();
-});
-
-function setupContextMenu() {
-  chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({
-      id: 'hhttps-sign-alpha',
-      title: chrome.i18n.getMessage('ctxSignAlpha'),
-      contexts: ['editable']
-    });
-    chrome.contextMenus.create({
-      id: 'hhttps-sign-beta',
-      title: chrome.i18n.getMessage('ctxSignBeta'),
-      contexts: ['editable']
-    });
-  });
+async function getSignMode() {
+  const r = await chrome.storage.local.get([STORAGE_SIGN_MODE]);
+  return normaliseSignMode(r[STORAGE_SIGN_MODE]);
 }
 
 chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
-  if (!tab?.id) return;
-  // Both menu items now go through the slug-based flow. The "alpha" item
-  // signs without strict text binding (loose hash only, edits-tolerant).
-  // The "beta" item additionally enforces strict text binding at verify time.
-  const mode = info.menuItemId === 'hhttps-sign-beta' ? 'beta' : 'alpha';
-
+  if (!tab?.id || info.menuItemId !== 'hhttps-sign') return;
   const ident = await getActiveIdentity();
   if (!ident) {
-    chrome.tabs.create({ url: 'https://hhttps.org' });
+    chrome.tabs.create({ url: ISSUER_BASE });
     return;
   }
-
+  const mode = await getSignMode();
   // Always need the current text + the page domain. Ask the content script.
-  try {
-    chrome.tabs.sendMessage(tab.id, {
-      type: 'REQUEST_TEXT_FOR_SIGN',
-      mode
-    });
-  } catch (e) {}
+  try { chrome.tabs.sendMessage(tab.id, { type: 'REQUEST_TEXT_FOR_SIGN', mode }); } catch (e) { /* no receiver */ }
 });
 
-// Receive text + domain from content script, call the slug endpoint, then
-// send the marker back to be inserted.
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'SIGN_REQUEST' && msg.text != null && msg.domain) {
-    createSignatureSlug(msg.text, msg.domain, msg.mode || 'alpha')
-      .then((marker) => {
-        chrome.tabs.sendMessage(sender.tab.id, {
-          type: 'INSERT_SIGNATURE',
-          mode: msg.mode,
-          marker
-        });
-        sendResponse({ ok: true });
-      })
-      .catch((e) => {
-        chrome.tabs.sendMessage(sender.tab.id, {
-          type: 'SIGN_ERROR',
-          error: e.message
-        });
-        sendResponse({ ok: false, error: e.message });
-      });
-    return true;
-  }
-});
-
-// Create a signature slug via the server. Both alpha and beta modes use
-// the same endpoint — the difference is that beta sets bindingType to
-// "document" (strict text hash check) while alpha uses "web" (domain only,
-// loose text hash for tamper-warning).
+// Create a signature slug via the server. Both modes use the same endpoint —
+// 'beta' sets bindingType "document" (strict text hash check) while 'alpha'
+// uses "web" (domain only, loose text hash for a tamper warning).
 async function createSignatureSlug(text, domain, mode) {
   const ident = await getActiveIdentity();
   if (!ident) throw new Error(chrome.i18n.getMessage('errNoIdentityStored'));
   if (!text || !text.trim()) throw new Error(chrome.i18n.getMessage('errNoTextToSign'));
   if (!domain) throw new Error(chrome.i18n.getMessage('errNoDomain'));
 
-  const bindingType = mode === 'beta' ? 'document' : 'web';
-
-  const issuerBase = (ident.issuer || ISSUER_BASE)
-    .replace(/^hhttps:\/\//, 'https://').replace(/\/$/, '');
-  const r = await fetch(`${issuerBase}/hhttps/signatures`, {
+  const signMode = normaliseSignMode(mode);
+  const r = await fetch(`${issuerBase(ident)}/hhttps/signatures`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -400,8 +300,8 @@ async function createSignatureSlug(text, domain, mode) {
     },
     body: JSON.stringify({
       text,
-      mode,
-      bindingType,
+      mode: signMode,
+      bindingType: bindingTypeFor(signMode),
       domain
     })
   });
@@ -414,19 +314,3 @@ async function createSignatureSlug(text, domain, mode) {
   return data.marker;
 }
 
-// ─── Sign mode preference (popup writes here, context menu reads) ────────────
-async function getSignMode() {
-  const r = await chrome.storage.local.get(['hhttps_sign_mode']);
-  return r.hhttps_sign_mode || 'alpha';
-}
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === 'GET_SIGN_MODE') {
-    getSignMode().then((m) => sendResponse({ mode: m }));
-    return true;
-  }
-  if (msg.type === 'SET_SIGN_MODE' && msg.mode) {
-    chrome.storage.local.set({ hhttps_sign_mode: msg.mode })
-      .then(() => sendResponse({ ok: true }));
-    return true;
-  }
-});

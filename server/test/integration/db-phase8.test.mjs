@@ -28,7 +28,7 @@ const hash = () => crypto.createHash('sha256').update('t3-' + rnd()).digest('hex
 
 test.before(async () => {
   if (skip) return;
-  await db.ensurePhase8Schema();
+  await db.ensureBootSchema();
 });
 
 test.after(async () => {
@@ -166,7 +166,7 @@ test('F-7: the operator data-update block appends "email" to allowed_scopes (che
      VALUES ($1, 'T3 legacy client', '[]', '["openid","role"]')`, [clientId]);
 
   // The boot DDL leaves the client untouched …
-  await db.ensurePhase8Schema();
+  await db.ensureBootSchema();
   let [row] = await sql('SELECT allowed_scopes FROM oauth_clients WHERE client_id = $1', [clientId]);
   assert.deepEqual(JSON.parse(row.allowed_scopes), ['openid', 'role']);
 

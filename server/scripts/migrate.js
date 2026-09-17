@@ -19,29 +19,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
+import { MIGRATIONS } from '../db.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SQL_DIR = path.join(here, '..', 'sql');
 
-// Fixed apply order — historical order of the phases, then the late patches
-// that server.js also applies at boot (BOOT_DDL_FILES in db.js).
-export const MIGRATION_ORDER = [
-  'schema.sql',
-  'migration-phase-2.5.sql',
-  'migration-phase-3a.sql',
-  'migration-phase-3b.sql',
-  'migration-phase-3b.1.sql',
-  'migration-phase-4-machine-roles.sql',
-  'migration-phase-5-external-verify.sql',
-  'migration-phase-6-workload-identity.sql',
-  'migration-phase-7-age-group.sql',
-  'migration-portal-oauth-client.sql',
-  'migration-phase-8-email-anchored-identity.sql',
-  'migration-phase-4b-machine-key-jkt.sql',
-  'migration-phase-3a1-authcodes-text.sql',
-  'migration-phase-9-review-welle-0.sql',
-  'migration-phase-10-review-welle-2.sql',
-];
+// The apply order is NOT defined here: `MIGRATIONS` in db.js is the single
+// registry (AP6-40, #160), so the boot-DDL safety net and this runner can
+// never drift apart. Entries marked `boot` there are the files a running
+// server applies itself; this runner always applies the WHOLE file.
+export const MIGRATION_ORDER = MIGRATIONS.map(m => m.file);
 
 export async function migrate({ client, mode = 'apply', log = console } = {}) {
   await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (

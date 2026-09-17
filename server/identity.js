@@ -42,6 +42,20 @@ export function emailAnchorHash(email, pepper = process.env.HHTTPS_VERIFICATION_
 }
 
 /**
+ * AP3-35 (#163): the storage contract of `email_verifications.email` —
+ * sha256(normalizeEmail(address)), hex. It is NOT the anchor hash: the
+ * verification row is short-lived and must be recomputable by the route that
+ * matches a confirmed code/token against its parked e-mail context, so it
+ * carries no pepper. email.js (writer) and server.js (reader) used to define
+ * this independently — `sha256(email.toLowerCase())` vs
+ * `sha256(normalizeEmail(email))` — and only agreed because /email/send
+ * happened to normalize first.
+ */
+export function emailVerificationHash(email) {
+  return crypto.createHash('sha256').update(normalizeEmail(email)).digest('hex');
+}
+
+/**
  * F-4 (S-5): in production the pepper is mandatory — without it every anchor
  * hash would be computed with the public 'dev-pepper' (dictionary-attackable)
  * and a later rotation would silently detach all anchors. Called once at boot.

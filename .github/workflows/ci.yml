@@ -79,6 +79,19 @@ jobs:
         working-directory: server
         run: npm test
 
+      # AP6-47 / AP6-48 / AP6-57 (Welle 3): the ops scripts were merged onto
+      # one provisioning path and one shared library — a syntax error in them
+      # only shows up during a deploy otherwise.
+      - name: Shell scripts syntax
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh server/scripts/*.sh server/scripts/lib/*.sh; do
+            [ -e "$f" ] || continue
+            bash -n "$f"
+            echo "ok $f"
+          done
+
       # Fails on a known high/critical advisory in the dependency tree.
       - name: Audit
         working-directory: server

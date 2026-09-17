@@ -1,24 +1,18 @@
 import 'dotenv/config';
-import { mountPopVerify } from './pop-verify.js'; // POP-VERIFY
-import { mountWpPluginRegistration } from './wp-plugin-registration.js'; // WP-PLUGIN-REG
 /**
- * HHTTPS v4.1 — Role Identity API (PostgreSQL persistence)
+ * HHTTPS — Role Identity API (PostgreSQL persistence)
  * iamhmn Initiative · daniel.hannuschka@tweakz.de
  * https://github.com/dhannus/HHTTPS
  *
- * v4.1 changes from v4:
- *   ✓ PostgreSQL persistence (sessions, tokens, credentials, etc.)
- *   ✓ Server restarts no longer wipe user state
- *   ✓ All v4 live bugs fixed and consolidated:
- *     - trust proxy 1 (express-rate-limit + nginx)
- *     - CSP allows inline event handlers (Helmet)
- *     - WebAuthn v9 API syntax (startRegistration/Authentication w/o optionsJSON)
- *     - Buffer.from(credentialId, 'base64url') for excludeCredentials/allowCredentials
- *     - authenticatorAttachment removed (allows YubiKey, cross-platform)
- *     - /hhttps/role/declare (no /v2 suffix)
- *   ✓ 14 roles (citizen, journalist, student, teacher, researcher, creative,
- *               developer, medical_professional, caregiver, lawyer, notary,
- *               civil_servant, politician, business, craftsman)
+ * AP1-47 (#220): the former header described the v4.1 release and a fixed
+ * catalogue of "14 roles" that no longer exists. Current model:
+ *   • Protocol version PROTOCOL_VERSION ('0.5.0'), advertised in every response.
+ *   • Identity is email-anchored; further verification methods (passkey, GitHub,
+ *     domain, EUDI) are additive — see VERIFICATION_METHODS in roles.js.
+ *   • Roles are ESCO-dynamic (roles.taxonomy.js). There is no role enumeration:
+ *     `citizen` is the base identity, every professional role arrives as an
+ *     EUDI (Q)EAA and carries a role-assurance level (RAL).
+ *   • State lives in PostgreSQL (db.js); restarts do not wipe user state.
  */
 
 import express           from 'express';
@@ -27,6 +21,7 @@ import helmet            from 'helmet';
 import rateLimit         from 'express-rate-limit';
 import { v4 as uuid }    from 'uuid';
 import crypto            from 'crypto';
+import { readFileSync }   from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
@@ -35,10 +30,11 @@ import {
   generateAuthenticationOptions, verifyAuthenticationResponse
 } from '@simplewebauthn/server';
 
+// AP1-50 (#191): VERIFICATION_LEVELS is imported as a LABEL MAP only — its
+// trustScore/level fields are legacy and no longer drive anything.
 import { ROLES, VERIFICATION_LEVELS, AGE_GROUPS, AGE_VERIFICATION_METHODS,
-         VERIFICATION_CHECKS, resolveVerification, ageGroupFromEudiClaims,
-         VERIFICATION_METHODS, computeVerification,
-         TRUST_BANDS, trustBand, HUMAN_CONFIRMED_THRESHOLD } from './roles.js';
+         ageGroupFromEudiClaims,
+         VERIFICATION_METHODS, computeVerification } from './roles.js';
 import {
   sendVerificationEmail, verifyEmailToken, verifyEmailCode, classifyDomain,
   sendPlatformRegistrationEmail, sendPlatformVerifiedEmail, sendPlatformRejectedEmail,
@@ -48,17 +44,43 @@ import { loadOrCreateKeys, signToken, verifyToken, getJWKS } from './keys.js';
 import { registerWebhook, removeWebhook, listWebhooks, fireEvent } from './webhooks.js';
 import * as db from './db.js';
 // T4: email-anchored identity helpers (AK-1, AK-2, AK-6, AK-7, AK-8, AK-16)
-import { normalizeEmail, emailAnchorHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
-import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect } from './oauth-params.js';
+import { normalizeEmail, emailAnchorHash, emailVerificationHash, isValidEmail, resolvePseudonym, sanitizePseudonym, methodFlags, buildIdentityClaims, resolvePasskeySession, assertPepperConfigured } from './identity.js';
+// AP3-46 (#199): ONE html escaper for server.js and email.js alike.
+import { escapeHtml } from './html.js';
+// AP3-36 (#169): ONE resolution of the issuer's public identity — email.js
+// reads exactly the same values, so mail links can no longer point elsewhere.
+import { RP_ID, ORIGIN, BASE_URL } from './config.js';
+import { validateAuthorizeParams, validateTokenParams, stateForErrorRedirect, validateScopes, SCOPES_KNOWN } from './oauth-params.js';
+// AP2-31 (#165): the consent page's labels — the same table its browser
+// script uses, so DE text is not written twice.
+import { CONSENT_I18N, scopeLabel } from './consent-client.js';
 
 // Role assurance (RAL) + ESCO-only taxonomy + the iamhmn-card issuance bridge.
 import {
-  resolveRole, resolveEsco, buildRoleClaim, sanitizeCustomRole,
-  guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery, CUSTOM_ROLE_ID
+  resolveRole, searchEsco, buildRoleClaim, sanitizeCustomRole,
+  guardReservedRole, RESERVED_REGISTRY, roleAssuranceDiscovery
 } from './roles.taxonomy.js';
+import { renderJsonPage } from './views/json-viewer.js';
 import { issueIamhmnCard, warnIfPidTrustUnbound } from './eudi-verifier/backend-client.js';
+// AP4-47 (#228): the internal verifier assertions — ONE canonical structure per
+// endpoint, shared with the signing side in eudi-verifier/index.js.
+import { verifyAssertion, ASSERTION_MAX_AGE_MS, ASSERTION_CLOCK_SKEW_MS } from './eudi-verifier/assertion.js';
 
 import { createEudiVerifierRouter } from './eudi-verifier/index.js';
+
+// Proof-of-Possession for machine tokens (AP5-45: jwkThumbprint lives here —
+// server.js used to carry a byte-identical second copy).
+import { mountPopVerify, jwkThumbprint } from './pop-verify.js';
+// Self-service OAuth-client registration for CMS plugins (WordPress first).
+import { mountWpPluginRegistration } from './wp-plugin-registration.js';
+// AP5-38 / AP5-39: the ONE set of registration helpers and the ONE DNS-TXT
+// ownership check — shared with wp-plugin-registration.js.
+import {
+  normalizeApexDomain, apexDomainFromUrl, emailMatchesPlatform, expectedDnsHost,
+  isValidHomepageUrl, isValidRedirectUri, generateClientId, randomToken,
+  WP_PLUGIN_OWNER_ID, PLATFORM_EMAIL_TOKEN_TTL_MS
+} from './client-registration.js';
+import { dnsCheckTooSoon, verifyDnsToken, DNS_MIN_INTERVAL_MS } from './dns-verify.js';
 
 // External provider verification (GitHub for now; extends to ORCID, LinkedIn)
 import {
@@ -70,9 +92,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PORT     = process.env.PORT    || 3000;
-const RP_ID    = process.env.RP_ID   || 'hhttps.org';
-const ORIGIN   = process.env.ORIGIN  || `https://${RP_ID}`;
-const BASE_URL = process.env.BASE_URL || ORIGIN;
+// RP_ID / ORIGIN / BASE_URL come from config.js (AP3-36).
 // AP2-15 (#114): key for the pairwise `sub` HMAC. The deterministic fallback
 // is for development only — in production the boot refuses without it (see
 // assertPairwiseSecretConfigured, analogous to assertPepperConfigured).
@@ -83,17 +103,12 @@ function assertPairwiseSecretConfigured(env = process.env) {
   }
 }
 
-// ── WIMSE: RFC 7638 JWK thumbprint for an EC P-256 public JWK ───────────────
-// Zero-PII: only the thumbprint is ever stored, never the key material.
-function jwkThumbprint(jwk) {
-  try {
-    if (!jwk || jwk.kty !== 'EC' || jwk.crv !== 'P-256' || !jwk.x || !jwk.y) return null;
-    const canon = JSON.stringify({ crv: 'P-256', kty: 'EC', x: jwk.x, y: jwk.y });
-    return crypto.createHash('sha256').update(canon).digest('base64url');
-  } catch { return null; }
-}
-
 const RP_NAME  = 'iamhmn HHTTPS';
+
+// AP1-49 (#220): the wire protocol version. It used to appear as the literal
+// '0.5.0' in ~27 places (headers, discovery, every `hhttps` envelope), so a
+// bump had to be applied by hand everywhere. Single source of truth now.
+const PROTOCOL_VERSION = '0.5.0';
 
 // Token TTLs
 const ACCESS_TTL  = 3600;          // 1 hour
@@ -116,6 +131,9 @@ app.set('json spaces', 2);
  * preferred), render the JSON inside a pretty syntax-highlighted HTML page
  * that matches the HHTTPS brand palette. API clients (curl, fetch, JSON.parse-
  * based libraries) get plain JSON as before.
+ *
+ * AP1-42 (#145): this function is now negotiation only — the ~230 lines of
+ * markup, CSS and copy script live in views/json-viewer.js.
  *
  * Usage:   sendJson(req, res, { ... });
  */
@@ -140,238 +158,16 @@ function sendJson(req, res, data, opts = {}) {
     return res.json(data);
   }
 
-  const title = opts.title || 'HHTTPS API';
-  const json  = JSON.stringify(data, null, 2);
-  // Server-side syntax highlight: wrap keys, strings, numbers, booleans, null
-  const highlighted = json
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/("(?:[^"\\]|\\.)*")(\s*:)/g, '<span class="k">$1</span>$2')
-    .replace(/:\s*("(?:[^"\\]|\\.)*")/g, ': <span class="s">$1</span>')
-    .replace(/\b(true|false|null)\b/g, '<span class="b">$1</span>')
-    .replace(/(:\s*)(-?\d+(?:\.\d+)?)/g, '$1<span class="n">$2</span>');
-
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title} — HHTTPS</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,400..600,30..100,0..1&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --cream:   #F8F1E4;  --paper:    #FCFAF5;  --sand: #EDE0C8;
-    --terra:   #C97D5B;  --terra-dp: #A86246;  --apricot: #F2B894;
-    --sage:    #A8B89E;  --sage-dp:  #889982;  --lavender: #B5A8D9;
-    --ink:     #2D2823;  --ink-soft: #4A413A;  --ink-mute: #7A6F62;
-    --line:    rgba(45, 40, 35, 0.1);
-    --code-bg: #2D2823;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Inter', system-ui, sans-serif;
-    background: var(--cream);
-    color: var(--ink);
-    line-height: 1.6;
-    min-height: 100vh;
-    padding: 32px 20px 80px;
-  }
-  .wrap { max-width: 980px; margin: 0 auto; }
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 16px;
-    margin-bottom: 24px;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--line);
-  }
-  .logo {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    text-decoration: none;
-    color: var(--ink);
-  }
-  .logo-mark {
-    width: 32px; height: 32px;
-    border-radius: 9px;
-    background: linear-gradient(135deg, var(--terra), var(--apricot));
-    position: relative;
-  }
-  .logo-mark::after {
-    content: 'H';
-    position: absolute; inset: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px;
-    color: var(--paper);
-  }
-  .logo-text {
-    font-family: 'Fraunces', serif;
-    font-variation-settings: "SOFT" 100, "WONK" 1;
-    font-weight: 500;
-    font-size: 20px;
-  }
-  .meta {
-    display: inline-flex; gap: 8px; flex-wrap: wrap;
-  }
-  .badge {
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 100px;
-    padding: 6px 14px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--ink-soft);
-  }
-  .badge .dot {
-    display: inline-block; width: 6px; height: 6px;
-    border-radius: 50%; background: var(--sage-dp);
-    margin-right: 6px; vertical-align: middle;
-  }
-  h1 {
-    font-family: 'Fraunces', serif;
-    font-variation-settings: "SOFT" 50, "WONK" 1;
-    font-weight: 400;
-    font-size: 36px;
-    letter-spacing: -0.02em;
-    margin-bottom: 4px;
-  }
-  h1 em {
-    font-style: italic;
-    color: var(--terra);
-    font-variation-settings: "SOFT" 100, "WONK" 1;
-  }
-  .sub {
-    color: var(--ink-mute);
-    font-size: 14px;
-    margin-bottom: 28px;
-    font-family: 'JetBrains Mono', monospace;
-  }
-  .toolbar {
-    display: flex; gap: 8px; flex-wrap: wrap;
-    margin-bottom: 16px;
-  }
-  .btn {
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 100px;
-    padding: 8px 16px;
-    font-family: 'Inter', sans-serif;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--ink-soft);
-    cursor: pointer;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    transition: all 0.15s;
-  }
-  .btn:hover {
-    background: var(--sand);
-    color: var(--ink);
-    transform: translateY(-1px);
-  }
-  .btn.primary {
-    background: var(--ink);
-    color: var(--cream);
-    border-color: var(--ink);
-  }
-  .btn.primary:hover {
-    background: var(--terra-dp);
-    border-color: var(--terra-dp);
-    color: var(--cream);
-  }
-  pre {
-    background: var(--code-bg);
-    color: #F2E8D5;
-    border-radius: 14px;
-    padding: 24px 28px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    line-height: 1.7;
-    overflow-x: auto;
-    box-shadow: 0 4px 20px rgba(45, 40, 35, 0.08);
-    tab-size: 2;
-  }
-  .k { color: #F2B894; }     /* keys */
-  .s { color: #B8C9A8; }     /* strings */
-  .n { color: #DDB4B0; }     /* numbers */
-  .b { color: #B5A8D9; font-style: italic; } /* booleans / null */
-  footer {
-    margin-top: 40px;
-    padding-top: 20px;
-    border-top: 1px solid var(--line);
-    color: var(--ink-mute);
-    font-size: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    display: flex;
-    gap: 18px;
-    flex-wrap: wrap;
-  }
-  footer a { color: var(--ink-soft); text-decoration: none; }
-  footer a:hover { color: var(--terra-dp); }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header>
-    <a class="logo" href="/">
-      <div class="logo-mark"></div>
-      <span class="logo-text">HHTTPS</span>
-    </a>
-    <div class="meta">
-      <span class="badge"><span class="dot"></span>v0.5.0</span>
-      <span class="badge">${req.path}</span>
-    </div>
-  </header>
-
-  <h1>${title}</h1>
-  <p class="sub">${opts.subtitle || 'Open protocol — open API. JSON below, formatted for humans.'}</p>
-
-  <div class="toolbar">
-    <a class="btn primary" href="${req.path}?format=json" target="_blank">
-      <span>↓</span> Raw JSON
-    </a>
-    <button class="btn" id="copyBtn" onclick="copyJson()">
-      <span>⎘</span> <span id="copyLabel">Kopieren</span>
-    </button>
-    <a class="btn" href="/spec">Spec</a>
-    <a class="btn" href="https://iamhmn.org" target="_blank">iamhmn.org →</a>
-  </div>
-
-  <pre id="json">${highlighted}</pre>
-
-  <footer>
-    <span>iamhmn Initiative</span>
-    <a href="https://github.com/dhannus/HHTTPS">GitHub</a>
-    <a href="/.well-known/jwks.json">JWKS</a>
-    <a href="/.well-known/hhttps-configuration">Discovery</a>
-    <a href="/hhttps/info">Info</a>
-    <a href="/hhttps/roles">Roles</a>
-  </footer>
-</div>
-<script>
-async function copyJson() {
-  try {
-    const r = await fetch('${req.path}?format=json');
-    const t = await r.text();
-    await navigator.clipboard.writeText(t);
-    document.getElementById('copyLabel').textContent = 'Kopiert!';
-    setTimeout(() => { document.getElementById('copyLabel').textContent = 'Kopieren'; }, 1500);
-  } catch (e) {
-    alert('Kopieren fehlgeschlagen: ' + e.message);
-  }
-}
-</script>
-</body>
-</html>`);
+  res.send(renderJsonPage({
+    data,
+    title:       opts.title,
+    subtitle:    opts.subtitle,
+    path:        req.path,
+    originalUrl: req.originalUrl,
+    version:     PROTOCOL_VERSION,
+    nonce:       res.locals.cspNonce
+  }));
 }
 
 app.use(express.json({ limit: '2mb' }));
@@ -382,8 +178,8 @@ app.use(express.json({ limit: '2mb' }));
 // its own Content-Type, so JSON endpoints are unaffected.
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
-// AP1-05: every HHTTPS-* header setHHTPPS() / setRoleHeaders() can emit must be
-// readable by cross-origin JavaScript. The per-method headers derive from the
+// AP1-05: every HHTTPS-* header setHHTPPS() can emit must be readable by
+// cross-origin JavaScript. The per-method headers derive from the
 // VERIFICATION_METHODS registry so a new method is exposed automatically.
 const HHTTPS_EXPOSED_HEADERS = [
   'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
@@ -392,26 +188,31 @@ const HHTTPS_EXPOSED_HEADERS = [
   'HHTTPS-Issuer','HHTTPS-Method',
   'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
   'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method',
-  // v0.5 verification surface + role assurance (roles.eaa.js setRoleHeaders)
+  // v0.5 verification surface + role assurance (roles.eaa.js buildRoleEaaClaims)
   'HHTTPS-Verified-Methods', 'HHTTPS-RAL', 'HHTTPS-Role-ISCO08',
   ...Object.values(VERIFICATION_METHODS).flatMap(m => [m.header, m.valueHeader].filter(Boolean))
 ];
 app.use(cors({ exposedHeaders: [...new Set(HHTTPS_EXPOSED_HEADERS)] }));
 
-// CRITICAL: scriptSrcAttr must allow 'unsafe-inline' so the existing onclick=
-// handlers in index.html keep working. Without this, all buttons silently fail.
-// AP1-25 (partial): third-party scripts are pinned to the two exact bundles
-// public/index.html loads instead of the whole of unpkg.com. Dropping
-// 'unsafe-inline' needs the inline handlers in public/*.html replaced first.
+// AP1-25 (#106): no 'unsafe-inline' for scripts any more. The sign-in page was
+// turned into real modules under public/js/ (AP8-34) and the three pages this
+// file renders itself carry a per-request nonce instead of inline handlers, so
+// an injected <script> or an injected onclick attribute no longer executes.
+// Third-party scripts stay pinned to the two exact bundles the sign-in page
+// loads rather than the whole of unpkg.com.
+app.use((req, res, next) => {
+  res.locals.cspNonce = crypto.randomBytes(16).toString('base64');
+  next();
+});
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", "'unsafe-inline'",
+      scriptSrc:  ["'self'", (req, res) => `'nonce-${res.locals.cspNonce}'`,
                    'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js',
                    'https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js',
                    'fonts.googleapis.com'],
-      scriptSrcAttr: ["'unsafe-inline'"],
+      scriptSrcAttr: ["'none'"],
       styleSrc:   ["'self'", "'unsafe-inline'", 'fonts.googleapis.com'],
       fontSrc:    ["'self'", 'fonts.gstatic.com'],
       connectSrc: ["'self'"],
@@ -428,8 +229,14 @@ app.use(helmet({
 // Rate limiters
 const rl = (max, windowMs = 60000) => rateLimit({
   max, windowMs, standardHeaders: true, legacyHeaders: false,
+  // AP1-13 (#220): `retryAfter` used to report the FULL window, so a client
+  // blocked in the last second of a 60-minute window was told to wait an hour.
+  // Report the time left in the current window, as the standard headers do.
   handler: (req, res) => res.status(429).json({
-    error: 'Rate limit exceeded.', retryAfter: Math.ceil(windowMs / 1000)
+    error: 'Rate limit exceeded.',
+    retryAfter: req.rateLimit?.resetTime
+      ? Math.max(1, Math.ceil((req.rateLimit.resetTime.getTime() - Date.now()) / 1000))
+      : Math.ceil(windowMs / 1000)
   })
 });
 
@@ -517,7 +324,12 @@ function readIdentityCookie(req) {
     const i = part.indexOf('=');
     if (i === -1) continue;
     if (part.slice(0, i).trim() === ID_COOKIE) {
-      return decodeURIComponent(part.slice(i + 1).trim());
+      // AP3-07 (#199) / AP1-01 (#220): a malformed percent-escape ("%zz") makes
+      // decodeURIComponent throw. This runs in middleware on EVERY request, so
+      // one bad cookie used to turn every route into a 500 until the browser
+      // dropped it. An undecodable cookie is simply not an identity.
+      try { return decodeURIComponent(part.slice(i + 1).trim()); }
+      catch { return null; }
     }
   }
   return null;
@@ -537,6 +349,29 @@ async function isIdentityCookieRevoked(jti) {
   return true;
 }
 
+// AP1-62 (#220): the mapping "decoded identity token → setHHTPPS options" lived
+// in two places (the identity-cookie middleware and /hhttps/check) and the
+// copies had drifted: the cookie path never emitted the per-method headers,
+// although the cookie carries the same signed `verified_methods` claim. One
+// mapping, one surface.
+function headerOptsFromToken(d) {
+  const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
+  return {
+    status:     'verified',
+    human:      true,
+    actorType:  'human',
+    role:       d.role || null,
+    roleLevel:  d.roleLevel || null,
+    trustScore: d.trustScore ?? 0,
+    method:     d.method || 'webauthn-passkey',
+    verifiedMethods: methods.length ? methods : null,
+    domainValue: d.domain_name || null,
+    ageGroup:              d.age_group || null,
+    ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
+    ageVerificationMethod: d.age_verification_method || null
+  };
+}
+
 // Advertise HHTTPS on every static/landing response. If the visitor carries a
 // valid identity cookie (i.e. they logged in on hhttps.org), surface their real
 // identity in the headers; otherwise emit the issuer-level headers. We never
@@ -548,7 +383,7 @@ async function isIdentityCookieRevoked(jti) {
 // back from revocation), so a revoke takes effect immediately while a stale
 // cookie that keeps being sent costs exactly one query.
 app.use(async (req, res, next) => {
-  res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
+  res.setHeader('HHTTPS-Protocol-Version', PROTOCOL_VERSION);
 
   const cookieToken = readIdentityCookie(req);
   if (cookieToken) {
@@ -558,18 +393,7 @@ app.use(async (req, res, next) => {
         throw new Error('not an identity token');
       }
       if (await isIdentityCookieRevoked(d.jti)) throw new Error('token_revoked');
-      setHHTPPS(res, {
-        status:     'verified',
-        human:      true,
-        actorType:  'human',
-        role:       d.role,
-        roleLevel:  d.roleLevel,
-        trustScore: d.trustScore ?? 0,
-        method:     d.method || 'webauthn-passkey',
-        ageGroup:              d.age_group || null,
-        ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
-        ageVerificationMethod: d.age_verification_method || null
-      });
+      setHHTPPS(res, headerOptsFromToken(d));
       return next();
     } catch {
       // Expired/invalid/revoked/foreign cookie token → issuer headers, cookie cleared.
@@ -591,11 +415,23 @@ app.use(express.static(join(__dirname, 'public')));
 // EUDI claims never reached the browser cookie — the upgrade runs server-to-server).
 app.use('/eudi', createEudiVerifierRouter({ setIdentityCookie }));
 
+// AP5-46: these two used to be mounted inside main(), uneindented and tagged
+// with `// POP-VERIFY` / `// WP-PLUGIN-REG` patch markers. They are ordinary
+// route groups — they belong here, next to every other mount. Neither shares
+// a path prefix with a route below, so the order is unchanged in effect.
+//
+// AP5-05: PoP checks the token like every other route (signature + exp +
+// revocation + active), not just the signature.
+mountPopVerify(app, { db, checkTokenValid, BASE_URL });
+mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL });
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function setHHTPPS(res, opts = {}) {
+  // AP1-61 (#220): the `token` option was accepted and never used — the JWT is
+  // deliberately not a response header (see the NOTE below), so it is gone.
   const { status = 'unverified', human = false, actorType = 'unknown',
-          role = null, roleLevel = null, trustScore = 0, token = null,
+          role = null, roleLevel = null, trustScore = 0,
           method = 'none', machineOperator = null, machinePurpose = null,
           ageGroup = null, ageVerified = null, ageVerificationMethod = null,
           verifiedMethods = null, domainValue = null } = opts;
@@ -611,7 +447,7 @@ function setHHTPPS(res, opts = {}) {
     .replace(/[^\x20-\x7E]/g, '')   // drop any remaining non-ASCII / control chars
     .trim();
 
-  res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
+  res.setHeader('HHTTPS-Protocol-Version', PROTOCOL_VERSION);
   res.setHeader('HHTTPS-Status',           hdrSafe(status));
   res.setHeader('HHTTPS-Human',            String(human));
   res.setHeader('HHTTPS-Actor-Type',       hdrSafe(actorType));
@@ -630,6 +466,11 @@ function setHHTPPS(res, opts = {}) {
   if (machineOperator)   res.setHeader('HHTTPS-Machine-Operator', hdrSafe(machineOperator));
   if (machinePurpose)    res.setHeader('HHTTPS-Machine-Purpose',  hdrSafe(machinePurpose));
   // Age group is an orthogonal, optional claim — surface it only when present.
+  // AP1-51 (#196): HHTTPS-Age-Verified had two owners. The `ageVerified` option
+  // set it (possibly to 'false'), and the verified-methods loop below then
+  // overwrote it with 'true' whenever 'age' was in the list. The age options are
+  // the SINGLE owner now: they carry the real claim (including an explicit
+  // 'false'), and the loop skips the 'age' method.
   if (ageGroup)              res.setHeader('HHTTPS-Age-Group', hdrSafe(ageGroup));
   if (ageVerified !== null)  res.setHeader('HHTTPS-Age-Verified', String(ageVerified));
   if (ageVerificationMethod) res.setHeader('HHTTPS-Age-Method', hdrSafe(ageVerificationMethod));
@@ -645,6 +486,7 @@ function setHHTPPS(res, opts = {}) {
     for (const id of verifiedMethods) {
       const m = VERIFICATION_METHODS[id];
       if (!m || !m.header) continue;
+      if (id === 'age') continue;   // AP1-51: owned by the ageVerified option above
       res.setHeader(m.header, 'true');
       // Methods that carry a value (domain → the domain name) expose it too.
       if (m.valueHeader && id === 'domain' && domainValue) {
@@ -656,38 +498,30 @@ function setHHTPPS(res, opts = {}) {
 
 // ─── Signature helpers (Phase 2.5: Domain-bound slugs) ───────────────────────
 
-// Normalize a hostname to its "apex" form for binding purposes.
-// reddit.com, www.reddit.com, old.reddit.com, np.reddit.com → "reddit.com"
-// This is heuristic and uses a small public-suffix list for the common cases.
-// Not as bulletproof as the full PSL but covers 99% of real domains.
-const TWO_PART_TLDS = new Set([
-  'co.uk', 'co.jp', 'co.kr', 'co.nz', 'co.za', 'co.in', 'co.il',
-  'com.au', 'com.br', 'com.cn', 'com.mx', 'com.tr', 'com.tw', 'com.ar',
-  'org.uk', 'org.au', 'net.au', 'gov.uk', 'gov.au', 'ac.uk', 'ac.jp',
-  'or.jp', 'ne.jp'
-]);
-
-function normalizeApexDomain(hostname) {
-  if (!hostname || typeof hostname !== 'string') return null;
-  let h = hostname.toLowerCase().trim();
-  // Strip protocol and path if accidentally included
-  h = h.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
-  if (!/^[a-z0-9.\-]+$/.test(h)) return null;
-  const parts = h.split('.').filter(Boolean);
-  if (parts.length < 2) return parts.join('.') || null;
-  // Check two-part TLD
-  if (parts.length >= 3) {
-    const lastTwo = parts.slice(-2).join('.');
-    if (TWO_PART_TLDS.has(lastTwo)) {
-      return parts.slice(-3).join('.');
-    }
-  }
-  return parts.slice(-2).join('.');
-}
+// normalizeApexDomain / TWO_PART_TLDS moved to ./client-registration.js
+// (AP5-38): the WordPress-plugin path carried a second, shorter suffix list,
+// so the same host resolved to two different apexes depending on the door.
+// AP1-07 / AP1-18 (#220) hardened the same function there: RFC 1035 length
+// limits and a rejection of IP literals (192.168.1.10 used to normalise to the
+// nonsense apex "1.10").
 
 // Slug generator: 12-char Crockford Base32 with prefix "hp-" (HHTTPS signature).
 // Avoids 0/O/1/I confusion. Example: "hp-7K2-XQ9NMR-3F"
+// AP1-63 (#220): the signature limits used to be bare literals at the call site.
+const MAX_SIGNABLE_TEXT   = 100_000;  // chars accepted by sign-text / signatures
+const TEXT_PREVIEW_MAX    = 120;      // chars stored as signatures.text_preview
+const REVOKE_REASON_MAX   = 120;      // signatures.revoke_reason VARCHAR(120)
+const BATCH_SLUGS_MAX     = 100;      // slugs per /hhttps/signatures/batch call
+const SLUG_ATTEMPTS_MAX   = 5;        // collision retries before giving up
+
 const SLUG_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+// AP1-44 (#161): the slug validator used to be inlined four times as
+// /^hp-[A-Z0-9\-]+$/i (with a needless escape, flagged by ESLint). One
+// constant next to the generator, so validator and generator stay in step.
+// Deliberately kept permissive on length/alphabet: slugs issued by older
+// builds must keep resolving. Character class widened only syntactically
+// (the `-` moved to the end), the accepted set is unchanged.
+const SLUG_RE = /^hp-[A-Z0-9-]+$/i;
 function generateSlug() {
   const bytes = crypto.randomBytes(12);
   let out = 'hp-';
@@ -705,6 +539,88 @@ function hashTextStrict(text) {
 function hashTextLoose(text) {
   const normalized = (text || '').trim().replace(/\s+/g, ' ').toLowerCase();
   return crypto.createHash('sha256').update(normalized, 'utf8').digest('hex');
+}
+
+// ─── Bearer / error helpers (AP1-43, AP1-14, AP1-48) ─────────────────────────
+
+/**
+ * AP1-14 (#220): read the Authorization header as RFC 7235 requires — the
+ * scheme is case-insensitive and may be followed by any amount of whitespace.
+ * The old `replace('Bearer ', '')` accepted exactly one spelling and silently
+ * handed the whole header through for every other one.
+ */
+function bearerFrom(req) {
+  const h = req.headers?.authorization;
+  if (typeof h !== 'string') return null;
+  const m = /^bearer\s+(.+)$/i.exec(h.trim());
+  return m ? m[1].trim() : null;
+}
+
+/**
+ * AP1-43 (#155): the three-line token lookup (HHTTPS-Token header →
+ * Authorization: Bearer → body.token) was copy-pasted into four handlers.
+ */
+function extractToken(req) {
+  const hdr = req.headers?.['hhttps-token'];
+  if (typeof hdr === 'string' && hdr) return hdr;
+  const bearer = bearerFrom(req);
+  if (bearer) return bearer;
+  const body = req.body?.token;
+  return typeof body === 'string' && body ? body : null;
+}
+
+/**
+ * AP1-43 (#155): the pseudonymous signer id of a decoded token.
+ *
+ * The old chain was `d.uid || d.userId || d.sub`. No token this server issues
+ * ever carries `uid`, and for an access token `sub` is the CONSTANT
+ * 'human-verified' — so the fallback produced a signer id shared by every user
+ * instead of an identity. Only `userId` identifies a signer; anything else
+ * yields null, and the callers answer 401.
+ */
+function signerIdOf(decoded) {
+  const id = decoded?.userId;
+  return typeof id === 'string' && id ? id : null;
+}
+
+/**
+ * AP1-48 (#184): one error shape for the token-bound endpoints. `error` keeps
+ * the human-readable text clients already log; `code` is the stable machine
+ * token to branch on.
+ */
+function apiError(res, status, code, detail, extra = {}) {
+  return res.status(status).json({ error: detail || code, code, ...extra });
+}
+
+/**
+ * AP1-48 (#184): every endpoint that runs `checkTokenValid` rejected a bad
+ * token differently — bare `{error}`, `{hhttps:{status:'invalid'},error}` or
+ * `{hhttps:{status:'invalid',human:false},error}`. One shape now; the
+ * human-readable `error` text is unchanged so existing clients keep working.
+ *
+ * AP1-29 (#220): only messages this server or jsonwebtoken produced are passed
+ * through. A DB/driver failure is not an authentication result — it answers
+ * 503 and its text stays on the server.
+ */
+const TOKEN_CHECK_MESSAGES = new Set([
+  'Token revoked', 'Token not active', 'Refresh token not active',
+  'Refresh token not accepted as bearer token'
+]);
+
+function tokenRejected(res, e, extra = {}) {
+  const jwtError = e?.name === 'JsonWebTokenError' || e?.name === 'TokenExpiredError' ||
+                   e?.name === 'NotBeforeError';
+  if (!jwtError && !TOKEN_CHECK_MESSAGES.has(e?.message)) {
+    console.error('[TOKEN] check failed:', e?.message);
+    return res.status(503).json({
+      hhttps: { status: 'invalid', ...extra },
+      error: 'token_check_failed', code: 'token_check_failed'
+    });
+  }
+  return res.status(401).json({
+    hhttps: { status: 'invalid', ...extra },
+    error: e.message, code: 'token_invalid'
+  });
 }
 
 async function issueAccessToken(payload) {
@@ -765,17 +681,35 @@ async function issueRefreshToken(userId, credId, role, surface = {}) {
   return tok;
 }
 
+/**
+ * AP3-34 (#156): THE definition of "this refresh jti is still active" — the
+ * stored row, or an error with the one wording both callers share. Used by
+ * checkTokenValid's refresh branch and by POST /hhttps/token/refresh, which
+ * had a verbatim copy of the lookup and the message.
+ */
+async function loadActiveRefreshToken(jti) {
+  const stored = await db.refreshTokens.get(jti);
+  if (!stored) throw new Error('Refresh-Token nicht aktiv');
+  return stored;
+}
+
 // AP5-01 / AP4-01: a refresh token is a credential for /hhttps/token/refresh
 // only. Every bearer-style check refuses it unless the caller opts in.
 async function checkTokenValid(token, { allowRefresh = false } = {}) {
   const decoded = verifyToken(token);
-  if (await db.revokedTokens.has(decoded.jti)) throw new Error('Token revoked');
-  if (decoded.sub === 'refresh' || decoded.sub === 'oauth_refresh') {
-    if (!allowRefresh) throw new Error('Refresh token not accepted as bearer token');
-    if (!await db.refreshTokens.get(decoded.jti)) throw new Error('Refresh-Token nicht aktiv');
-  } else {
-    if (!await db.tokens.exists(decoded.jti)) throw new Error('Token nicht aktiv');
-  }
+  const isRefresh = decoded.sub === 'refresh' || decoded.sub === 'oauth_refresh';
+
+  // AP1-38 (#220): the revocation lookup and the liveness lookup are
+  // independent — one roundtrip instead of two sequential ones. The order the
+  // errors are reported in is unchanged.
+  const [revoked, live] = await Promise.all([
+    db.revokedTokens.has(decoded.jti),
+    isRefresh ? db.refreshTokens.get(decoded.jti) : db.tokens.exists(decoded.jti)
+  ]);
+  if (revoked) throw new Error('Token revoked');
+  if (isRefresh && !allowRefresh) throw new Error('Refresh token not accepted as bearer token');
+  // AP1-48 (#184): these two were the only German strings in the token path.
+  if (!live) throw new Error(isRefresh ? 'Refresh token not active' : 'Token not active');
   return decoded;
 }
 
@@ -803,7 +737,7 @@ app.get('/.well-known/hhttps-configuration', (req, res) => {
   sendJson(req, res, {
     issuer:                  `https://${RP_ID}`,
     hhttps_issuer:           `hhttps://${RP_ID}`,
-    protocol_version:        '0.5.0',
+    protocol_version:        PROTOCOL_VERSION,
     base_url:                BASE_URL,
     jwks_uri:                `${BASE_URL}/.well-known/jwks.json`,
     check_endpoint:          `${BASE_URL}/hhttps/check`,
@@ -822,6 +756,11 @@ app.get('/.well-known/hhttps-configuration', (req, res) => {
     roles_model:             { base_identity: ROLES.citizen.id,
                                esco_suggest: `${BASE_URL}/hhttps/esco/suggest`,
                                discovery:    `${BASE_URL}/.well-known/hhttps-role-assurance` },
+    // AP1-16 (#220): the live verification surface. `supported_verification`
+    // used to list the legacy VERIFICATION_LEVELS catalogue, which no longer
+    // describes what this issuer can confirm. Kept alongside for one release so
+    // existing clients do not break, but clearly marked as legacy.
+    supported_verification_methods: Object.keys(VERIFICATION_METHODS),
     supported_verification:  Object.keys(VERIFICATION_LEVELS)
   }, {
     title:    'Discovery',
@@ -850,6 +789,7 @@ app.get('/.well-known/hhttps-role-assurance', (req, res) => {
 const ESCO_TIMEOUT_MS   = 4000;
 const ESCO_CACHE_TTL_MS = 5 * 60_000;
 const ESCO_CACHE_MAX    = 500;
+const ESCO_SUGGEST_LIMIT = 8;   // hits returned by the typeahead proxy
 const _escoCache = new Map(); // `${lang}:${q}` → { results, until }
 app.get('/hhttps/esco/suggest', limit.esco, async (req, res) => {
   const q = String(req.query.q || '').trim().slice(0, 80);
@@ -859,22 +799,21 @@ app.get('/hhttps/esco/suggest', limit.esco, async (req, res) => {
   const cached = _escoCache.get(cacheKey);
   if (cached && cached.until > Date.now()) return res.json({ results: cached.results, cached: true });
   try {
-    const url = `https://ec.europa.eu/esco/api/search?type=occupation&language=${lang}` +
-                `&text=${encodeURIComponent(q)}&full=false&limit=8`;
-    const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(ESCO_TIMEOUT_MS) });
-    if (!r.ok) return res.json({ results: [] });
-    const j = await r.json();
-    const hits = j?._embedded?.results || [];
+    // AP1-46 (#176): the ESCO URL and the `_embedded.results` unwrapping live in
+    // roles.taxonomy.js — this handler only adds the reserved-role guard, the
+    // cache and the wire shape.
+    const hits = await searchEsco(q, {
+      language: lang, limit: ESCO_SUGGEST_LIMIT, timeoutMs: ESCO_TIMEOUT_MS
+    });
     const results = hits.map(h => {
-      const label = h.title || h.preferredLabel || '';
-      const isco08 = h.code || null;
-      const g = guardReservedRole(label, isco08);
-      return { label, isco08, escoUri: h.uri || null, reserved: g.reserved, reservedKey: g.key || null };
+      const g = guardReservedRole(h.prefLabel, h.isco08);
+      return { label: h.prefLabel, isco08: h.isco08, escoUri: h.escoUri,
+               reserved: g.reserved, reservedKey: g.key || null };
     }).filter(x => x.label);
     if (_escoCache.size >= ESCO_CACHE_MAX) _escoCache.delete(_escoCache.keys().next().value);
     _escoCache.set(cacheKey, { results, until: Date.now() + ESCO_CACHE_TTL_MS });
     res.json({ results });
-  } catch (e) {
+  } catch {
     res.json({ results: [], error: 'esco_unreachable' });
   }
 });
@@ -914,7 +853,7 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
   res.setHeader('Cache-Control', `public, max-age=${INFO_CACHE_MS / 1000}`);
 
   sendJson(req, res, {
-    protocol: 'HHTTPS — Human-verified HTTPS', version: '0.5.0',
+    protocol: 'HHTTPS — Human-verified HTTPS', version: PROTOCOL_VERSION,
     initiative: 'iamhmn', contact: 'daniel.hannuschka@tweakz.de',
     github: 'github.com/dhannus/HHTTPS', demo: 'https://hhttps.org',
     features: ['webauthn', 'roles-esco-dynamic', 'email-verification', 'refresh-tokens',
@@ -941,7 +880,6 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
       'POST /hhttps/check':                     '★ Human/machine + role check',
       'GET  /hhttps/roles':                     'Role registry (ESCO-dynamic)',
       'POST /hhttps/session/start':             'Create a method-neutral session (step 1; optional pseudonym)',
-      'POST /hhttps/session/email/start':       'Alias of session/start (legacy name)',
       'POST /hhttps/email/send':                'Send the 6-digit verification code (step 2; email is the mandatory first method)',
       'POST /hhttps/email/confirm-code':        'Confirm the code in the same tab → session bound to the identity anchor (step 3)',
       'GET  /hhttps/email/verify':              'Confirm via magic link (same session only)',
@@ -961,7 +899,18 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
       'POST /hhttps/validate':                  'Validate token',
       'POST /hhttps/machine/{register,token}':  'Machine token issuance',
       'GET/POST/DELETE /hhttps/webhooks':       'Webhook management',
-      'GET  /hhttps/stats':                     'Public aggregated stats'
+      'GET  /hhttps/stats':                     'Public aggregated stats',
+      // AP1-60 (#220): the signature surface and the ESCO proxy were missing
+      // from this hand-maintained catalogue.
+      'GET  /.well-known/hhttps-role-assurance': 'Role-assurance discovery (RAL tiers, reserved registry)',
+      'GET  /hhttps/esco/suggest':              'ESCO occupation typeahead (?q=&lang=)',
+      'POST /hhttps/sign-text':                 'Bind a token to an exact text (Beta signing)',
+      'POST /hhttps/verify-text':               'Verify a text signature',
+      'POST /hhttps/signatures':                'Create a domain-bound slug signature',
+      'GET  /hhttps/s/{slug}':                  'Public signature verification (?domain=&textPreview=)',
+      'POST /hhttps/signatures/batch':          'Verify up to 100 slugs in one call',
+      'POST /hhttps/signatures/{slug}/revoke':  'Revoke a signature (signer only)',
+      'GET  /s/{slug}':                         'Short link → /hhttps/s/{slug}'
     }
   }, {
     title:    'API Info',
@@ -974,14 +923,12 @@ app.get('/hhttps/info', limit.info, async (req, res) => {
 app.post('/hhttps/check', limit.check, async (req, res) => {
   // AP1-33: counted in-process, flushed periodically — no write before the check.
   bumpStat('check_calls');
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
+  const token = extractToken(req);
 
   if (!token) {
     setHHTPPS(res, { status: 'unverified', human: false, actorType: 'unknown' });
     return res.json({
-      hhttps: { version: '0.5.0', human: false, actorType: 'unknown',
+      hhttps: { version: PROTOCOL_VERSION, human: false, actorType: 'unknown',
                 status: 'unverified', message: 'No HHTTPS token. Please verify.' }
     });
   }
@@ -995,7 +942,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
                        method: 'machine-token', machineOperator: d.operatorId,
                        machinePurpose: d.purpose });
       return res.json({
-        hhttps: { version: '0.5.0', human: false, actorType: 'bot',
+        hhttps: { version: PROTOCOL_VERSION, human: false, actorType: 'bot',
                   status: 'verified', trustScore: 0, method: 'machine-token' },
         machine: { operatorId: d.operatorId, operatorName: d.operatorName,
                    purpose: d.purpose, issuedAt: new Date(d.iat * 1000).toISOString() }
@@ -1004,17 +951,10 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
 
     const methods = Array.isArray(d.verified_methods) ? d.verified_methods : [];
 
-    setHHTPPS(res, { status: 'verified', human: true, actorType: 'human',
-                     role: d.role || null, roleLevel: d.roleLevel || null, trustScore: d.trustScore,
-                     token, method: d.method,
-                     verifiedMethods: methods.length ? methods : null,
-                     domainValue: d.domain_name || null,
-                     ageGroup:              d.age_group || null,
-                     ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
-                     ageVerificationMethod: d.age_verification_method || null });
+    setHHTPPS(res, headerOptsFromToken(d));
 
     return res.json({
-      hhttps: { version: '0.5.0', status: 'verified', human: true, actorType: 'human',
+      hhttps: { version: PROTOCOL_VERSION, status: 'verified', human: true, actorType: 'human',
                 method: d.method, trustScore: d.trustScore,
                 verifiedMethods: methods,
                 issuedAt: new Date(d.iat * 1000).toISOString(),
@@ -1045,7 +985,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     });
   } catch (e) {
     setHHTPPS(res, { status: 'invalid', human: false, actorType: 'unknown' });
-    return res.status(401).json({ hhttps: { status: 'invalid', human: false }, error: e.message });
+    return tokenRejected(res, e, { human: false });
   }
 });
 
@@ -1057,24 +997,25 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
 // Beta signing mode for sensitive content (contracts, formal statements).
 
 app.post('/hhttps/sign-text', limit.check, async (req, res) => {
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
+  const token = extractToken(req);
   const text = req.body?.text;
 
-  if (!token) return res.status(400).json({ error: 'token required' });
+  // AP1-48 (#184): a missing bearer is an authentication failure (401), the
+  // same answer /hhttps/signatures/:slug/revoke already gave. It used to be a
+  // 400 here and a 401 there for the identical condition.
+  if (!token) return apiError(res, 401, 'token_required', 'token required');
   if (typeof text !== 'string' || text.length === 0) {
-    return res.status(400).json({ error: 'text required' });
+    return apiError(res, 400, 'text_required', 'text required');
   }
-  if (text.length > 100_000) {
-    return res.status(400).json({ error: 'text too long (max 100k chars)' });
+  if (text.length > MAX_SIGNABLE_TEXT) {
+    return apiError(res, 400, 'text_too_long', 'text too long (max 100k chars)');
   }
 
   try {
     // First, verify the token is currently valid (signature + revocation + expiry)
     const d = await checkTokenValid(token);
     if (d.sub === 'machine') {
-      return res.status(403).json({ error: 'machine tokens cannot sign text' });
+      return apiError(res, 403, 'machine_token', 'machine tokens cannot sign text');
     }
 
     // Build a deterministic content hash
@@ -1096,7 +1037,7 @@ app.post('/hhttps/sign-text', limit.check, async (req, res) => {
     });
 
     return res.json({
-      hhttps:    { version: '0.5.0', mode: 'beta-text-bound' },
+      hhttps:    { version: PROTOCOL_VERSION, mode: 'beta-text-bound' },
       signature,                       // the JWT that proves text + identity
       textHash,                        // sha256 hex of the signed text
       role: {
@@ -1109,14 +1050,14 @@ app.post('/hhttps/sign-text', limit.check, async (req, res) => {
       validUntil: new Date(d.exp * 1000).toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
 app.post('/hhttps/verify-text', limit.check, async (req, res) => {
   const { signature, text } = req.body || {};
   if (!signature || typeof text !== 'string') {
-    return res.status(400).json({ error: 'signature and text required' });
+    return apiError(res, 400, 'signature_and_text_required', 'signature and text required');
   }
 
   try {
@@ -1125,7 +1066,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
     // throw TokenExpiredError and the branch below was unreachable).
     const d = verifyToken(signature, { ignoreExpiration: true });
     if (d.sub !== 'text-signature') {
-      return res.status(400).json({ error: 'not a text signature' });
+      return apiError(res, 400, 'not_a_text_signature', 'not a text signature');
     }
 
     // Recompute the hash and compare
@@ -1159,7 +1100,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
 
     const roleDef = ROLES[d.role] || ROLES.citizen;
     return res.json({
-      hhttps: { version: '0.5.0', status: 'verified', mode: 'beta-text-bound', match: true },
+      hhttps: { version: PROTOCOL_VERSION, status: 'verified', mode: 'beta-text-bound', match: true },
       match: true,
       role: {
         id: d.role,
@@ -1172,7 +1113,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
       validUntil: new Date(d.exp * 1000).toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ hhttps: { status: 'invalid' }, error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
@@ -1187,32 +1128,37 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
 const VALID_BINDING_TYPES = new Set(['web', 'email', 'document']);
 
 app.post('/hhttps/signatures', limit.check, async (req, res) => {
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
-  const { text, mode, bindingType, domain } = req.body || {};
+  const token = extractToken(req);
+  // AP1-61 (#220): `mode` was destructured and then silently dropped. The
+  // binding type is the only mode this endpoint has, so the field is ignored
+  // on purpose — named here so the next reader does not wire it up by accident.
+  const { text, bindingType, domain } = req.body || {};
 
-  if (!token) return res.status(400).json({ error: 'token required' });
+  // AP1-48 (#184): missing bearer → 401, like every other token-bound endpoint.
+  if (!token) return apiError(res, 401, 'token_required', 'token required');
   if (typeof text !== 'string' || text.length === 0) {
-    return res.status(400).json({ error: 'text required' });
+    return apiError(res, 400, 'text_required', 'text required');
   }
-  if (text.length > 100_000) {
-    return res.status(400).json({ error: 'text too long (max 100k chars)' });
+  if (text.length > MAX_SIGNABLE_TEXT) {
+    return apiError(res, 400, 'text_too_long', 'text too long (max 100k chars)');
   }
   const bType = VALID_BINDING_TYPES.has(bindingType) ? bindingType : 'web';
   if (bType === 'web' && (!domain || typeof domain !== 'string')) {
-    return res.status(400).json({ error: 'domain required for web binding' });
+    return apiError(res, 400, 'domain_required', 'domain required for web binding');
   }
 
   try {
     const d = await checkTokenValid(token);
     if (d.sub === 'machine') {
-      return res.status(403).json({ error: 'machine tokens cannot create signatures' });
+      return apiError(res, 403, 'machine_token', 'machine tokens cannot create signatures');
     }
+    // AP1-43 (#155): only a token carrying a userId identifies a signer.
+    const signerId = signerIdOf(d);
+    if (!signerId) return apiError(res, 401, 'token_invalid', 'token carries no signer identity');
 
     const apex = bType === 'web' ? normalizeApexDomain(domain) : null;
     if (bType === 'web' && !apex) {
-      return res.status(400).json({ error: 'invalid domain format' });
+      return apiError(res, 400, 'invalid_domain', 'invalid domain format');
     }
 
     // Generate unique slug (retry if collision — extremely rare with 32^10 space)
@@ -1220,8 +1166,8 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     do {
       slug = generateSlug();
       attempts++;
-      if (attempts > 5) {
-        return res.status(500).json({ error: 'slug generation failed; please retry' });
+      if (attempts > SLUG_ATTEMPTS_MAX) {
+        return apiError(res, 500, 'slug_generation_failed', 'slug generation failed; please retry');
       }
     } while (await db.signatures.slugExists(slug) || await db.signatures.isReservedSlug(slug));
 
@@ -1233,11 +1179,12 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     const roleDef = ROLES[roleId] || ROLES.citizen;
     const vlevel  = VERIFICATION_LEVELS[d.roleLevel] || {};
 
-    const textPreview = text.length <= 120 ? text : text.slice(0, 117) + '…';
+    const textPreview = text.length <= TEXT_PREVIEW_MAX
+      ? text : text.slice(0, TEXT_PREVIEW_MAX - 3) + '…';
 
     await db.signatures.create({
       id:              slug,
-      signerId:        d.uid || d.userId || d.sub,   // pseudonymous user id
+      signerId,                                       // pseudonymous user id
       role:            roleId,
       roleLabel:       roleDef.label,
       roleIcon:        roleDef.icon,
@@ -1256,7 +1203,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     await db.stats.increment('signatures_created');
 
     return res.json({
-      hhttps: { version: '0.5.0', mode: 'slug' },
+      hhttps: { version: PROTOCOL_VERSION, mode: 'slug' },
       id:      slug,
       marker:  `#hhttps:s:${slug}`,
       url:     `${BASE_URL}/s/${slug}`,
@@ -1273,16 +1220,68 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
       createdAt: new Date().toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
 // Public verify endpoint — anyone can check a slug.
+/**
+ * AP1-45 (#168): the status of a stored signature. The single-slug endpoint and
+ * the batch endpoint each used to carry their own copy of this ladder, and the
+ * copies had already drifted (the batch one never reported a revoke reason and
+ * used flat `expected`/`observed`). Both call this now; the two endpoints only
+ * differ in how they shape the result for the wire.
+ *
+ * Order matters: revoked beats a domain mismatch, which beats a text change.
+ *
+ * @param {object} sig                   row from db.signatures
+ * @param {object} [opts]
+ * @param {string|null} [opts.reqDomain] apex domain the caller observed
+ * @param {string|null} [opts.textPreviewB64] base64 of the text as seen now
+ * @returns {{status:string, revokedAt?:string, revokeReason?:string,
+ *            expected?:string, observed?:string, warning?:string}}
+ */
+function evaluateSignature(sig, { reqDomain = null, textPreviewB64 = null } = {}) {
+  if (sig.revoked_at) {
+    return { status: 'revoked', revokedAt: sig.revoked_at, revokeReason: sig.revoke_reason };
+  }
+
+  if (sig.binding_type === 'web' && reqDomain && sig.bound_domain &&
+      reqDomain !== sig.bound_domain) {
+    return {
+      status:   'wrong-domain',
+      expected: sig.bound_domain,
+      observed: reqDomain,
+      warning:  `This signature was issued for ${sig.bound_domain} but used on ${reqDomain}. Possible theft.`
+    };
+  }
+
+  // Text-tampering check — ONLY for `document` binding (Beta mode).
+  // Alpha mode (web binding) is by design an identity stamp, not a text seal:
+  // the user signs "as themselves on this domain"; edits to the surrounding
+  // text are permitted (typo fixes, additions, etc.). Forcing a hash match
+  // here produces false positives because mail clients / forums normalize
+  // whitespace, decode entities, hard-wrap lines, and so on.
+  if (sig.binding_type === 'document' && textPreviewB64) {
+    try {
+      // Strict hash for document binding — every byte counts.
+      const preview = Buffer.from(textPreviewB64, 'base64').toString('utf8');
+      if (hashTextStrict(preview) !== sig.text_hash_strict) {
+        return { status: 'text-modified', warning: 'The text was modified after signing.' };
+      }
+    } catch {
+      // Ignore preview parse errors — an undecodable preview proves nothing.
+    }
+  }
+
+  return { status: 'verified' };
+}
+
 // Optional ?domain= and ?textPreview= for binding + tamper-detection.
 app.get('/hhttps/s/:slug', async (req, res) => {
   const slug = (req.params.slug || '').trim();
-  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
-    return res.status(400).json({ error: 'invalid slug format' });
+  if (!SLUG_RE.test(slug)) {
+    return apiError(res, 400, 'invalid_slug', 'invalid slug format');
   }
   let sig;
   try {
@@ -1316,7 +1315,7 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 
   // Build response
   const out = {
-    hhttps:    { version: '0.5.0', status: 'verified' },
+    hhttps:    { version: PROTOCOL_VERSION, status: 'verified' },
     id:        sig.id,
     role: {
       id:    sig.role,
@@ -1341,50 +1340,33 @@ app.get('/hhttps/s/:slug', async (req, res) => {
     verifyCount: sig.verify_count + 1   // include this call
   };
 
-  // Revocation check
-  if (sig.revoked_at) {
-    out.hhttps.status = 'revoked';
-    out.revokedAt     = sig.revoked_at;
-    out.revokeReason  = sig.revoke_reason;
+  // AP1-45 (#168): one shared status ladder (see evaluateSignature).
+  const verdict = evaluateSignature(sig, {
+    reqDomain,
+    textPreviewB64: req.query.textPreview || null
+  });
+  out.hhttps.status = verdict.status;
+
+  if (verdict.status === 'revoked') {
+    out.revokedAt    = verdict.revokedAt;
+    out.revokeReason = verdict.revokeReason;
     return sendJson(req, res, out, {
       title: 'Signature revoked',
       subtitle: 'This signature was revoked by the signer.'
     });
   }
 
-  // Domain binding check
-  if (sig.binding_type === 'web' && reqDomain && sig.bound_domain &&
-      reqDomain !== sig.bound_domain) {
-    out.hhttps.status      = 'wrong-domain';
-    out.hhttps.expected    = sig.bound_domain;
-    out.hhttps.observed    = reqDomain;
-    out.warning            = `This signature was issued for ${sig.bound_domain} but used on ${reqDomain}. Possible theft.`;
+  if (verdict.status === 'wrong-domain') {
+    out.hhttps.expected = verdict.expected;
+    out.hhttps.observed = verdict.observed;
+    out.warning         = verdict.warning;
     return sendJson(req, res, out, {
       title: 'Wrong domain',
       subtitle: out.warning
     });
   }
 
-  // Text-tampering check — ONLY for `document` binding (Beta mode).
-  // Alpha mode (web binding) is by design an identity stamp, not a text seal:
-  // the user signs "as themselves on this domain"; edits to the surrounding
-  // text are permitted (typo fixes, additions, etc.). Forcing a hash match
-  // here produces false positives because mail clients / forums normalize
-  // whitespace, decode entities, hard-wrap lines, and so on.
-  if (sig.binding_type === 'document' && req.query.textPreview) {
-    try {
-      const preview = Buffer.from(req.query.textPreview, 'base64').toString('utf8');
-      // Strict hash for document binding — every byte counts.
-      const expectedStrict = sig.text_hash_strict;
-      const actualStrict   = hashTextStrict(preview);
-      if (expectedStrict !== actualStrict) {
-        out.hhttps.status = 'text-modified';
-        out.warning       = 'The text was modified after signing.';
-      }
-    } catch (e) {
-      // Ignore preview parse errors
-    }
-  }
+  if (verdict.status === 'text-modified') out.warning = verdict.warning;
 
   return sendJson(req, res, out, {
     title: `Signature ${slug}`,
@@ -1393,16 +1375,18 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 });
 
 // Batch verify (Performance: 1 request for N slugs on a page)
-app.post('/hhttps/signatures/batch', async (req, res) => {
+// AP1-28 (#220): the batch endpoint fans a single request out over up to 100
+// rows — it carries the same per-endpoint budget as the other check routes.
+app.post('/hhttps/signatures/batch', limit.check, async (req, res) => {
   const { slugs, domain, textPreviews } = req.body || {};
   if (!Array.isArray(slugs) || slugs.length === 0) {
-    return res.status(400).json({ error: 'slugs array required' });
+    return apiError(res, 400, 'slugs_required', 'slugs array required');
   }
-  if (slugs.length > 100) {
-    return res.status(400).json({ error: 'too many slugs (max 100)' });
+  if (slugs.length > BATCH_SLUGS_MAX) {
+    return apiError(res, 400, 'too_many_slugs', 'too many slugs (max 100)');
   }
 
-  const cleanSlugs = slugs.filter(s => typeof s === 'string' && /^hp-[A-Z0-9\-]+$/i.test(s));
+  const cleanSlugs = slugs.filter(s => typeof s === 'string' && SLUG_RE.test(s));
   let sigs;
   try {
     sigs = await db.signatures.getMany(cleanSlugs);
@@ -1428,23 +1412,18 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
       status:      'verified'
     };
 
-    if (sig.revoked_at) {
-      entry.status = 'revoked';
-      entry.revokedAt = sig.revoked_at;
-    } else if (sig.binding_type === 'web' && reqDomain &&
-               sig.bound_domain && reqDomain !== sig.bound_domain) {
-      entry.status   = 'wrong-domain';
-      entry.expected = sig.bound_domain;
-      entry.observed = reqDomain;
-    } else if (sig.binding_type === 'document' && textPreviews && textPreviews[sig.id]) {
-      // Strict text check only for Beta/document bindings (see single-slug
-      // endpoint above for rationale).
-      try {
-        const preview = Buffer.from(textPreviews[sig.id], 'base64').toString('utf8');
-        if (hashTextStrict(preview) !== sig.text_hash_strict) {
-          entry.status = 'text-modified';
-        }
-      } catch (e) {}
+    // AP1-45 (#168): same ladder as /hhttps/s/:slug. The batch wire format keeps
+    // its flat `expected`/`observed` fields (clients parse them) — only the
+    // decision is shared.
+    const verdict = evaluateSignature(sig, {
+      reqDomain,
+      textPreviewB64: (textPreviews && textPreviews[sig.id]) || null
+    });
+    entry.status = verdict.status;
+    if (verdict.status === 'revoked') entry.revokedAt = verdict.revokedAt;
+    if (verdict.status === 'wrong-domain') {
+      entry.expected = verdict.expected;
+      entry.observed = verdict.observed;
     }
     out[sig.id] = entry;
   }
@@ -1456,44 +1435,48 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
 
   await db.stats.increment('signatures_verified', Object.keys(out).length).catch(() => {});
 
-  return res.json({ hhttps: { version: '0.5.0' }, results: out });
+  return res.json({ hhttps: { version: PROTOCOL_VERSION }, results: out });
 });
 
 // Revoke a signature (only by original signer)
-app.post('/hhttps/signatures/:slug/revoke', async (req, res) => {
+// AP1-28 (#220): a write endpoint gated only by the global limiter — it now
+// carries the same per-endpoint budget as the other signature routes.
+app.post('/hhttps/signatures/:slug/revoke', limit.revoke, async (req, res) => {
   const slug = (req.params.slug || '').trim();
-  const token = req.headers['hhttps-token'] ||
-                req.headers['authorization']?.replace('Bearer ', '') ||
-                req.body?.token;
-  const reason = req.body?.reason;
+  const token = extractToken(req);
+  // AP1-11 (#220): revoke_reason is VARCHAR(120) — an over-long or non-string
+  // reason used to reach the driver and surface as a bogus 401.
+  const reason = typeof req.body?.reason === 'string'
+    ? req.body.reason.slice(0, REVOKE_REASON_MAX) : null;
 
-  if (!token) return res.status(401).json({ error: 'token required' });
-  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
-    return res.status(400).json({ error: 'invalid slug' });
+  if (!token) return apiError(res, 401, 'token_required', 'token required');
+  if (!SLUG_RE.test(slug)) {
+    return apiError(res, 400, 'invalid_slug', 'invalid slug');
   }
 
   try {
     const d = await checkTokenValid(token);
-    const signerId = d.uid || d.userId || d.sub;
+    const signerId = signerIdOf(d);
+    if (!signerId) return apiError(res, 401, 'token_invalid', 'token carries no signer identity');
     const ok = await db.signatures.revoke(slug, signerId, reason);
     if (!ok) {
-      return res.status(403).json({ error: 'not authorized or already revoked' });
+      return apiError(res, 403, 'revoke_denied', 'not authorized or already revoked');
     }
     await db.stats.increment('signatures_revoked').catch(() => {});
     return res.json({
-      hhttps: { version: '0.5.0', status: 'revoked' },
+      hhttps: { version: PROTOCOL_VERSION, status: 'revoked' },
       id:     slug,
       revokedAt: new Date().toISOString()
     });
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return tokenRejected(res, e);
   }
 });
 
 // Short-link redirect: /s/:slug → /hhttps/s/:slug (HTML-friendly)
 app.get('/s/:slug', (req, res) => {
   const slug = (req.params.slug || '').trim();
-  if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) return res.status(400).send('Invalid slug');
+  if (!SLUG_RE.test(slug)) return res.status(400).send('Invalid slug');
   res.redirect(`/hhttps/s/${slug}`);
 });
 
@@ -1505,7 +1488,14 @@ app.get('/s/:slug', (req, res) => {
 const OAUTH_CODE_TTL  = 60;         // seconds
 const OAUTH_TOKEN_TTL = 5 * 60;     // 5 min for third-party access tokens
 const OAUTH_REFRESH_TTL = 30 * 24 * 3600; // 30 days — RFC 6749 §6 refresh grant
-const SCOPES_KNOWN    = new Set(['openid', 'role', 'verification_method', 'age_group', 'email']);
+// AP2-30 (#157): SCOPES_KNOWN and the scope policy live in oauth-params.js.
+//
+// AP2-26 (#198): `db.oauthClients.get()` runs three times per login flow
+// (/authorize, /approve, /token) and is deliberately NOT cached — a client
+// that is deactivated (`is_active`) or has its redirect_uris changed must take
+// effect on the very next request, and the row is a single primary-key lookup.
+// If this ever shows up in a profile, cache it with a TTL of a few seconds and
+// a bounded size; do not cache it indefinitely.
 
 // Discovery (RFC 8414 / OpenID Connect Discovery 1.0)
 app.get('/.well-known/openid-configuration', (req, res) => {
@@ -1516,7 +1506,7 @@ app.get('/.well-known/openid-configuration', (req, res) => {
     userinfo_endpoint:               `${BASE_URL}/hhttps/oauth/userinfo`,
     revocation_endpoint:              `${BASE_URL}/hhttps/oauth/revoke`,
     jwks_uri:                         `${BASE_URL}/.well-known/jwks.json`,
-    scopes_supported:                 ['openid', 'role', 'verification_method', 'age_group', 'email'],
+    scopes_supported:                 [...SCOPES_KNOWN],
     response_types_supported:         ['code'],
     grant_types_supported:            ['authorization_code', 'refresh_token'],
     subject_types_supported:          ['pairwise', 'public'],
@@ -1611,28 +1601,19 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
       'PKCE code_challenge is required for public clients.');
   }
 
-  // Scope validation
-  const requestedScopes = (scope || 'openid').split(/\s+/).filter(Boolean);
-  if (!requestedScopes.includes('openid')) {
-    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
-      'The "openid" scope is required.');
+  // Scope validation — AP2-30 (#157): one rule, shared with /approve.
+  const sv = validateScopes(scope, client);
+  if (!sv.ok) {
+    return redirectWithError(res, redirect_uri, state, sv.error, sv.description);
   }
-  const unknownScopes = requestedScopes.filter(s => !SCOPES_KNOWN.has(s));
-  if (unknownScopes.length > 0) {
-    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
-      `Unknown scopes: ${unknownScopes.join(', ')}`);
-  }
-  const deniedScopes = requestedScopes.filter(s => !client.allowed_scopes.includes(s));
-  if (deniedScopes.length > 0) {
-    return redirectWithError(res, redirect_uri, state, 'invalid_scope',
-      `Platform may not request these scopes: ${deniedScopes.join(', ')}`);
-  }
+  const requestedScopes = sv.scopes;
 
-  // Step 2: render the consent page. The user's session/identity will be
-  // picked up from a cookie OR (when the browser extension is installed)
-  // from localStorage published by hhttps.org itself.
-  // For now we render a server-side consent page that asks the user to
-  // identify (passkey) and approve.
+  // Step 2: render the consent page. AP2-37 (#198): the identity is NOT read
+  // from a cookie or the browser extension — the consent page's script reads
+  // `hhttps_identity` from localStorage (published by the sign-in page after
+  // an e-mail/passkey login) and, if it is missing or expired, sends the user
+  // to the sign-in page with ?returnTo= pointing back here. See
+  // server/consent-client.js and docs/oauth-integration.md.
 
   const params = new URLSearchParams({
     client_id, redirect_uri,
@@ -1660,14 +1641,18 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
   res.send(renderConsentPage({ client, scopes: requestedScopes, params: params.toString() }));
 });
 
-// Approve endpoint: called from the consent page after the user has
-// authenticated (passkey) and confirmed. Exchanges the user's session for a
-// short-lived authorization code.
+// Approve endpoint: called by the consent page's script with the HHTTPS token
+// it read from localStorage (AP2-37 — no cookie, no browser extension is
+// involved). Exchanges that token for a short-lived authorization code.
+// AP2-33 (#175): every answer here uses an RFC 6749/6750 error code plus an
+// `error_description` carrying the human-readable text.
 app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
   const { token, client_id, redirect_uri, scope, state, nonce,
           code_challenge, code_challenge_method, pseudonym } = req.body || {};
 
-  if (!token) return res.status(401).json({ error: 'token required' });
+  if (!token) {
+    return res.status(401).json({ error: 'invalid_token', error_description: 'token required' });
+  }
 
   // #31: validate before touching the DB — an over-long state/nonce or a
   // malformed code_challenge is a client error, not a 401/500.
@@ -1680,7 +1665,7 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
   try {
     d = await checkTokenValid(token);
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return res.status(401).json({ error: 'invalid_token', error_description: e.message });
   }
 
   try {
@@ -1690,24 +1675,31 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
     const isMachine = (d.sub === 'machine');
 
     const client = await db.oauthClients.get(client_id);
-    if (!client) return res.status(400).json({ error: 'unknown client' });
+    if (!client) {
+      return res.status(400).json({ error: 'invalid_client', error_description: 'Unknown client_id. Platform is not registered.' });
+    }
     if (!client.redirect_uris.includes(redirect_uri)) {
-      return res.status(400).json({ error: 'redirect_uri mismatch' });
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'redirect_uri does not match the registered value. Rejected for security reasons.'
+      });
     }
-    const scopes = (scope || 'openid').split(/\s+/).filter(Boolean);
-    if (!scopes.includes('openid')) {
-      return res.status(400).json({ error: 'openid scope required' });
+    // AP2-06 (#198): PKCE is required for public clients here too — /authorize
+    // has always enforced it, so a direct call to /approve used to be the way
+    // around it (code stored with pkce_challenge = NULL, redeemable without a
+    // verifier).
+    if (!client.client_secret_hash && !code_challenge) {
+      return res.status(400).json({
+        error: 'invalid_request',
+        error_description: 'PKCE code_challenge is required for public clients.'
+      });
     }
-    // F-8 (K-8/S-9b): same scope policy as /authorize — a direct approve call
-    // must not obtain scopes (e.g. `email`) the client was never granted.
-    const unknownScopes = scopes.filter(s => !SCOPES_KNOWN.has(s));
-    if (unknownScopes.length > 0) {
-      return res.status(400).json({ error: 'invalid_scope', error_description: `Unknown scopes: ${unknownScopes.join(', ')}` });
-    }
-    const deniedScopes = scopes.filter(s => !client.allowed_scopes.includes(s));
-    if (deniedScopes.length > 0) {
-      return res.status(400).json({ error: 'invalid_scope', error_description: `Platform may not request these scopes: ${deniedScopes.join(', ')}` });
-    }
+    // F-8 (K-8/S-9b) / AP2-30 (#157): same scope policy as /authorize — a
+    // direct approve call must not obtain scopes (e.g. `email`) the client was
+    // never granted.
+    const sv = validateScopes(scope, client);
+    if (!sv.ok) return res.status(400).json({ error: sv.error, error_description: sv.description });
+    const scopes = sv.scopes;
 
     // Generate authorization code
     const code = 'hp-' + crypto.randomBytes(24).toString('base64url');
@@ -1758,8 +1750,14 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
       ttlSec:             OAUTH_CODE_TTL
     });
 
-    await db.oauthClients.touchLastUsed(client_id);
-    await db.stats.increment('oauth_authorizations');
+    // AP2-25 (#198): bookkeeping is decoupled from the login path — the
+    // `oauth_clients` row and the global stats hot row are written without
+    // being awaited (as the token endpoint already does). A failure is logged,
+    // never surfaced. Throttling the UPDATE itself belongs in db.js.
+    Promise.all([
+      db.oauthClients.touchLastUsed(client_id),
+      db.stats.increment('oauth_authorizations')
+    ]).catch(err => console.warn('[OAUTH] approve bookkeeping failed:', err.message));
 
     // Build redirect URL with code (and state if provided)
     const url = new URL(redirect_uri);
@@ -1786,134 +1784,172 @@ app.post('/hhttps/oauth/token', async (req, res) => {
   }
 });
 
+// AP2-28 (#138): the token endpoint used to be a single 268-line handler with
+// both grants written out inline. It is now a dispatcher over `grant_type`
+// with one function per grant; the JWT bodies come from the shared builders
+// below (AP2-29) and client authentication from authenticateOAuthClient
+// (AP2-30).
 async function handleTokenRequest(req, res) {
   const tv = validateTokenParams(req.body || {});
   if (!tv.ok) return res.status(400).json({ error: tv.error, error_description: tv.description });
 
-  const {
-    grant_type,
-    code,
-    redirect_uri,
-    client_id,
-    client_secret,
-    code_verifier
-  } = req.body || {};
+  const grantType = (req.body || {}).grant_type;
+  if (grantType === 'refresh_token') return handleRefreshGrant(req, res);
+  if (grantType === 'authorization_code') return handleCodeGrant(req, res);
+  return res.status(400).json({ error: 'unsupported_grant_type' });
+}
 
-  // ── RFC 6749 §6: refresh_token grant ──────────────────────────────────
-  if (grant_type === 'refresh_token') {
-    const { refresh_token } = req.body || {};
-    if (!refresh_token || !client_id) {
-      return res.status(400).json({ error: 'invalid_request' });
-    }
-    const rClient = await db.oauthClients.get(client_id);
-    if (!rClient) return res.status(401).json({ error: 'invalid_client' });
-    if (rClient.client_secret_hash) {
-      if (!client_secret) return res.status(401).json({ error: 'invalid_client' });
-      const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
-      if (expected !== rClient.client_secret_hash) {
-        return res.status(401).json({ error: 'invalid_client' });
-      }
-    }
-    let rd;
-    try { rd = await verifyToken(refresh_token); }
-    catch { return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token invalid' }); }
-    if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
-      return res.status(400).json({ error: 'invalid_grant' });
-    }
-    // AP2-03 (#68): rotation is ONE atomic claim — the old jti is deleted with
-    // a conditional DELETE … RETURNING, so of N parallel refreshes with the
-    // same token exactly one wins; the rest get invalid_grant (RFC 6749
-    // §10.4). Only the winner mints the successor. (Inline SQL — db.js belongs
-    // to another package in this review wave; a refreshTokens.claim() helper
-    // is the follow-up.)
-    const newJti = uuid();
-    try {
-      const claimed = await db.q(
-        `DELETE FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW() RETURNING jti`, [rd.jti]
-      );
-      if (claimed.rowCount !== 1) {
-        return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
-      }
-      // AP2-01: "disconnect platform" must end the chain. The claim above has
-      // already removed the row, so a disconnected platform simply stops here.
-      if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
-        return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
-      }
-      await db.refreshTokens.create({
-        jti: newJti, userId: rd.ouid, credentialId: null,
-        role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
-      });
-    } catch (err) {
-      console.error('[OAUTH] refresh rotation failed:', err.message);
-      return res.status(500).json({ error: 'server_error' });
-    }
-    // Phase 8 (AK-18): identity claims travel inside the refresh JWT itself
-    // (stateless — nothing is read from a per-user table on refresh).
-    const rScopes   = String(rd.scope || 'openid').split(' ').filter(Boolean);
-    const rIdentity = buildIdentityClaims({
-      methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes: rScopes
-    });
-    const newRefresh = signToken({
-      sub: 'oauth_refresh', token_use: 'refresh', jti: newJti, client_id,
-      ouid: rd.ouid, scope: rd.scope || 'openid',
-      role: rd.role || null, trust_score: rd.trust_score ?? 0,
-      verification_method: rd.verification_method || null,
-      ...(rd.age_group ? { age_group: rd.age_group,
-        age_verified: rd.age_verified ?? false,
-        age_verification_method: rd.age_verification_method || 'self-declared' } : {}),
-      ...rIdentity
-    }, { expiresIn: OAUTH_REFRESH_TTL });
+// ─── Token claim builders (AP2-29 #147) ──────────────────────────────────────
+// Both grants mint the same two JWTs from two differently-named sources (the
+// claimed authorization-code row, or the payload of the presented refresh
+// JWT). The claim-producing parts live here exactly once; `source` only has to
+// expose role / trust_score / verification_method / age_* — which both shapes
+// already do.
 
-    // Frischer Access-Token — dieselben Claims wie im Code-Zweig.
-    const rPairwise = pairwiseSubjectId(rd.ouid, client_id, rClient.subject_type);
-    const newAccess = signToken({
-      iss:        `https://${RP_ID}`,
-      hhttps_iss: `hhttps://${RP_ID}`,
-      sub:        rPairwise,
-      aud:        client_id,
-      token_use:  'access',
-      client_id,
-      scope:      rScopes.join(' '),
-      role:       rd.role || null,
-      trustScore: rd.trust_score ?? 0,
-      ...rIdentity,
-      ...(rd.verification_method === 'machine-token'
-          ? { actor_type: 'bot', human: false } : {}),
-      ...(rScopes.includes('age_group') && rd.age_group ? {
-        age_group:               rd.age_group,
-        age_verified:            rd.age_verified ?? false,
-        age_verification_method: rd.age_verification_method || 'self-declared'
-      } : {})
-    }, { expiresIn: OAUTH_TOKEN_TTL });
+/** age_group + its two companions, only when the source carries a group. */
+function ageClaims(source) {
+  if (!source.age_group) return {};
+  return {
+    age_group:               source.age_group,
+    age_verified:            source.age_verified ?? false,
+    age_verification_method: source.age_verification_method || 'self-declared'
+  };
+}
 
-    return res.json({
-      access_token:  newAccess,
-      token_type:    'Bearer',
-      expires_in:    OAUTH_TOKEN_TTL,
-      refresh_token: newRefresh,
-      scope:         rScopes.join(' ')
-    });
+/**
+ * Actor type survives the whole chain: verification_method 'machine-token'
+ * (set by /approve for a machine token) becomes explicit bot claims.
+ */
+function actorClaims(source) {
+  return source.verification_method === 'machine-token'
+    ? { actor_type: 'bot', human: false }
+    : {};
+}
+
+/**
+ * Body of an OAuth ACCESS token (JWT, OAUTH_TOKEN_TTL).
+ * NOTE (AP2-34, #185): the trust score travels as `trustScore` here while the
+ * ID token, the refresh JWT, /userinfo and `claims_supported` all use
+ * `trust_score`. Renaming it is a wire-format change — server/sdk/client.js
+ * (`_normalizeClaims`) reads `p.trustScore` from a decoded JWT — so the name
+ * stays until the SDK and the examples accept both. Issue #185 stays open.
+ */
+function buildOAuthAccessClaims({ source, scopes, pairwiseId, clientId, identityClaims }) {
+  return {
+    iss:        `https://${RP_ID}`,
+    hhttps_iss: `hhttps://${RP_ID}`,
+    sub:        pairwiseId,
+    aud:        clientId,
+    token_use:  'access',
+    client_id:  clientId,
+    scope:      scopes.join(' '),
+    role:       source.role ?? null,
+    trustScore: source.trust_score ?? 0,
+    ...identityClaims,
+    ...actorClaims(source),
+    // age_group travels with the access token only when the scope was granted,
+    // so /userinfo can echo it. Orthogonal to role; self-declared in Phase 1.
+    ...(scopes.includes('age_group') ? ageClaims(source) : {})
+  };
+}
+
+/**
+ * Body of an OAuth REFRESH token (JWT, OAUTH_REFRESH_TTL). Phase 8 (AK-18):
+ * the identity claims travel inside the JWT itself, so a refresh reads nothing
+ * from a per-user table. Unlike the access token this keeps age_group
+ * regardless of the granted scopes — the scope filter is applied when the next
+ * access token is minted from it.
+ */
+function buildOAuthRefreshClaims({ source, jti, clientId, userId, scopes, identityClaims }) {
+  return {
+    sub: 'oauth_refresh', token_use: 'refresh', jti, client_id: clientId,
+    ouid: userId, scope: scopes.join(' '),
+    role: source.role || null, trust_score: source.trust_score ?? 0,
+    verification_method: source.verification_method || null,
+    ...ageClaims(source),
+    ...identityClaims
+  };
+}
+
+// ─── RFC 6749 §6: refresh_token grant ────────────────────────────────────────
+async function handleRefreshGrant(req, res) {
+  const { refresh_token, client_id, client_secret } = req.body || {};
+  if (!refresh_token || !client_id) {
+    return res.status(400).json({ error: 'invalid_request' });
+  }
+  // AP2-30 (#157) / AP2-20: one client authentication for every OAuth route.
+  const client = await authenticateOAuthClient(client_id, client_secret);
+  if (!client) return res.status(401).json({ error: 'invalid_client' });
+
+  let rd;
+  try { rd = await verifyToken(refresh_token); }
+  catch { return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token invalid' }); }
+  if (rd.sub !== 'oauth_refresh' || rd.client_id !== client_id) {
+    return res.status(400).json({ error: 'invalid_grant' });
   }
 
-  if (grant_type !== 'authorization_code') {
-    return res.status(400).json({ error: 'unsupported_grant_type' });
+  // AP2-03 (#68): rotation is ONE atomic claim — the old jti is deleted with
+  // a conditional DELETE … RETURNING, so of N parallel refreshes with the
+  // same token exactly one wins; the rest get invalid_grant (RFC 6749
+  // §10.4). Only the winner mints the successor. (Inline SQL — db.js belongs
+  // to another package in this review wave; a refreshTokens.claim() helper
+  // is the follow-up.)
+  const newJti = uuid();
+  try {
+    const claimed = await db.q(
+      `DELETE FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW() RETURNING jti`, [rd.jti]
+    );
+    if (claimed.rowCount !== 1) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'refresh token expired or revoked' });
+    }
+    // AP2-01: "disconnect platform" must end the chain. The claim above has
+    // already removed the row, so a disconnected platform simply stops here.
+    if (!await db.connectedPlatforms.getPairwiseId(rd.ouid, client_id)) {
+      return res.status(400).json({ error: 'invalid_grant', error_description: 'platform connection revoked' });
+    }
+    await db.refreshTokens.create({
+      jti: newJti, userId: rd.ouid, credentialId: null,
+      role: rd.role || 'citizen', ttlMs: OAUTH_REFRESH_TTL * 1000, clientId: client_id
+    });
+  } catch (err) {
+    console.error('[OAUTH] refresh rotation failed:', err.message);
+    return res.status(500).json({ error: 'server_error' });
   }
+
+  const scopes   = String(rd.scope || 'openid').split(' ').filter(Boolean);
+  const identityClaims = buildIdentityClaims({
+    methods: rd.verified_methods, pseudonym: rd.preferred_username, email: rd.email, scopes
+  });
+
+  const newRefresh = signToken(buildOAuthRefreshClaims({
+    source: rd, jti: newJti, clientId: client_id, userId: rd.ouid, scopes, identityClaims
+  }), { expiresIn: OAUTH_REFRESH_TTL });
+
+  const newAccess = signToken(buildOAuthAccessClaims({
+    source: rd, scopes, clientId: client_id, identityClaims,
+    pairwiseId: pairwiseSubjectId(rd.ouid, client_id, client.subject_type)
+  }), { expiresIn: OAUTH_TOKEN_TTL });
+
+  return res.json({
+    access_token:  newAccess,
+    token_type:    'Bearer',
+    expires_in:    OAUTH_TOKEN_TTL,
+    refresh_token: newRefresh,
+    scope:         scopes.join(' ')
+  });
+}
+
+// ─── RFC 6749 §4.1.3: authorization_code grant ───────────────────────────────
+async function handleCodeGrant(req, res) {
+  const { code, redirect_uri, client_id, client_secret, code_verifier } = req.body || {};
   if (!code || !client_id) {
     return res.status(400).json({ error: 'invalid_request' });
   }
 
-  const client = await db.oauthClients.get(client_id);
+  // AP2-30 (#157) / AP2-20: same client authentication as every other OAuth
+  // route — a public client (no secret hash) authenticates by PKCE below.
+  const client = await authenticateOAuthClient(client_id, client_secret);
   if (!client) return res.status(401).json({ error: 'invalid_client' });
-
-  // Authenticate client (secret OR PKCE)
-  const isPublicClient = !client.client_secret_hash;
-  if (!isPublicClient) {
-    if (!client_secret) return res.status(401).json({ error: 'invalid_client' });
-    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
-    if (expected !== client.client_secret_hash) {
-      return res.status(401).json({ error: 'invalid_client' });
-    }
-  }
 
   // Claim the code (single-use, atomic)
   const claimed = await db.authCodes.claim(code);
@@ -1930,12 +1966,9 @@ async function handleTokenRequest(req, res) {
     if (!code_verifier) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'code_verifier required' });
     }
-    let computed;
-    if (claimed.pkce_method === 'S256') {
-      computed = crypto.createHash('sha256').update(code_verifier).digest('base64url');
-    } else {
-      computed = code_verifier;
-    }
+    const computed = claimed.pkce_method === 'S256'
+      ? crypto.createHash('sha256').update(code_verifier).digest('base64url')
+      : code_verifier;
     if (computed !== claimed.pkce_challenge) {
       return res.status(400).json({ error: 'invalid_grant', error_description: 'PKCE verification failed' });
     }
@@ -1954,7 +1987,6 @@ async function handleTokenRequest(req, res) {
     scopesGranted:      claimed.scopes
   });
 
-  // Build the access token (a JWT with limited scope, short TTL)
   const roleDef = ROLES[claimed.role] || ROLES.citizen;
   const vMethod = VERIFICATION_LEVELS[claimed.verification_method] || {};
 
@@ -1968,38 +2000,20 @@ async function handleTokenRequest(req, res) {
     scopes:    claimed.scopes
   });
 
-  const accessToken = signToken({
-    iss:        `https://${RP_ID}`,
-    hhttps_iss: `hhttps://${RP_ID}`,
-    sub:        pairwiseId,
-    aud:        client_id,
-    token_use:  'access',
-    client_id,
-    scope:      claimed.scopes.join(' '),
-    role:       claimed.role,
-    trustScore: claimed.trust_score,
-    ...identityClaims,
-    // Actor type survives the code flow: 'machine-token' in the code row
-    // becomes explicit bot claims here (and in the ID token below).
-    ...(claimed.verification_method === 'machine-token'
-        ? { actor_type: 'bot', human: false } : {}),
-    // age_group travels with the access token only when the scope was granted,
-    // so /userinfo can echo it. Orthogonal to role; self-declared in Phase 1.
-    ...(claimed.scopes.includes('age_group') && claimed.age_group ? {
-      age_group:               claimed.age_group,
-      age_verified:            claimed.age_verified ?? false,
-      age_verification_method: claimed.age_verification_method || 'self-declared'
-    } : {})
-  }, { expiresIn: OAUTH_TOKEN_TTL });
+  const accessToken = signToken(buildOAuthAccessClaims({
+    source: claimed, scopes: claimed.scopes, pairwiseId, clientId: client_id, identityClaims
+  }), { expiresIn: OAUTH_TOKEN_TTL });
 
   // ID token (OIDC) — claims based on requested scopes
   const idTokenClaims = {
-    ...(claimed.verification_method === 'machine-token'
-        ? { actor_type: 'bot', human: false } : {}),
+    ...actorClaims(claimed),
     iss:       `https://${RP_ID}`,
     sub:       pairwiseId,
     aud:       client_id,
     nonce:     claimed.nonce || undefined,
+    // AP2-09 (#198, open): this is the moment the code is redeemed, not the
+    // moment the user authenticated. Fixing it needs an `auth_time` column on
+    // authorization_codes (db.js).
     auth_time: Math.floor(Date.now() / 1000)
   };
   if (claimed.scopes.includes('role')) {
@@ -2012,10 +2026,8 @@ async function handleTokenRequest(req, res) {
     idTokenClaims.verification_method       = claimed.verification_method;
     idTokenClaims.verification_method_label = vMethod.label || null;
   }
-  if (claimed.scopes.includes('age_group') && claimed.age_group) {
-    idTokenClaims.age_group               = claimed.age_group;
-    idTokenClaims.age_verified            = claimed.age_verified ?? false;
-    idTokenClaims.age_verification_method = claimed.age_verification_method || 'self-declared';
+  if (claimed.scopes.includes('age_group')) {
+    Object.assign(idTokenClaims, ageClaims(claimed));
   }
   Object.assign(idTokenClaims, identityClaims);
   const idToken = signToken(idTokenClaims, { expiresIn: OAUTH_TOKEN_TTL });
@@ -2032,11 +2044,11 @@ async function handleTokenRequest(req, res) {
     db.clientStats.recordLogin(client_id, idTokenClaims.role || 'unknown', idTokenClaims.trust_score || 0)
   ]).catch(err => console.warn('[STATS] oauth token stats failed:', err.message));
 
-  // Refresh-Token für die stille Erneuerung (RFC 6749 §6), rotierend.
-  // Die Persistenz darf den Login NIE brechen: schlägt sie fehl, antworten
-  // wir schlicht ohne refresh_token. credential_id bleibt null — die Spalte
-  // trägt einen FK auf credentials; die OAuth-Bindung steckt signiert im
-  // Refresh-JWT selbst (client_id-Claim).
+  // Refresh token for the silent renewal (RFC 6749 §6), rotating. Persisting it
+  // must NEVER break the login: if it fails we simply answer without a
+  // refresh_token. credential_id stays null — the column carries an FK on
+  // credentials; the OAuth binding sits signed inside the refresh JWT itself
+  // (client_id claim).
   let oauthRefreshToken = null;
   const refreshJti = uuid();
   const refreshRowWritten = db.refreshTokens.create({
@@ -2048,16 +2060,10 @@ async function handleTokenRequest(req, res) {
   });
   await connectionRecorded;
   if (await refreshRowWritten) {
-    oauthRefreshToken = signToken({
-      sub: 'oauth_refresh', token_use: 'refresh', jti: refreshJti, client_id,
-      ouid: claimed.user_id, scope: claimed.scopes.join(' '),
-      role: claimed.role || null, trust_score: claimed.trust_score ?? 0,
-      verification_method: claimed.verification_method || null,
-      ...(claimed.age_group ? { age_group: claimed.age_group,
-        age_verified: claimed.age_verified ?? false,
-        age_verification_method: claimed.age_verification_method || 'self-declared' } : {}),
-      ...identityClaims
-    }, { expiresIn: OAUTH_REFRESH_TTL });
+    oauthRefreshToken = signToken(buildOAuthRefreshClaims({
+      source: claimed, jti: refreshJti, clientId: client_id,
+      userId: claimed.user_id, scopes: claimed.scopes, identityClaims
+    }), { expiresIn: OAUTH_REFRESH_TTL });
   }
 
   return res.json({
@@ -2070,16 +2076,19 @@ async function handleTokenRequest(req, res) {
   });
 }
 
+
 // UserInfo endpoint: returns claims for the bearer token
 app.get('/hhttps/oauth/userinfo', async (req, res) => {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'unauthorized' });
+  // AP2-33 (#175): RFC 6750 §3 all the way — `invalid_token` plus a
+  // WWW-Authenticate header, never a free-text `unauthorized`.
+  if (!token) return userinfoInvalidToken(res, 'bearer access token required');
 
   let d;
   try {
     d = verifyToken(token);
-  } catch (e) {
+  } catch {
     return userinfoInvalidToken(res, 'access token invalid or expired');
   }
   // AP2-10 (#105): only an OAuth ACCESS token is accepted — positively marked
@@ -2127,18 +2136,29 @@ function userinfoInvalidToken(res, description) {
   return res.status(401).json({ error: 'invalid_token', error_description: description });
 }
 
-// AP2-02 (#59): client authentication for /revoke (same rule as /token) —
-// confidential clients (client_secret_hash set) must present their secret,
-// public clients authenticate by client_id alone. Returns the client row or
-// null (→ 401 invalid_client).
+/**
+ * AP2-02 (#59): client authentication for every OAuth route — confidential
+ * clients (client_secret_hash set) must present their secret, public clients
+ * authenticate by client_id alone. Returns the client row or null
+ * (→ 401 invalid_client).
+ *
+ * AP2-30 (#157): both `/token` grants used to carry their own copy of this.
+ * AP2-20 (#198): the digests are compared in constant time. The stored hash is
+ * still an unsalted SHA-256 of the secret — salting it is a schema change
+ * (db.js / oauth_clients) and stays open.
+ */
 async function authenticateOAuthClient(client_id, client_secret) {
   if (!client_id) return null;
   const client = await db.oauthClients.get(client_id);
   if (!client) return null;
   if (client.client_secret_hash) {
-    if (!client_secret) return null;
-    const expected = crypto.createHash('sha256').update(client_secret).digest('hex');
-    if (expected !== client.client_secret_hash) return null;
+    if (typeof client_secret !== 'string' || !client_secret) return null;
+    const expected = crypto.createHash('sha256').update(client_secret).digest();
+    let stored;
+    try { stored = Buffer.from(client.client_secret_hash, 'hex'); }
+    catch { return null; }
+    if (stored.length !== expected.length) return null;
+    if (!crypto.timingSafeEqual(stored, expected)) return null;
   }
   return client;
 }
@@ -2184,7 +2204,7 @@ app.post('/hhttps/oauth/revoke', async (req, res) => {
     return res.status(400).json({ error: 'invalid_request' });
   }
   if (!token || typeof token !== 'string' || !client_id) {
-    return res.status(400).json({ error: 'invalid_request', error_description: 'token + client_id required' });
+    return res.status(400).json({ error: 'invalid_request', error_description: 'token and client_id are required' });
   }
 
   // (1) user disconnect — checkTokenValid rejects refresh JWTs and OAuth
@@ -2215,14 +2235,15 @@ app.post('/hhttps/oauth/revoke', async (req, res) => {
 // 401 instead of an RFC 7009 no-op 200.
 app.post('/hhttps/oauth/disconnect', async (req, res) => {
   const { token, client_id } = req.body || {};
+  // AP2-33 (#175): RFC 6749/6750 codes, human text in error_description.
   if (!token || !client_id || typeof token !== 'string' || typeof client_id !== 'string') {
-    return res.status(400).json({ error: 'token + client_id required' });
+    return res.status(400).json({ error: 'invalid_request', error_description: 'token and client_id are required' });
   }
   let d;
   try {
     d = await checkTokenValid(token);
   } catch (e) {
-    return res.status(401).json({ error: e.message });
+    return res.status(401).json({ error: 'invalid_token', error_description: e.message });
   }
   return disconnectPlatform(res, d, client_id);
 });
@@ -2233,7 +2254,7 @@ function redirectWithError(res, redirectUri, state, errorCode, errorDescription)
   let url;
   try {
     url = new URL(redirectUri);
-  } catch (e) {
+  } catch {
     return res.status(400).send(renderOAuthError('redirect_uri is not a valid URL.', 400));
   }
   url.searchParams.set('error', errorCode);
@@ -2242,7 +2263,12 @@ function redirectWithError(res, redirectUri, state, errorCode, errorDescription)
   return res.redirect(302, url.toString());
 }
 
-function renderOAuthError(message, status) {
+// AP2-40 (#198): the messages are our own constants today, but the page is the
+// one OAuth surface a client can reach with a broken request — `message` is
+// escaped so it can never become markup. (Folding it into renderSimplePage is
+// still open: that page has a different, darker design.)
+function renderOAuthError(rawMessage, status) {
+  const message = escapeHtml(rawMessage);
   return `<!DOCTYPE html><html lang="de"><head><meta charset="UTF-8">
 <title>OAuth error · HHTTPS</title>
 <style>body{font-family:system-ui;background:#F8F1E4;color:#2D2823;padding:60px 20px;text-align:center}
@@ -2254,32 +2280,53 @@ a{color:#A86246;text-decoration:none}
 <p><a href="${escapeHtml(BASE_URL)}">← back to ${escapeHtml(RP_ID)}</a></p></div></body></html>`;
 }
 
+// AP2-31 (#165): the consent page's browser script lives in
+// server/consent-client.js (lintable, unit-testable) and is served from here
+// as an ES module. It is read once and cached — the file ships with the
+// server, so there is nothing to invalidate at runtime.
+let consentClientSource = null;
+app.get('/hhttps/oauth/consent.js', (req, res) => {
+  if (consentClientSource === null) {
+    consentClientSource = readFileSync(join(__dirname, 'consent-client.js'), 'utf8');
+  }
+  res.type('application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send(consentClientSource);
+});
+
+/**
+ * Consent page for GET /hhttps/oauth/authorize.
+ *
+ * AP2-31 (#165): CSS → server/public/consent.css, script → consent-client.js.
+ * Scope labels come from CONSENT_I18N (the same table the browser uses), so
+ * they exist exactly once. Nothing the client supplies is interpolated into
+ * executable code: the script reads `base`/`params` from a JSON block.
+ */
 function renderConsentPage({ client, scopes, params }) {
   const verifiedBadge = client.verified
-    ? `<span class="badge badge-ok" data-i18n="consent.verified">✓ Verifizierte Plattform</span>`
-    : `<span class="badge badge-warn" data-i18n="consent.unverified">⚠ Nicht verifiziert</span>`;
+    ? `<span class="badge badge-ok" data-i18n="consent.verified">${CONSENT_I18N.de['consent.verified']}</span>`
+    : `<span class="badge badge-warn" data-i18n="consent.unverified">${CONSENT_I18N.de['consent.unverified']}</span>`;
 
+  const de = CONSENT_I18N.de;
   const unverifiedWarning = client.verified ? '' : `
     <div class="warning">
-      <strong data-i18n="consent.warnStrong">Achtung — Diese Plattform ist nicht von hhttps.org geprüft.</strong>
-      <span data-i18n="consent.warnB1">Klicke nur auf "Erlauben", wenn du der Plattform</span> <em>${escapeHtml(client.name)}</em> <span data-i18n="consent.warnB2">wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit</span> <code>${escapeHtml(client.homepage_url || '?')}</code> <span data-i18n="consent.warnB3">übereinstimmt.</span>
+      <strong data-i18n="consent.warnStrong">${de['consent.warnStrong']}</strong>
+      <span data-i18n="consent.warnB1">${de['consent.warnB1']}</span> <em>${escapeHtml(client.name)}</em> <span data-i18n="consent.warnB2">${de['consent.warnB2']}</span> <code>${escapeHtml(client.homepage_url || '?')}</code> <span data-i18n="consent.warnB3">${de['consent.warnB3']}</span>
     </div>
   `;
 
   const scopeRows = scopes.map(s => {
-    const label = {
-      'openid':              { icon: '🆔', title: 'Anonyme Identität',  desc: 'Eine pseudonyme Kennung, die nur diese Plattform sieht.' },
-      'role':                { icon: '🎭', title: 'Berufsrolle', desc: 'Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).' },
-      'verification_method': { icon: '🔐', title: 'Verifikationsmethode', desc: 'Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).' },
-      'age_group':           { icon: '🔞', title: 'Altersgruppe', desc: 'Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.' },
-      'email':               { icon: '✉️', title: 'E-Mail-Adresse', desc: 'Deine verifizierte E-Mail-Adresse wird an diese Plattform übertragen.' }
-    }[s] || { icon: '?', title: s, desc: 'Unbekannter Scope.' };
-    return `<div class="scope-row" data-scope="${s}">
+    const label = scopeLabel(s, 'de');
+    return `<div class="scope-row" data-scope="${escapeHtml(s)}">
       <span class="scope-icon">${label.icon}</span>
-      <div><div class="scope-title" data-i18n="scope.${s}.title">${label.title}</div>
-           <div class="scope-desc" data-i18n="scope.${s}.desc">${label.desc}</div></div>
+      <div><div class="scope-title" data-i18n="scope.${escapeHtml(s)}.title">${escapeHtml(label.title)}</div>
+           <div class="scope-desc" data-i18n="scope.${escapeHtml(s)}.desc">${escapeHtml(label.desc)}</div></div>
     </div>`;
   }).join('');
+
+  // AP2-07 (#87): the server's own base URL (BASE_URL) — never a hard-coded
+  // host. `</` is escaped so the JSON can never close its own script element.
+  const config = JSON.stringify({ base: BASE_URL, params }).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html><html lang="de"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2287,96 +2334,8 @@ function renderConsentPage({ client, scopes, params }) {
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root{
-    --bg:#F9F9F8; --surface:#FFFFFF; --ink:#0A0A0A; --ink-2:#5C5C5C;
-    --line:#8A8A8A; --line-subtle:#E6E6E4;
-    --ok:#1C6B3F; --ok-bg:#EDF6F0;
-    --warn:#8A4A12; --warn-bg:#FDF3E8;
-    --font-display:'Syne',system-ui,sans-serif;
-    --font-ui:'Inter',system-ui,sans-serif;
-    --font-mono:'JetBrains Mono',ui-monospace,monospace;
-    --r-card:24px; --r-pill:999px;
-    --sh-md:0 4px 16px rgba(10,10,10,.08);
-    --sh-lg:0 12px 40px rgba(10,10,10,.10);
-    --ease:cubic-bezier(.22,1,.36,1);
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:var(--font-ui);background:var(--bg);color:var(--ink);
-    min-height:100vh;display:flex;align-items:center;justify-content:center;
-    padding:40px 20px;line-height:1.55;-webkit-font-smoothing:antialiased}
-  .wrap{width:100%;max-width:480px}
-
-  /* Brand — same dot mark and Syne wordmark as the sign-in page */
-  .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
-  .brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);
-    font-weight:800;font-size:22px;letter-spacing:-.02em;color:inherit;text-decoration:none}
-  .brand .dot{width:26px;height:26px;border-radius:50%;border:2.5px solid var(--ink);
-    position:relative;flex:none}
-  .brand .dot::after{content:'';position:absolute;inset:5px;border-radius:50%;background:var(--ink)}
-  .lang-toggle{display:inline-flex;gap:2px;border:1.5px solid var(--line-subtle);
-    border-radius:var(--r-pill);padding:2px}
-  .lang-toggle button{border:none;background:none;color:var(--ink-2);
-    font:500 12px/1 var(--font-mono);letter-spacing:.5px;padding:6px 11px;
-    border-radius:var(--r-pill);cursor:pointer;transition:all .16s var(--ease)}
-  .lang-toggle button:hover{color:var(--ink)}
-  .lang-toggle button.active{background:var(--ink);color:#fff}
-
-  .card{background:var(--surface);border:1.5px solid var(--ink);
-    border-radius:var(--r-card);box-shadow:var(--sh-lg);overflow:hidden}
-  .card-head{padding:32px 28px 24px;text-align:center;border-bottom:1px solid var(--line-subtle)}
-  .client-logo{width:56px;height:56px;border-radius:16px;border:1.5px solid var(--line-subtle);
-    background:var(--bg);margin:0 auto 18px;display:flex;align-items:center;
-    justify-content:center;font-size:26px;overflow:hidden}
-  h1{font-family:var(--font-display);font-weight:800;font-size:1.6rem;
-    line-height:1.15;letter-spacing:-.02em}
-  /* the platform name carries the same shimmer accent as the home page hero */
-  h1 .name{background:linear-gradient(100deg,#0A7C99 0%,#B05A1E 32%,#FFD9A8 50%,#B05A1E 68%,#0A7C99 100%);
-    background-size:200% auto;-webkit-background-clip:text;background-clip:text;
-    -webkit-text-fill-color:transparent;animation:shimmer 6.5s ease-in-out infinite}
-  @keyframes shimmer{0%,100%{background-position:0% center}50%{background-position:100% center}}
-  @media (prefers-reduced-motion:reduce){h1 .name{animation:none}}
-  .client-url{font-family:var(--font-mono);font-size:12px;color:var(--ink-2);margin-top:12px;
-    word-break:break-all}
-  .badge{display:inline-block;font:500 11px/1 var(--font-mono);letter-spacing:.4px;
-    padding:6px 12px;border-radius:var(--r-pill);margin-top:14px}
-  .badge-ok{background:var(--ok-bg);color:var(--ok)}
-  .badge-warn{background:var(--warn-bg);color:var(--warn)}
-
-  .warning{background:var(--warn-bg);border-bottom:1px solid var(--line-subtle);
-    padding:16px 28px;font-size:13px;color:var(--ink-2)}
-  .warning strong{color:var(--warn);display:block;margin-bottom:4px;font-weight:600}
-  .warning code{font-family:var(--font-mono);font-size:11px;background:#fff;
-    padding:2px 6px;border-radius:6px;border:1px solid var(--line-subtle)}
-
-  .scope-list{padding:22px 28px}
-  .scope-list-head{font-family:var(--font-mono);font-size:10px;color:var(--ink-2);
-    letter-spacing:1.5px;text-transform:uppercase;margin-bottom:16px}
-  .scope-row{display:flex;gap:14px;padding:12px 0;align-items:flex-start;
-    border-bottom:1px solid var(--line-subtle)}
-  .scope-row:last-child{border-bottom:none;padding-bottom:0}
-  .scope-icon{font-size:22px;line-height:1.2}
-  .scope-title{font-weight:600;margin-bottom:2px}
-  .scope-desc{font-size:13px;color:var(--ink-2);line-height:1.45}
-
-  .status{padding:14px 28px;font-size:13px;text-align:center;display:none}
-  .status.error{background:var(--warn-bg);color:var(--warn);display:block;font-weight:500}
-
-  .actions{padding:8px 28px 28px;display:flex;gap:10px}
-  .btn{flex:1;min-height:52px;border-radius:var(--r-pill);font-family:var(--font-ui);
-    font-size:15px;font-weight:700;cursor:pointer;transition:transform .16s var(--ease),opacity .16s}
-  .btn:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-  .btn-allow{background:var(--ink);color:#fff;border:none;box-shadow:var(--sh-md)}
-  .btn-allow:hover{transform:translateY(-1px)}
-  .btn-allow:disabled{opacity:.35;cursor:not-allowed;transform:none;box-shadow:none}
-  .btn-deny{background:none;color:var(--ink);border:1.5px solid var(--line-subtle);font-weight:500}
-  .btn-deny:hover{border-color:var(--ink)}
-
-  .footer-note{padding:16px 28px;background:var(--bg);border-top:1px solid var(--line-subtle);
-    text-align:center;font-family:var(--font-mono);font-size:11px;color:var(--ink-2);line-height:1.6}
-  .footer-note a{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
-  @media (max-width:420px){.actions{flex-direction:column-reverse}}
-</style></head><body>
+<link rel="stylesheet" href="/consent.css">
+</head><body>
 <div class="wrap">
   <div class="top">
     <a class="brand" href="${escapeHtml(BASE_URL)}">
@@ -2390,263 +2349,34 @@ function renderConsentPage({ client, scopes, params }) {
   <div class="card">
     <div class="card-head">
       <div class="client-logo">${client.logo_url ? `<img src="${escapeHtml(client.logo_url)}" alt="" style="width:100%;height:100%;object-fit:cover">` : '🏛️'}</div>
-      <h1><span class="name">${escapeHtml(client.name)}</span> <span data-i18n="consent.heading">möchte deine Identität sehen</span></h1>
+      <h1><span class="name">${escapeHtml(client.name)}</span> <span data-i18n="consent.heading">${de['consent.heading']}</span></h1>
       ${client.homepage_url ? `<div class="client-url">${escapeHtml(client.homepage_url)}</div>` : ''}
       ${verifiedBadge}
     </div>
     ${unverifiedWarning}
     <div class="scope-list">
-      <div class="scope-list-head" data-i18n="consent.scopeHead">Folgende Daten werden geteilt</div>
+      <div class="scope-list-head" data-i18n="consent.scopeHead">${de['consent.scopeHead']}</div>
       ${scopeRows}
     </div>
     <div class="pseudo-field" style="margin:14px 0 4px;">
-      <label for="pseudoInput" style="display:block;font-size:13px;opacity:.75;margin-bottom:6px;" data-i18n="consent.pseudoLabel">Anzeigename (frei wählbar, optional)</label>
+      <label for="pseudoInput" style="display:block;font-size:13px;opacity:.75;margin-bottom:6px;" data-i18n="consent.pseudoLabel">${de['consent.pseudoLabel']}</label>
       <input id="pseudoInput" type="text" maxlength="32" autocomplete="nickname"
              style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid rgba(0,0,0,.15);border-radius:10px;font-size:15px;background:#fff;" />
-      <div style="font-size:12px;opacity:.6;margin-top:5px;" data-i18n="consent.pseudoHint">Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.</div>
+      <div style="font-size:12px;opacity:.6;margin-top:5px;" data-i18n="consent.pseudoHint">${de['consent.pseudoHint']}</div>
     </div>
     <div class="status" id="status"></div>
     <div class="actions">
-      <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">Ablehnen</button>
-      <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">Erlauben</button>
+      <button class="btn btn-deny" id="denyBtn" data-i18n="consent.deny">${de['consent.deny']}</button>
+      <button class="btn btn-allow" id="allowBtn" data-i18n="consent.allow">${de['consent.allow']}</button>
     </div>
-    <div class="footer-note"><span data-i18n="consent.footPre">Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf</span> <a href="${escapeHtml(BASE_URL)}">${escapeHtml(RP_ID)}</a> <span data-i18n="consent.footPost">widerrufen.</span></div>
+    <div class="footer-note"><span data-i18n="consent.footPre">${de['consent.footPre']}</span> <a href="${escapeHtml(BASE_URL)}">${escapeHtml(RP_ID)}</a> <span data-i18n="consent.footPost">${de['consent.footPost']}</span></div>
   </div>
 </div>
-<script>
-// AP2-07 (#87): the server's own base URL (BASE_URL) — never a hard-coded host.
-const HHTTPS_BASE = ${JSON.stringify(BASE_URL)};
-const params = new URLSearchParams(${JSON.stringify(params)});
-
-document.getElementById('denyBtn').addEventListener('click', () => {
-  const redirectUri = params.get('redirect_uri');
-  const state = params.get('state') || '';
-  const url = new URL(redirectUri);
-  url.searchParams.set('error', 'access_denied');
-  url.searchParams.set('error_description', 'User denied the request');
-  if (state) url.searchParams.set('state', state);
-  window.location = url.toString();
-});
-
-// Read a JWT payload without verifying (client-side, for the exp check only).
-function jwtPayload(tok){
-  try { return JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
-  catch(e){ return null; }
-}
-// Expired (with a small clock-skew margin) or unreadable → treat as expired.
-function hhttpsTokenExpired(tok){
-  const p = jwtPayload(tok);
-  if (!p || !p.exp) return true;
-  return (p.exp * 1000) <= (Date.now() + 5000);
-}
-function clearIdentity(){ try { localStorage.removeItem('hhttps_identity'); } catch(e){} }
-// AK-30: hand login_hint/pseudonym (if the platform sent them, AK-29) on to
-// the sign-in page as their own query params so it can pre-fill and
-// auto-send the code (AK-31); returnTo brings the user back here.
-function relogin(){
-  clearIdentity();
-  let url = HHTTPS_BASE + '/?returnTo=' + encodeURIComponent(window.location.href);
-  const loginHint = params.get('login_hint');
-  const pseudonym = params.get('pseudonym');
-  if (loginHint) url += '&login_hint=' + encodeURIComponent(loginHint);
-  if (pseudonym) url += '&pseudonym=' + encodeURIComponent(pseudonym);
-  window.location = url;
-}
-// AK-30: pre-fill the display name from the platform's pseudonym hint — via
-// the DOM (never interpolated into the HTML).
-(function(){
-  const pi = document.getElementById('pseudoInput');
-  if (pi && !pi.value) pi.value = params.get('pseudonym') || '';
-})();
-// Try to mint a fresh access token from the stored refresh token. Returns the
-// new access token, or null if refresh is impossible (then we re-login).
-async function tryRefresh(identity){
-  if (!identity || !identity.refreshToken) return null;
-  if (identity.refreshExpiresAt && new Date(identity.refreshExpiresAt).getTime() <= Date.now()) return null;
-  try {
-    const r = await fetch(HHTTPS_BASE + '/hhttps/token/refresh', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken: identity.refreshToken })
-    });
-    if (!r.ok) return null;
-    const d = await r.json();
-    if (!d.token) return null;
-    // AP3-18 (#116): /hhttps/token/refresh rotates. Without adopting the new
-    // refresh token here, the consent page would write the INVALIDATED one back
-    // into the shared localStorage['hhttps_identity'] and break the sign-in
-    // page's silent refresh too.
-    const merged = Object.assign({}, identity, {
-      token: d.token,
-      expiresAt: d.expiresAt || identity.expiresAt || null,
-      refreshToken: d.refreshToken || identity.refreshToken,
-      refreshExpiresAt: d.refreshExpiresAt || identity.refreshExpiresAt || null
-    });
-    try { localStorage.setItem('hhttps_identity', JSON.stringify(merged)); } catch(e){}
-    return d.token;
-  } catch(e){ return null; }
-}
-
-document.getElementById('allowBtn').addEventListener('click', async () => {
-  const allow = document.getElementById('allowBtn');
-  const status = document.getElementById('status');
-  allow.disabled = true;
-  allow.textContent = t('consent.processing');
-
-  // Identity is published to localStorage by the sign-in page after a token
-  // is issued (publishIdentity). Without it we send the user there and come
-  // back via ?returnTo=.
-  let identity = null;
-  try {
-    const raw = localStorage.getItem('hhttps_identity');
-    if (raw) identity = JSON.parse(raw);
-  } catch (e) {}
-
-  if (!identity || !identity.token) {
-    // No identity at all → straight to sign-in (no error shown).
-    relogin();
-    return;
-  }
-
-  // Expired access token → silently refresh, or re-login. The user never sees
-  // an "expired" error.
-  if (hhttpsTokenExpired(identity.token)) {
-    const fresh = await tryRefresh(identity);
-    if (fresh) {
-      identity.token = fresh;
-    } else {
-      relogin();
-      return;
-    }
-  }
-
-  try {
-    const r = await fetch('/hhttps/oauth/approve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        token: identity.token,
-        client_id:             params.get('client_id'),
-        redirect_uri:          params.get('redirect_uri'),
-        scope:                 params.get('scope'),
-        state:                 params.get('state'),
-        nonce:                 params.get('nonce'),
-        code_challenge:        params.get('code_challenge'),
-        code_challenge_method: params.get('code_challenge_method'),
-        pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
-      })
-    });
-    const d = await r.json();
-    if (!r.ok) {
-      // Server-side expiry (race between our check and the request): try one
-      // refresh, then re-login — never surface an expiry error to the user.
-      const msg = (d.error || '') + ' ' + (d.error_description || '');
-      if (/expired|jwt/i.test(msg)) {
-        const fresh = await tryRefresh(identity);
-        if (fresh) {
-          const r2 = await fetch('/hhttps/oauth/approve', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              token: fresh,
-              client_id:             params.get('client_id'),
-              redirect_uri:          params.get('redirect_uri'),
-              scope:                 params.get('scope'),
-              state:                 params.get('state'),
-              nonce:                 params.get('nonce'),
-              code_challenge:        params.get('code_challenge'),
-              code_challenge_method: params.get('code_challenge_method'),
-              pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
-            })
-          });
-          const d2 = await r2.json();
-          if (r2.ok) { window.location = d2.redirect; return; }
-        }
-        relogin();
-        return;
-      }
-      throw new Error(d.error || 'OAuth error');
-    }
-    window.location = d.redirect;
-  } catch (e) {
-    status.className = 'status error';
-    status.textContent = t('consent.errorPrefix') + e.message;
-    allow.disabled = false;
-    allow.textContent = t('consent.allow');
-  }
-});
-
-// ─── Consent page i18n (DE/EN toggle, shared storage key) ──────────────────
-const CONSENT_I18N = {
-  de: {
-    "consent.verified":"✓ Verifizierte Plattform","consent.unverified":"⚠ Nicht verifiziert",
-    "consent.warnStrong":"Achtung — Diese Plattform ist nicht von hhttps.org geprüft.",
-    "consent.warnB1":"Klicke nur auf „Erlauben“, wenn du der Plattform",
-    "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
-    "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
-    "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
-    "consent.pseudoLabel":"Anzeigename (frei wählbar, optional)","consent.pseudoHint":"Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.",
-    "consent.footPre":"Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf",
-    "consent.footPost":"widerrufen.","consent.processing":"Wird verarbeitet…",
-    "consent.noIdentity":"Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.",
-    "consent.errorPrefix":"Fehler: ",
-    "scope.openid.title":"Anonyme Identität","scope.openid.desc":"Eine pseudonyme Kennung, die nur diese Plattform sieht.",
-    "scope.role.title":"Berufsrolle","scope.role.desc":"Deine verifizierte Berufsrolle — nur falls vorhanden (z. B. per EUDI-Wallet).",
-    "scope.verification_method.title":"Verifikationsmethode","scope.verification_method.desc":"Wie deine Rolle verifiziert wurde (z. B. ORCID, Presseausweis).",
-    "scope.age_group.title":"Altersgruppe","scope.age_group.desc":"Deine grobe Altersgruppe (z. B. 18+), nicht dein Geburtsdatum. Aktuell Eigenangabe.",
-    "scope.email.title":"E-Mail-Adresse","scope.email.desc":"Deine verifizierte E-Mail-Adresse wird an diese Plattform übertragen."
-  },
-  en: {
-    "consent.verified":"✓ Verified platform","consent.unverified":"⚠ Not verified",
-    "consent.warnStrong":"Caution — this platform has not been checked by hhttps.org.",
-    "consent.warnB1":"Only click “Allow” if you really trust the platform",
-    "consent.warnB2":". Check in particular that the URL in the address bar matches",
-    "consent.warnB3":".","consent.heading":"wants to see your identity",
-    "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
-    "consent.pseudoLabel":"Display name (your choice, optional)","consent.pseudoHint":"It does not have to be your real name. You decide what to reveal.",
-    "consent.footPre":"No personal data is shared. You can revoke the connection any time at",
-    "consent.footPost":".","consent.processing":"Processing…",
-    "consent.noIdentity":"No HHTTPS identity found. Please log in at hhttps.org first.",
-    "consent.errorPrefix":"Error: ",
-    "scope.openid.title":"Anonymous identity","scope.openid.desc":"A pseudonymous identifier that only this platform sees.",
-    "scope.role.title":"Professional role","scope.role.desc":"Your verified professional role — only if present (e.g. via EUDI wallet).",
-    "scope.verification_method.title":"Verification method","scope.verification_method.desc":"How your role was verified (e.g. ORCID, press card).",
-    "scope.age_group.title":"Age group","scope.age_group.desc":"Your rough age group (e.g. 18+), not your date of birth. Currently self-declared.",
-    "scope.email.title":"E-mail address","scope.email.desc":"Your verified e-mail address is passed on to this platform."
-  }
-};
-let CONSENT_LANG = 'de';
-function t(k){ return (CONSENT_I18N[CONSENT_LANG]||CONSENT_I18N.de)[k] ?? (CONSENT_I18N.de[k] ?? k); }
-function applyConsentLang(lang){
-  CONSENT_LANG = CONSENT_I18N[lang] ? lang : 'de';
-  document.documentElement.lang = CONSENT_LANG;
-  document.querySelectorAll('[data-i18n]').forEach(function(e){ var v = t(e.getAttribute('data-i18n')); if (v != null) e.textContent = v; });
-  document.querySelectorAll('.lang-toggle button').forEach(function(b){ b.classList.toggle('active', b.dataset.lang === CONSENT_LANG); });
-  try { localStorage.setItem('iamhmn-lang', CONSENT_LANG); } catch(e){}
-}
-function detectConsentLang(){
-  try { var sv = localStorage.getItem('iamhmn-lang'); if (sv && CONSENT_I18N[sv]) return sv; } catch(e){}
-  var n = (navigator.language || 'de').slice(0,2).toLowerCase();
-  return CONSENT_I18N[n] ? n : 'de';
-}
-document.querySelectorAll('.lang-toggle button').forEach(function(b){
-  b.addEventListener('click', function(){ applyConsentLang(b.dataset.lang); });
-});
-applyConsentLang(detectConsentLang());
-try {
-  var _idn = JSON.parse(localStorage.getItem('hhttps_identity')||'null');
-  if (!_idn || !_idn.role) {
-    var _rr = document.querySelector('.scope-row[data-scope="role"]');
-    if (_rr) _rr.style.display = 'none';
-  }
-} catch(e){}
-</script>
+<script type="application/json" id="consent-config">${config}</script>
+<script type="module" src="/hhttps/oauth/consent.js"></script>
 </body></html>`;
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 // ─── Roles registry ───────────────────────────────────────────────────────────
 
@@ -2667,18 +2397,46 @@ app.get('/hhttps/roles', (req, res) => {
   });
 });
 
+/**
+ * AP3-37 (#177): ONE error responder for the identity endpoints
+ * (webauthn/*, token/refresh, session/*, email/*, verify/github/*).
+ * `code` is the machine-readable value that lands in `error`; `extra` carries
+ * the additional fields a route documents (`detail`, `attemptsLeft`, …).
+ * The emitted body is byte-for-byte what these routes produced before — the
+ * helper only stops each of them from hand-rolling the same object.
+ */
+function sendError(res, status, code, extra = null) {
+  return res.status(status).json(extra ? { error: code, ...extra } : { error: code });
+}
+
+// ─── AP3-42 (#199): named constants for the identity flow ───────────────
+// These numbers used to sit inline at every call site, which is how the
+// comments around them drifted away from the values (AP3-12).
+const SESSION_BOOTSTRAP_TTL_MS   = 15 * 60_000;   // /session/start — long enough to receive and type a code
+const PASSKEY_SESSION_TTL_MS     = 30 * 60_000;   // after webauthn/auth/finish — pseudonym / role / age choices
+const PASSKEY_TRUST_SEED         = 50;            // = HUMAN_CONFIRMED_THRESHOLD (email 20 + passkey 30); the
+                                                  // real number is computed by computeVerification later
+const WEBAUTHN_REG_CHALLENGE_TTL_MS  = 120_000;
+const WEBAUTHN_AUTH_CHALLENGE_TTL_MS = 90_000;
+const MAX_EMAILS_PER_SESSION     = 3;             // resend cap per session (the IP cap is limit.email)
+const MIN_SESSION_REMAINDER_MS   = 60_000;        // AP3-05: refuse a send that would outlive its session
+
 // ─── Token surface (W-3) ─────────────────────────────────────────────────────
 // The method-neutral identity claims of an HHTTPS access token (AK-9 / AK-18):
 // verified_methods + the four *_verified flags, the domain value and the
 // account pseudonym (D3). Shared by /role/declare, /eid/upgrade and
 // /token/refresh so the three never drift apart.
-function tokenSurface(session, v, pseudonym = session?.pseudonym || null) {
-  const methods = Array.isArray(v?.methods) ? v.methods : [];
+// AP3-43 (#199): the input is the surface itself — `{ methods, emailDomain,
+// pseudonym }` — not a session row. /token/refresh used to fake a session
+// object (`{ emailDomain }`) and a verification object (`{ methods }`) just to
+// satisfy the old signature.
+function tokenSurface({ methods, emailDomain = null, pseudonym = null }) {
+  const list = Array.isArray(methods) ? methods : [];
   return {
-    verified_methods:    methods,
-    ...methodFlags(methods),          // email/passkey/github/eudi_verified
+    verified_methods:    list,
+    ...methodFlags(list),             // email/passkey/github/eudi_verified
     verification_status: 'verified',
-    ...(session?.emailDomain ? { domain_name: session.emailDomain } : {}),
+    ...(emailDomain ? { domain_name: emailDomain } : {}),
     ...(pseudonym ? { pseudonym } : {})
   };
 }
@@ -2694,9 +2452,9 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
     // parameter, not a gate violation); with `sessionId` the body `userId` is
     // ignored.
     const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+    if (!sessionId) return sendError(res, 400, 'sessionId required');
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    if (!session) return sendError(res, 404, 'Unknown or expired session.');
     if (!requireEmailVerified(session, res)) return;
 
     const userId    = session.userId;
@@ -2723,9 +2481,9 @@ app.post('/hhttps/webauthn/register/start', limit.webauthn, async (req, res) => 
       supportedAlgorithmIDs: [-7, -257]
     });
 
-    await db.challenges.create(userId, options.challenge, userId, 'registration', 120_000);
+    await db.challenges.create(userId, options.challenge, userId, 'registration', WEBAUTHN_REG_CHALLENGE_TTL_MS);
     res.json({ userId, options });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, 500, e.message); }
 });
 
 app.post('/hhttps/webauthn/register/finish', async (req, res) => {
@@ -2736,18 +2494,18 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
   // email gate still holds at finish time. All three checks run BEFORE the
   // challenge lookup so a rejected call never touches the challenge.
   const { userId, response, sessionId } = req.body || {};
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (!sessionId) return sendError(res, 400, 'sessionId required');
 
   // AP3-03 (#46): every await lives inside the try — a DB error must answer,
   // not turn into an unhandled rejection with no response at all.
   try {
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Unknown or expired session.' });
+    if (!session) return sendError(res, 404, 'Unknown or expired session.');
     if (!requireEmailVerified(session, res)) return;
-    if (session.userId !== userId) return res.status(401).json({ error: 'session_user_mismatch' });
+    if (session.userId !== userId) return sendError(res, 401, 'session_user_mismatch');
 
     const stored = await db.challenges.get(userId);
-    if (!stored) return res.status(400).json({ error: 'Challenge expired.' });
+    if (!stored) return sendError(res, 400, 'Challenge expired.');
 
     const v = await verifyRegistrationResponse({
       response, expectedChallenge: stored.challenge,
@@ -2755,7 +2513,7 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
       requireUserVerification: true
     });
     if (!v.verified || !v.registrationInfo)
-      return res.status(400).json({ error: 'Verifikation fehlgeschlagen.' });
+      return sendError(res, 400, 'Verifikation fehlgeschlagen.');
 
     const { credentialID, credentialPublicKey, counter,
             credentialDeviceType, credentialBackedUp } = v.registrationInfo;
@@ -2777,14 +2535,14 @@ app.post('/hhttps/webauthn/register/finish', async (req, res) => {
       status: 'registered', credentialId: credId,
       deviceType: credentialDeviceType, backedUp: credentialBackedUp
     });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { sendError(res, 400, e.message); }
 });
 
 // ─── WebAuthn Authentication ──────────────────────────────────────────────────
 
 app.post('/hhttps/webauthn/auth/start', limit.webauthn, async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId } = req.body || {};   // AP3-37: same body handling as every sibling route
     const userCreds = userId ? await db.credentials.findByUserId(userId) : [];
 
     // CRITICAL: convert credentialId from base64url string to Buffer
@@ -2799,9 +2557,9 @@ app.post('/hhttps/webauthn/auth/start', limit.webauthn, async (req, res) => {
       rpID: RP_ID, userVerification: 'required',
       allowCredentials, timeout: 60_000
     });
-    await db.challenges.create(sessionId, options.challenge, userId, 'authentication', 90_000);
+    await db.challenges.create(sessionId, options.challenge, userId, 'authentication', WEBAUTHN_AUTH_CHALLENGE_TTL_MS);
     res.json({ sessionId, options });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { sendError(res, 500, e.message); }
 });
 
 app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
@@ -2815,14 +2573,14 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
   // the try, so a DB error answers 400 instead of hanging.
   const { sessionId, response, emailSessionId, priorSessionId } = req.body || {};
   if (typeof sessionId !== 'string' || !sessionId || typeof response?.id !== 'string' || !response.id)
-    return res.status(400).json({ error: 'sessionId and response.id required' });
+    return sendError(res, 400, 'sessionId and response.id required');
 
   try {
     const stored = await db.challenges.get(sessionId);
-    if (!stored) return res.status(400).json({ error: 'Session expired.' });
+    if (!stored) return sendError(res, 400, 'Session expired.');
 
     const cred = await db.credentials.get(response.id);
-    if (!cred) return res.status(400).json({ error: 'Passkey nicht registriert.' });
+    if (!cred) return sendError(res, 400, 'Passkey nicht registriert.');
 
     const v = await verifyAuthenticationResponse({
       response, expectedChallenge: stored.challenge,
@@ -2835,7 +2593,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       },
       requireUserVerification: true
     });
-    if (!v.verified) return res.status(401).json({ error: 'WebAuthn fehlgeschlagen.' });
+    if (!v.verified) return sendError(res, 401, 'WebAuthn fehlgeschlagen.');
 
     await db.credentials.updateCounter(cred.credentialId, v.authenticationInfo.newCounter);
     await db.challenges.delete(sessionId);
@@ -2852,7 +2610,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
     const priorId = priorSessionId || emailSessionId;
     const prior = priorId ? await db.sessions.get(priorId) : null;
     const resolved = resolvePasskeySession({ storedUserId: stored.userId, cred, prior });
-    if (resolved.error) return res.status(401).json({ error: resolved.error });
+    if (resolved.error) return sendError(res, 401, resolved.error);
     const { priorMerge } = resolved;
 
     // Create the (merged) verified session. TTL 30 min — long enough for the
@@ -2867,11 +2625,11 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       hasPasskey:   true,
       // Initial trust placeholder. The final trust is computed in /role/declare
       // via computeVerification (email 20 + passkey 30 + domain + …, capped 100).
-      // We seed with 50 — the human-confirmed threshold (email+passkey) — so a
-      // caller that reads the session before /role/declare sees a sane number.
-      trustScore:   50,
+      // The seed is the human-confirmed threshold (email+passkey) so a caller
+      // that reads the session before /role/declare sees a sane number.
+      trustScore:   PASSKEY_TRUST_SEED,
       ...priorMerge,   // incl. the merged account pseudonym (D3) — written on INSERT
-    }, 1800_000); // 30 min
+    }, PASSKEY_SESSION_TTL_MS);
     // AP3-01: sessions.create writes only the base columns — the merged
     // e-mail/GitHub verification has to be persisted explicitly, otherwise the
     // e-mail-first gate refuses the very next role/declare with 403.
@@ -2889,7 +2647,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
       merged:    Object.keys(priorMerge).length > 0,
       message:   'WebAuthn OK. Please declare a role.'
     });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) { sendError(res, 400, e.message); }
 });
 
 // ─── Token Refresh ────────────────────────────────────────────────────────────
@@ -2900,7 +2658,7 @@ app.post('/hhttps/webauthn/auth/finish', async (req, res) => {
 app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
   const { refreshToken } = req.body || {};
   if (typeof refreshToken !== 'string' || !refreshToken)
-    return res.status(400).json({ error: 'refreshToken required' });
+    return sendError(res, 400, 'refreshToken required');
 
   try {
     const d = verifyToken(refreshToken);
@@ -2914,11 +2672,15 @@ app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
       const ended = await db.refreshTokens.deleteByUser(d.userId, null);
       for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'refresh-reuse-detected');
       console.warn('[token/refresh] reuse detected — refresh family revoked for user', d.userId);
-      return res.status(401).json({ error: 'refresh_token_reuse_detected' });
+      return sendError(res, 401, 'refresh_token_reuse_detected');
     }
 
-    const stored = await db.refreshTokens.get(d.jti);
-    if (!stored) throw new Error('Refresh-Token nicht aktiv');
+    // AP3-34 (#156): shared with checkTokenValid — the row is looked up and
+    // the "not active" wording produced in exactly one place. The rest of the
+    // refresh branch cannot be delegated to checkTokenValid: a revoked jti is
+    // a ROTATION REUSE here (family kill, 401 refresh_token_reuse_detected),
+    // not the generic 'Token revoked', and `oauth_refresh` is refused above.
+    const stored = await loadActiveRefreshToken(d.jti);
 
     const cred = stored.credential_id ? await db.credentials.get(stored.credential_id) : null;
 
@@ -2941,7 +2703,7 @@ app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
       trustScore,
       method:     'verification-methods',
       deviceType: cred?.deviceType || 'unknown',
-      ...tokenSurface({ emailDomain: domainVal }, { methods }, pseudonym),
+      ...tokenSurface({ methods, emailDomain: domainVal, pseudonym }),
       ...ageCarry
     });
 
@@ -2973,72 +2735,30 @@ app.post('/hhttps/token/refresh', limit.revoke, async (req, res) => {
       message:   '✓ New access token issued — no re-authentication needed.'
     });
   } catch (e) {
-    res.status(401).json({ error: e.message });
+    sendError(res, 401, e.message);
   }
 });
 
-// ─── Email-First Session ─────────────────────────────────────────────────────
-//
-// POST /hhttps/session/email/start
-//
-// Erstellt eine verified Session ohne WebAuthn-Credential.
-// Passkey bleibt optional und kann nachträglich den trust_score erhöhen.
-//
-// Motivation: Ermöglicht Email-first-Flow auf der Landing Page ohne
-// vorherige Passkey-Registrierung. Sessions werden mit trust_score: 30
-// erstellt (Baseline E-Mail). Nach erfolgreicher E-Mail-Verifikation
-// wertet /hhttps/role/declare den emailTrustBonus aus wie gehabt.
-//
-// Rate-limit: identisch mit limit.email (5 Req / 60 min pro IP).
-// Kein DB-Schema-Change: credential_id, device_type, backed_up sind nullable.
-//
-// Body:     { pseudonym?: string }
-// Response: { sessionId, userId, trustScore: 30, method: "email-pending" }
-//
-app.post('/hhttps/session/email/start', limit.email, async (req, res) => {
-  try {
-    const { pseudonym } = req.body || {};
-
-    const cleanPseudo = sanitizePseudonym(pseudonym); // AK-6: max 32 chars, safe charset
-
-    const userId = uuid();
-    const sid    = uuid();
-
-    // credential_id, device_type, backed_up sind in der DB nullable —
-    // kein ALTER TABLE nötig.
-    await db.sessions.create(sid, {
-      userId,
-      credentialId: null,
-      deviceType:   'email-only',
-      backedUp:     false,
-      verified:     true,   // session gilt als verified für /hhttps/email/send
-      trustScore:   0,      // email pending — 0 until the email is confirmed (then 20)
-      pseudonym:    cleanPseudo, // T4/D3: session carries the wish
-    }, 900_000); // 15 min — ausreichend für E-Mail-Zustellung und Bestätigung
-
-    await db.stats.increment('verifications');
-
-    res.json({
-      sessionId:  sid,
-      userId,
-      trustScore: 0,        // email pending — not yet a verified method
-      method:     'email-pending',
-      pseudonym:  cleanPseudo,
-      message:    'Session erstellt. Bitte E-Mail verifizieren.',
-    });
-  } catch (e) {
-    console.error('[session/email/start]', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// ─── Method-neutral session bootstrap (v0.5) ────────────────────────────────
+// ─── Method-neutral session bootstrap (v0.5) ───────────────────────
 // Any of the equal entry methods (email, passkey, EUDI Wallet, GitHub) may open
-// a session FIRST and then run its own real verification against it. Same
-// primitive as /hhttps/session/email/start, but without the email label: the
+// a session FIRST and then run its own real verification against it. The
 // session carries NO verified method yet (trust 0) until one really lands. The
 // token gate in /hhttps/role/declare requires ≥1 genuinely verified method, so
 // an empty bootstrap session can never mint a token on its own.
+//
+// AP3-30 (#141) / W-8: the near-identical twin POST /hhttps/session/email/start
+// is GONE. It differed only in deviceType ('email-only' vs 'pending') and the
+// `method` label, and nothing called it: neither public/, sites/, extension/,
+// privacy-pass/public/, sdk/ nor the test suite. /hhttps/info no longer
+// advertises it either.
+//
+// AP3-12 (#199): the numbers in the old comment block were wrong — a bootstrap
+// session is created with trustScore 0 (NOT 30) and carries no verified
+// method; the final trust comes from computeVerification() in /role/declare.
+// The rate limit is `limit.email` — see the limiter definition for the window.
+//
+// Body:     { pseudonym?: string }
+// Response: { sessionId, userId, trustScore: 0, method: 'session-pending', pseudonym }
 app.post('/hhttps/session/start', limit.email, async (req, res) => {
   try {
     const { pseudonym } = req.body || {};
@@ -3047,6 +2767,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
     const userId = uuid();
     const sid    = uuid();
 
+    // credential_id / device_type / backed_up are nullable — no schema change.
     await db.sessions.create(sid, {
       userId,
       credentialId: null,
@@ -3055,7 +2776,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
       verified:     true,        // "session exists" — NOT a trust statement (trust stays 0)
       trustScore:   0,
       pseudonym:    cleanPseudo, // T4/D3: session carries the wish
-    }, 900_000); // 15 min
+    }, SESSION_BOOTSTRAP_TTL_MS);
 
     await db.stats.increment('verifications');
 
@@ -3069,7 +2790,7 @@ app.post('/hhttps/session/start', limit.email, async (req, res) => {
     });
   } catch (e) {
     console.error('[session/start]', e.message);
-    res.status(500).json({ error: e.message });
+    sendError(res, 500, e.message);
   }
 });
 
@@ -3123,16 +2844,34 @@ async function burnEmailVerification(sessionId, userId, value) {
 // address A would bind the session to whatever address the context holds now.
 function emailContextMatches(ctx, verification) {
   if (!ctx?.email || !verification?.emailHash) return false;
-  const h = crypto.createHash('sha256').update(normalizeEmail(ctx.email)).digest('hex');
-  return h === verification.emailHash;
+  // AP3-35 (#163): the hash contract lives in identity.js — email.js WRITES the
+  // column with the same function, so the two sides can no longer drift.
+  return emailVerificationHash(ctx.email) === verification.emailHash;
 }
 
-/**
- * @returns {{ userId, pseudonym, created, methods, trust }}
- * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
- * An existing anchor always wins (AK-8): its stored userId/pseudonym are returned
- * by resolveOrCreate and the session is rebound to them (AK-2).
- */
+// ─── AP4-48 (#231): the verification flag-bag ────────────────────────────────
+// computeVerification() takes a flat bag of method flags. It used to be spelled
+// out at five call sites (role/declare, role/card, age/upgrade, eid/upgrade and
+// the e-mail anchor bind), word for word except for the one or two flags each
+// site actually knows better. ONE builder now derives the bag from the session;
+// `overrides` carries what the caller knows and the session does not yet (the
+// e-mail classification before the session row is updated, a verified age, an
+// eID proof that lives in the token rather than the session).
+function sessionFlags(session, overrides = {}) {
+  return {
+    email:       !!session.emailVerified,
+    passkey:     !!(session.hasPasskey || session.credentialId),
+    domain:      !!session.emailDomain,
+    domainTrust: session.emailTrustBonus || 0,
+    domainValue: session.emailDomain || null,
+    github:      !!session.githubVerified,
+    eudi:        !!session.eudiVerified,
+    age:         false,   // age is trust-neutral and never derived from the session
+    ...overrides
+  };
+}
+
+/** A 409-class failure of the anchor binding, carrying the wire error code. */
 function anchorConflict(code) {
   const err = new Error(code);
   err.code = code;
@@ -3140,6 +2879,16 @@ function anchorConflict(code) {
   return err;
 }
 
+/**
+ * AP3-45 (#199): this block documents bindSessionToEmailAnchor — it used to sit
+ * on anchorConflict() above, which returns none of it.
+ *
+ * @returns {{ userId, pseudonym, created, methods, trust }}
+ * Priority for the pseudonym: pseudonymInput (from /email/send) > session.pseudonym.
+ * An existing anchor always wins (AK-8): its stored userId/pseudonym are returned
+ * by resolveOrCreate and the session is rebound to them (AK-2).
+ * @throws a 409 anchorConflict ('email_already_bound' / 'identity_conflict').
+ */
 async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymInput, verification }) {
   const emailHash = emailAnchorHash(email);
   const wish      = sanitizePseudonym(pseudonymInput) ?? session.pseudonym ?? null;
@@ -3170,15 +2919,14 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
     emailCategory:   verification.category,
   });
 
-  const v = computeVerification({
+  // The session row was just updated above, but `session` is the pre-update
+  // snapshot — the e-mail classification comes from `verification`.
+  const v = computeVerification(sessionFlags(session, {
     email:       true,
-    passkey:     !!(session.hasPasskey || session.credentialId),
     domain:      !!verification.domain,
     domainTrust: verification.trustBonus || 0,
-    domainValue: verification.domain || null,
-    github:      !!session.githubVerified,
-    eudi:        !!session.eudiVerified
-  });
+    domainValue: verification.domain || null
+  }));
 
   // P-3: the cache upsert and the removal of the consumed e-mail context are
   // independent writes — run them in parallel (one roundtrip less).
@@ -3195,6 +2943,40 @@ async function bindSessionToEmailAnchor({ session, sessionId, email, pseudonymIn
   return { userId: anchor.userId, pseudonym: anchor.pseudonym, created: anchor.created, methods: v.methods, trust: v.trust };
 }
 
+/**
+ * AP3-33 (#148): THE confirmation path. /hhttps/email/verify (magic link) and
+ * /hhttps/email/confirm-code (typed code) used to implement everything after
+ * "the proof is valid" twice, in a different ORDER and with two error
+ * vocabularies — which is why the #22 fix (load the session before the proof is
+ * consumed) only ever reached the code path.
+ *
+ * Both routes now: (1) load the session, (2) consume their own proof, (3) call
+ * this. What stays route-specific is only how the proof is obtained and how the
+ * outcome is rendered (302 with a `reason`, or JSON with a status).
+ *
+ * @returns {{ ok: true, bound }} | {{ ok: false, status: number, reason: string }}
+ */
+async function confirmEmailVerification({ session, sessionId, verification }) {
+  // T4: the plaintext address was parked by /email/send in the same session.
+  const ctx = await readEmailContext(sessionId);
+  if (!ctx?.email) return { ok: false, status: 409, reason: 'email_context_missing' };
+  // F-1 (K-1/S-1): the proof must belong to the address the context describes.
+  if (!emailContextMatches(ctx, verification)) return { ok: false, status: 409, reason: 'email_context_mismatch' };
+
+  // Bind the session to the stable identity anchor (AK-1/AK-2), store the
+  // pseudonym (AK-6/7/8) and fill the claims cache (AK-16).
+  try {
+    const bound = await bindSessionToEmailAnchor({
+      session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification
+    });
+    return { ok: true, bound };
+  } catch (e) {
+    if (e.status === 409) return { ok: false, status: 409, reason: e.code };
+    console.error('[email/confirm] anchor bind failed:', e.message);
+    return { ok: false, status: 500, reason: 'anchor_failed' };
+  }
+}
+
 app.post('/hhttps/email/send', limit.email, async (req, res) => {
   const { sessionId, email: rawEmail, role, pseudonym } = req.body || {};
   // AK-2: case/whitespace variants of the same address are the same anchor.
@@ -3202,13 +2984,13 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
   // AP3-13: strict syntax — no comments/quotes/non-ASCII that the mail
   // transport and classifyDomain would read differently.
   if (!isValidEmail(email))
-    return res.status(400).json({ error: 'Invalid email address.' });
+    return sendError(res, 400, 'Invalid email address.');
 
   // AP3-03 (#46): every await below is inside the try — a DB error answers 500
   // instead of leaving the request without any response.
   try {
     const session = await db.sessions.get(sessionId);
-    if (!session?.verified) return res.status(401).json({ error: 'Invalid session.' });
+    if (!session?.verified) return sendError(res, 401, 'Invalid session.');
 
     // AP3-05 (#61): the code, the parked e-mail context and the SESSION must
     // not outlive each other. The session TTL runs from session start, the mail
@@ -3216,14 +2998,14 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
     // and a session with almost nothing left is refused instead of producing a
     // code that is dead on arrival.
     const remainingMs = Math.max(0, (session.expires || 0) - Date.now());
-    if (remainingMs < 60_000)
-      return res.status(410).json({ error: 'session_expired', detail: 'Start a new session before requesting a code.' });
+    if (remainingMs < MIN_SESSION_REMAINDER_MS)
+      return sendError(res, 410, 'session_expired', { detail: 'Start a new session before requesting a code.' });
     // W-5: code row, magic-link token and the parked context share ONE value.
     const mailTtlMs = Math.min(EMAIL_CONTEXT_TTL_MS, remainingMs);
 
     const sentCount = await db.sessions.incrementEmailsSent(sessionId);
-    if (sentCount > 3)
-      return res.status(429).json({ error: 'Zu viele E-Mail-Anfragen pro Session.' });
+    if (sentCount > MAX_EMAILS_PER_SESSION)
+      return sendError(res, 429, 'Zu viele E-Mail-Anfragen pro Session.');
 
     const classification = classifyDomain(email);
 
@@ -3255,8 +3037,8 @@ app.post('/hhttps/email/send', limit.email, async (req, res) => {
     res.json(resp);
   } catch (err) {
     // F-3 (S-4): no transport and no explicit dev mode → fail closed, no code.
-    if (err.code === 'email_transport_unavailable') return res.status(503).json({ error: 'email_transport_unavailable' });
-    res.status(500).json({ error: 'E-Mail-Fehler: ' + err.message });
+    if (err.code === 'email_transport_unavailable') return sendError(res, 503, 'email_transport_unavailable');
+    sendError(res, 500, 'E-Mail-Fehler: ' + err.message);
   }
 });
 
@@ -3269,29 +3051,24 @@ app.get('/hhttps/email/verify', async (req, res) => {
   if (typeof token !== 'string' || !token || typeof sessionId !== 'string' || !sessionId)
     return res.redirect('/?email_verify=error&reason=missing_params');
 
+  const fail = (reason) => res.redirect(`/?email_verify=error&reason=${encodeURIComponent(reason)}`);
+
   try {
-    const result = await verifyEmailToken(token);
-    if (!result.valid) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(result.error)}`);
-    // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
-    if (result.sessionId !== sessionId) return res.redirect('/?email_verify=error&reason=session_mismatch');
-
+    // #22 (AP3-33): load the session BEFORE the token is consumed. verifyEmailToken()
+    // marks the row `used`; with an unknown/expired session that used to burn a
+    // token the user could still have redeemed on the real session. The code path
+    // already did this — now both do.
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.redirect('/?email_verify=error&reason=session_expired');
+    if (!session) return fail('session_expired');
 
-    const ctx = await readEmailContext(sessionId);
-    if (!ctx?.email) return res.redirect('/?email_verify=error&reason=email_context_missing');
-    if (!emailContextMatches(ctx, result)) return res.redirect('/?email_verify=error&reason=email_context_mismatch');
+    const result = await verifyEmailToken(token);
+    if (!result.valid) return fail(result.error);
+    // F-1 (K-2/S-3): the token was issued for ONE session — never bind another.
+    if (result.sessionId !== sessionId) return fail('session_mismatch');
 
-    let bound;
-    try {
-      bound = await bindSessionToEmailAnchor({
-        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
-      });
-    } catch (e) {
-      if (e.status === 409) return res.redirect(`/?email_verify=error&reason=${encodeURIComponent(e.code)}`);
-      console.error('[email/verify] anchor bind failed:', e.message);
-      return res.redirect('/?email_verify=error&reason=anchor_failed');
-    }
+    const outcome = await confirmEmailVerification({ session, sessionId, verification: result });
+    if (!outcome.ok) return fail(outcome.reason);
+    const bound = outcome.bound;
 
     res.redirect(
       `/?email_verify=success&level=${encodeURIComponent(result.level)}` +
@@ -3317,7 +3094,7 @@ app.get('/hhttps/email/verify', async (req, res) => {
 app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
   const { sessionId, code } = req.body || {};
   if (typeof sessionId !== 'string' || !sessionId || typeof code !== 'string' || !code)
-    return res.status(400).json({ error: 'sessionId and code required.' });
+    return sendError(res, 400, 'sessionId and code required.');
 
   // AP3-03 (#46): all awaits inside the try — no unanswered request on a DB error.
   try {
@@ -3325,7 +3102,7 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     // the verification row `used`; with an unknown/expired session that would
     // burn a code the user can still legitimately confirm on the real session.
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Session not found or expired.' });
+    if (!session) return sendError(res, 404, 'Session not found or expired.');
 
     // AP3-19 (#122): a 6-digit code has 10^6 values, and the only brake used to
     // be the IP rate limit. Wrong guesses are counted PER SESSION; after
@@ -3334,43 +3111,29 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     // request a new mail.
     const attempts = await readEmailAttempts(sessionId);
     if (attempts >= MAX_EMAIL_CODE_ATTEMPTS)
-      return res.status(429).json({ error: 'too_many_attempts' });
+      return sendError(res, 429, 'too_many_attempts');
 
     const result = await verifyEmailCode(code, sessionId);
     if (!result.valid) {
       const used = attempts + 1;
       if (used >= MAX_EMAIL_CODE_ATTEMPTS) {
         await burnEmailVerification(sessionId, session.userId, used);
-        return res.status(429).json({ error: 'too_many_attempts' });
+        return sendError(res, 429, 'too_many_attempts');
       }
       await bumpEmailAttempts(sessionId, session.userId, used);
-      return res.status(400).json({ error: result.error, attemptsLeft: MAX_EMAIL_CODE_ATTEMPTS - used });
+      return sendError(res, 400, result.error, { attemptsLeft: MAX_EMAIL_CODE_ATTEMPTS - used });
     }
-
-    // T4: the plaintext email was parked by /email/send in the same session.
-    const ctx = await readEmailContext(sessionId);
-    if (!ctx?.email) return res.status(409).json({ error: 'email_context_missing' });
-    // F-1 (K-1/S-1): the code must belong to the address the context describes.
-    if (!emailContextMatches(ctx, result)) return res.status(409).json({ error: 'email_context_mismatch' });
 
     // The code was right — the guess counter has done its job.
     await db.challenges.delete(emailAttemptsId(sessionId));
 
-    // Bind the session to the stable identity anchor (AK-1/AK-2), store the
-    // pseudonym (AK-6/7/8) and fill the claims cache (AK-16). The verification
-    // surface reported here is what the user has RIGHT NOW (before adding more
-    // methods), so the UI can immediately show the confirmed method badges. Trust
-    // is internal/API-only; the UI renders `methods`, never the number.
-    let bound;
-    try {
-      bound = await bindSessionToEmailAnchor({
-        session, sessionId, email: ctx.email, pseudonymInput: ctx.pseudonym, verification: result
-      });
-    } catch (e) {
-      if (e.status === 409) return res.status(409).json({ error: e.code });
-      console.error('[email/confirm-code] anchor bind failed:', e.message);
-      return res.status(500).json({ error: 'anchor_bind_failed' });
-    }
+    // AP3-33: the shared confirmation path (context match + anchor binding).
+    // The verification surface reported below is what the user has RIGHT NOW
+    // (before adding more methods), so the UI can immediately show the confirmed
+    // method badges. Trust is internal/API-only; the UI renders `methods`.
+    const outcome = await confirmEmailVerification({ session, sessionId, verification: result });
+    if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.reason });
+    const bound = outcome.bound;
 
     res.json({
       verified:      true,
@@ -3386,7 +3149,7 @@ app.post('/hhttps/email/confirm-code', limit.email, async (req, res) => {
     });
   } catch (e) {
     console.error('[email/confirm-code] failed:', e.message);
-    res.status(500).json({ error: 'internal_error' });
+    sendError(res, 500, 'internal_error');
   }
 });
 
@@ -3395,10 +3158,10 @@ app.post('/hhttps/email/status', async (req, res) => {
   // anything at all — an object sessionId used to reach the query builder).
   const sessionId = req.body?.sessionId;
   if (typeof sessionId !== 'string' || !sessionId)
-    return res.status(400).json({ error: 'sessionId required' });
+    return sendError(res, 400, 'sessionId required');
   try {
     const session = await db.sessions.get(sessionId);
-    if (!session) return res.status(404).json({ error: 'Session not found.' });
+    if (!session) return sendError(res, 404, 'Session not found.');
     res.json({
       emailVerified: session.emailVerified || false,
       emailLevel:    session.emailLevel    || null,
@@ -3407,7 +3170,7 @@ app.post('/hhttps/email/status', async (req, res) => {
     });
   } catch (e) {
     console.error('[email/status] failed:', e.message);
-    res.status(500).json({ error: 'internal_error' });
+    sendError(res, 500, 'internal_error');
   }
 });
 
@@ -3417,6 +3180,10 @@ app.post('/hhttps/email/status', async (req, res) => {
 // score survive. See external-verify.js for the full contract.
 
 app.get('/hhttps/verify/github/start', async (req, res) => {
+  // AP3-37 (#177): this is the only route in this block a BROWSER navigates to
+  // directly (it ends in a 302 to GitHub), so its two pre-flight failures stay
+  // plain text — a JSON body would be shown to the user verbatim. Everything
+  // that answers an XHR uses sendError().
   const { session: sessionId } = req.query;
   if (!sessionId) return res.status(400).send('session parameter required');
 
@@ -3425,17 +3192,15 @@ app.get('/hhttps/verify/github/start', async (req, res) => {
   if (!requireEmailVerified(session, res)) return;   // AK-11: gate BEFORE the config check
 
   if (!isGithubConfigured()) {
-    return res.status(503).json({
-      error: 'github_not_configured',
-      detail: 'This HHTTPS issuer has no GitHub OAuth app configured. Please contact the operator.'
-    });
+    return sendError(res, 503, 'github_not_configured',
+      { detail: 'This HHTTPS issuer has no GitHub OAuth app configured. Please contact the operator.' });
   }
 
   try {
     const authUrl = await startGithubVerify({ sessionId, redirectBase: BASE_URL });
     res.redirect(authUrl);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendError(res, 500, e.message);
   }
 });
 
@@ -3453,7 +3218,8 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
     res.send(renderGithubReturnPage({
       ok: true,
       title: 'GitHub verified',
-      message: 'You can close this tab and return to hhttps.org.'
+      message: 'You can close this tab and return to hhttps.org.',
+      nonce: res.locals.cspNonce
     }));
   } catch (e) {
     // AP3-09 (#76): the anchor collision is a hard failure now — the session
@@ -3463,25 +3229,31 @@ app.get('/hhttps/verify/github/callback', async (req, res) => {
         ok: false,
         title: 'GitHub account already linked',
         message: 'This GitHub account is already linked to another iamhmn identity. ' +
-                 'Sign in with that identity or use a different GitHub account.'
+                 'Sign in with that identity or use a different GitHub account.',
+        nonce: res.locals.cspNonce
       }));
     }
     res.send(renderGithubReturnPage({
       ok: false,
       title: 'GitHub verification failed',
-      message: e.message
+      message: e.message,
+      nonce: res.locals.cspNonce
     }));
   }
 });
 
 // ─── Static landing page for the GitHub OAuth popup tab ─────────────────────
 // Bilingual (EN/DE stacked), self-closes after 2 s. Inline CSS keeps it tiny.
-function renderGithubReturnPage({ ok, title, message }) {
+function renderGithubReturnPage({ ok, title, message, nonce = '' }) {
   const color = ok ? '#34d399' : '#f87171';
   const icon  = ok ? '✓'  : '✗';
+  // AP3-41 (#183): `title` is escaped too. Today every caller passes a literal,
+  // but it lands in <title> AND in <h1> — the escaping is part of the contract,
+  // not a property of the current call sites.
+  const safeTitle = escapeHtml(title);
   // v0.5: the trust score is API-only and is NEVER shown to the user — no score line.
   return `<!DOCTYPE html><html lang="en"><head>
-<meta charset="utf-8"><title>${title}</title>
+<meta charset="utf-8"><title>${safeTitle}</title>
 <style>
   body{margin:0;background:#0d1421;color:#e2f0fa;font:14px/1.6 system-ui,sans-serif;
        min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;}
@@ -3496,12 +3268,15 @@ function renderGithubReturnPage({ ok, title, message }) {
 </style></head><body>
   <div class="card">
     <div class="icon">${icon}</div>
-    <h1>${title}</h1>
+    <h1>${safeTitle}</h1>
     <p class="msg">${escapeHtml(message)}</p>
     <p class="lang-de">Du kannst diesen Tab schließen und zu hhttps.org zurückkehren.</p>
-    <button onclick="window.close()">Close tab / Tab schließen</button>
+    <button id="closeBtn">Close tab / Tab schließen</button>
   </div>
-  <script>
+  <script${nonce ? ` nonce="${nonce}"` : ''}>
+    // AP1-25 (#106): a listener and a nonce, not an onclick attribute — the CSP
+    // no longer allows inline handlers anywhere.
+    document.getElementById('closeBtn').addEventListener('click', () => window.close());
     // Best-effort: try to close after 2 s. Some browsers refuse to close tabs
     // that weren't opened via window.open() — the button is the manual fallback.
     setTimeout(() => { try { window.close(); } catch(e){} }, 2000);
@@ -3511,17 +3286,35 @@ function renderGithubReturnPage({ ok, title, message }) {
 
 app.post('/hhttps/verify/github/status', async (req, res) => {
   const { sessionId } = req.body || {};
-  if (typeof sessionId !== 'string' || !sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (typeof sessionId !== 'string' || !sessionId) return sendError(res, 400, 'sessionId required');
   // AP3-03 (#46): a DB error here used to leave the polling tab without any answer.
   try {
     res.json(await getGithubStatus(sessionId));
   } catch (e) {
     console.error('[verify/github/status] failed:', e.message);
-    res.status(500).json({ error: 'internal_error' });
+    sendError(res, 500, 'internal_error');
   }
 });
 
 // ─── Role Declaration ─────────────────────────────────────────────────────────
+//
+// AP4-49 (#235) — the error contract of the identity routes below
+// (/role/declare, /role/card, /age/*, /eid/upgrade, /revoke*, /validate):
+//
+//   Body       always { error:<snake_case code>, detail?:<safe explanation> }.
+//               `detail` is for the user/operator, never a raw exception text
+//               (AP4-33) — exceptions go to the log.
+//   401        the CALLER is not (or no longer) authenticated: unknown/expired
+//               session on a browser-facing route, invalid token, bad assertion.
+//   403        authenticated, but a precondition is missing (email gate) or the
+//               caller is not internal (`internal_endpoint`).
+//   404        an INTERNAL verifier route was handed a sessionId that does not
+//               exist. These routes have no browser caller to re-authenticate,
+//               so "unknown session" is a lookup miss, not an auth failure —
+//               that is why they answer 404 where the browser routes answer 401.
+//   502        an upstream (EUDIPLO) call failed.
+//   503        this host is missing the configuration the route needs.
+//   500        anything unexpected — `{ error:'internal_error' }`, detail in the log.
 
 // AP4-05 (#64): the handler body runs under try/catch — a thrown error must
 // answer 500 instead of leaving the request hanging (no error middleware here).
@@ -3530,12 +3323,15 @@ app.post('/hhttps/role/declare', async (req, res) => {
     await roleDeclare(req, res);
   } catch (e) {
     console.error('[ROLE-DECLARE] error:', e.message);
-    if (!res.headersSent) res.status(500).json({ error: 'Role declaration failed.' });
+    if (!res.headersSent) res.status(500).json({ error: 'internal_error' });
   }
 });
 
 async function roleDeclare(req, res) {
-  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body || {};
+  // v0.5: `role` and `verificationMethod` from the body are deliberately NOT
+  // read — a role arrives only as an EUDI (Q)EAA, and the method surface is
+  // derived from the session, never claimed by the client.
+  const { sessionId, verificationData, ageGroup } = req.body || {};
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
   // AK-13 / D4: email is the mandatory method — passkey/GitHub/EUDI alone no longer suffice.
@@ -3556,9 +3352,10 @@ async function roleDeclare(req, res) {
   // establishes a human identity. It is enforced below, after the verification
   // surface is computed (see "Sign-in gate" near computeVerification).
 
-  // Optional age_group (orthogonal to role). Phase 1: self-declared only —
-  // honestly labelled, low trust, age_verified:false. Phase 3 will set this
-  // from an EUDI Wallet PID presentation (age_over_NN) with method 'eudi-wallet'.
+  // Optional age_group (orthogonal to role). Here it is ALWAYS self-declared:
+  // honestly labelled, trust-neutral, age_verified:false. The cryptographically
+  // verified variant (method 'eudi-wallet', age_verified:true) is issued by
+  // /hhttps/age/upgrade from an EUDI Wallet presentation — never here.
   let ageClaims = null;
   if (ageGroup !== undefined && ageGroup !== null && ageGroup !== '') {
     // AP4-31 (#203): AGE_GROUPS is a plain object — an own-property check, not a
@@ -3581,18 +3378,10 @@ async function roleDeclare(req, res) {
   // additive, API-only trust + the official HHTTPS method headers + the badges.
   // Self-declared role picking and the typed-in role-ID honesty gate are gone;
   // the only role path is an EUDI (Q)EAA (handled by the eudi-verifier).
+  // Self-declared age is trust-neutral and never a "method" (AGE_VERIFICATION_
+  // METHODS['self-declared'].verified === false), so this stays false in Phase 1.
   const ageVerifiedFlag = !!(ageClaims && ageClaims.age_verified === true);
-  const flags = {
-    email:       !!session.emailVerified,
-    passkey:     !!(session.hasPasskey || session.credentialId),
-    domain:      !!session.emailDomain,
-    domainTrust: session.emailTrustBonus || 0,
-    domainValue: session.emailDomain || null,
-    github:      !!session.githubVerified,
-    eudi:        !!session.eudiVerified,           // set by the EUDI eID flow (eudi-verifier)
-    age:         ageVerifiedFlag                   // self-declared age is trust-neutral, not a "method"
-  };
-  const v = computeVerification(flags);
+  const v = computeVerification(sessionFlags(session, { age: ageVerifiedFlag }));
   const trustScore = v.trust;
 
   // Sign-in gate (v0.5, method-neutral): at least ONE genuinely verified method
@@ -3616,7 +3405,7 @@ async function roleDeclare(req, res) {
     trustScore,
     method:     'verification-methods',
     deviceType: session.deviceType,
-    ...tokenSurface(session, v, pseudonym),
+    ...tokenSurface({ methods: v.methods, emailDomain: session.emailDomain, pseudonym }),
     ...(ageClaims || {})   // age_group / age_verified / age_verification_method (optional)
   });
   const refresh = await issueRefreshToken(session.userId, session.credentialId, null, {
@@ -3705,7 +3494,6 @@ function requireInternalCaller(req, res, tag) {
   }
   return true;
 }
-const INTERNAL_ASSERTION_WINDOW_MS = 300_000;
 const seenAssertionNonces = new Map();   // nonce → expiry (ms)
 function purgeAssertionNonces(now) {
   for (const [n, exp] of seenAssertionNonces) if (exp <= now) seenAssertionNonces.delete(n);
@@ -3716,29 +3504,61 @@ function checkAssertionFreshness(nonce, iat) {
   const now = Date.now();
   const ageMs = now - Number(iat);
   if (iat === undefined || iat === null || iat === '' || !Number.isFinite(ageMs)) return 'Assertion iat required.';
-  if (ageMs < -60_000 || ageMs > INTERNAL_ASSERTION_WINDOW_MS) return 'Assertion expired or clock skew too large.';
+  if (ageMs < -ASSERTION_CLOCK_SKEW_MS || ageMs > ASSERTION_MAX_AGE_MS) return 'Assertion expired or clock skew too large.';
   if (typeof nonce !== 'string' || !nonce || nonce.length > 128) return 'Assertion nonce required.';
   if (seenAssertionNonces.size > 10_000) purgeAssertionNonces(now);
   if (seenAssertionNonces.has(nonce) && seenAssertionNonces.get(nonce) > now) return 'Assertion replayed.';
-  seenAssertionNonces.set(nonce, now + INTERNAL_ASSERTION_WINDOW_MS + 60_000);
+  seenAssertionNonces.set(nonce, now + ASSERTION_MAX_AGE_MS + ASSERTION_CLOCK_SKEW_MS);
   return null;
 }
 setInterval(() => purgeAssertionNonces(Date.now()), 60_000).unref?.();
 
+// AP4-47 (#228): the full gate of an internal verifier call — shared secret
+// present, HMAC over the endpoint's OWN canonical structure (assertion.js)
+// valid in constant time, iat fresh, nonce unused. Each endpoint has a
+// DIFFERENT canonical, so an assertion can never be replayed across them.
+//
+// AP4-49 (#235): one error contract for the three internal endpoints —
+//   503 { error:'verifier_not_configured' }  no shared secret on this host
+//   401 { error:<reason> }                   bad signature / stale / replayed
+//   500 { error:'internal_error' }           anything unexpected (details → log)
+// Returns true when the request may proceed; otherwise it has been answered.
+function checkVerifierAssertion(kind, tag, res, { assertion, nonce, iat, ...payload }) {
+  const secret = process.env.EUDI_VERIFIER_SECRET;
+  if (!secret) {
+    console.error(`[${tag}] EUDI_VERIFIER_SECRET not configured — refusing.`);
+    res.status(503).json({ error: 'verifier_not_configured' });
+    return false;
+  }
+  if (!verifyAssertion(kind, secret, { ...payload, nonce, iat }, assertion)) {
+    console.warn(`[${tag}] invalid assertion — rejected.`);
+    res.status(401).json({ error: 'Invalid verifier assertion.' });
+    return false;
+  }
+  // AP4-27: iat mandatory, 5-min window, nonce single-use.
+  const stale = checkAssertionFreshness(nonce, iat);
+  if (stale) { res.status(401).json({ error: stale }); return false; }
+  return true;
+}
+
 // ─── EUDI age upgrade (Phase 3) ───────────────────────────────────────────────
 //
-// INTERNAL endpoint. Called only by the eudi-verifier service (port 3002) after a
-// successful OpenID4VP age presentation. Lifts a self-declared age_group to a
+// INTERNAL endpoint. Called only by the in-process eudi-verifier router (mounted
+// at /eudi in this same server, see createEudiVerifierRouter) over
+// http://127.0.0.1 after a successful OpenID4VP age presentation. Port 3002 is
+// EUDIPLO — the upstream the verifier talks to, never the caller of this route. Lifts a self-declared age_group to a
 // cryptographically verified one (age_verified:true, method:eudi-wallet, trust 99)
 // by reissuing the holder's token with the verified age claims.
 //
-// SECURITY — defence in depth (single-server setup, no mTLS needed):
+// SECURITY — defence in depth (single-host setup, no mTLS needed):
 //   1. nginx MUST NOT expose this path externally (allow 127.0.0.1; deny all).
-//   2. The request MUST carry a valid HMAC-SHA256 assertion signed with the
+//   2. requireInternalCaller: loopback peer AND no X-Forwarded-For (AP4-27).
+//   3. The request MUST carry a valid HMAC-SHA256 assertion signed with the
 //      shared EUDI_VERIFIER_SECRET. Without the secret, a caller cannot forge an
 //      upgrade — so even if the path were reachable, age_over_18:true can't be
 //      injected. The assertion binds {sessionId, ageOver, nonce, iat} so it
-//      can't be replayed onto another session.
+//      can't be replayed onto another session or onto /hhttps/age/direct
+//      (different canonical — see eudi-verifier/assertion.js).
 //
 // Body: {
 //   sessionId,                       // the holder's active hhttps session
@@ -3754,36 +3574,10 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       return res.status(400).json({ error: 'sessionId, ageOver and assertion are required.' });
     }
 
-    const secret = process.env.EUDI_VERIFIER_SECRET;
-    if (!secret) {
-      console.error('[AGE-UPGRADE] EUDI_VERIFIER_SECRET not configured — refusing.');
-      return res.status(503).json({ error: 'Age verification not configured.' });
-    }
-
-    // Recompute the HMAC over a canonical, sorted representation and compare in
-    // constant time. The verifier must sign exactly this structure.
-    const canonical = JSON.stringify({
-      sessionId,
-      ageOver: {
-        age_over_14: ageOver.age_over_14 === true,
-        age_over_16: ageOver.age_over_16 === true,
-        age_over_18: ageOver.age_over_18 === true
-      },
-      nonce: nonce || null,
-      iat:   iat   || null
-    });
-    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-
-    const a = Buffer.from(String(assertion), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      console.warn(`[AGE-UPGRADE] invalid assertion for session ${String(sessionId).slice(0,8)}…`);
-      return res.status(401).json({ error: 'Invalid verifier assertion.' });
-    }
-
-    // AP4-27: iat mandatory, 5-min window, nonce single-use.
-    const stale = checkAssertionFreshness(nonce, iat);
-    if (stale) return res.status(401).json({ error: stale });
+    // AP4-47: HMAC over the age/upgrade canonical, freshness and single-use
+    // nonce — the shared gate; the canonical itself lives in assertion.js.
+    if (!checkVerifierAssertion('age/upgrade', 'AGE-UPGRADE', res,
+                                { sessionId, ageOver, assertion, nonce, iat })) return;
 
     // Session must exist and be a verified human session.
     const session = await db.sessions.get(sessionId);
@@ -3794,7 +3588,16 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     // (same position as in /hhttps/eid/upgrade: after the assertion, before any token).
     if (!requireEmailVerified(session, res)) return;
 
-    // Map the disclosed EUDI booleans to the narrowest age band (Phase 3 bridge).
+    // AP4-13: at least ONE disclosed boolean must be true. A presentation where
+    // every age_over_NN is false proves nothing — it used to be mapped to the
+    // narrowest band (minor_under_14) and then issued with age_verified:true,
+    // i.e. a cryptographically "verified" age that the wallet never attested.
+    if (!Object.values(ageOver).some(v => v === true)) {
+      return res.status(400).json({ error: 'no_age_claim_disclosed',
+        detail: 'At least one age_over_NN must be true.' });
+    }
+
+    // Map the disclosed EUDI booleans to the narrowest age band.
     const ageGroupId = ageGroupFromEudiClaims(ageOver);
     const ag = AGE_GROUPS[ageGroupId];
     const eudiMethod = AGE_VERIFICATION_METHODS['eudi-wallet'];
@@ -3813,7 +3616,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
           priorEudi = prev?.eudi_verified === true ||
                       (Array.isArray(prev?.verified_methods) && prev.verified_methods.includes('eudi'));
         }
-      } catch (_) { /* invalid/expired/revoked — ignore */ }
+      } catch { /* invalid/expired/revoked — ignore */ }
     }
 
     // Reissue the holder's token with VERIFIED age claims. age_group lives in the
@@ -3822,17 +3625,8 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
     // Age is TRUST-NEUTRAL (contributesToTrust:false): this flips HHTTPS-Age-Verified
     // to true and adds 'age' to verified_methods, but the trust score is UNCHANGED.
     // No role (EUDI EAA only). No age_trust / no "99".
-    const flags = {
-      email:       !!session.emailVerified,
-      passkey:     !!(session.hasPasskey || session.credentialId),
-      domain:      !!session.emailDomain,
-      domainTrust: session.emailTrustBonus || 0,
-      domainValue: session.emailDomain || null,
-      github:      !!session.githubVerified,
-      eudi:        priorEudi,
-      age:         true
-    };
-    const v = computeVerification(flags);
+    // eudi lives in the TOKEN, not the session — carry it from the prior token.
+    const v = computeVerification(sessionFlags(session, { eudi: priorEudi, age: true }));
 
     const { token } = await issueAccessToken({
       userId:     session.userId,
@@ -3844,7 +3638,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       deviceType: session.deviceType,
       // AP4-02: the same surface as role/declare and eid/upgrade (pseudonym,
       // *_verified flags, domain_name) — not a hand-built subset.
-      ...tokenSurface(session, v),
+      ...tokenSurface({ methods: v.methods, emailDomain: session.emailDomain, pseudonym: session.pseudonym }),
       ...(priorEudi ? { eudi_verified: true } : {}),
       // verified age claims (orthogonal, trust-neutral):
       age_group:               ag.id,
@@ -3880,8 +3674,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       message: `✓ Age verified: ${ag.label} (EUDI Wallet)`
     });
   } catch (e) {
+    // AP4-49 (#235) / AP4-33: a generic code to the caller, the detail to the log.
     console.error('[AGE-UPGRADE] error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
@@ -3913,36 +3708,10 @@ app.post('/hhttps/age/direct', async (req, res) => {
       return res.status(400).json({ error: 'ageOver and assertion are required.' });
     }
 
-    const secret = process.env.EUDI_VERIFIER_SECRET;
-    if (!secret) {
-      console.error('[AGE-DIRECT] EUDI_VERIFIER_SECRET not configured — refusing.');
-      return res.status(503).json({ error: 'Age verification not configured.' });
-    }
-
-    // Recompute the HMAC over the canonical, sorted representation (constant-
-    // time compare). MUST match callAgeDirect in eudi-verifier/index.js exactly.
-    const canonical = JSON.stringify({
-      direct: true,
-      ageOver: {
-        age_over_14: ageOver.age_over_14 === true,
-        age_over_16: ageOver.age_over_16 === true,
-        age_over_18: ageOver.age_over_18 === true
-      },
-      nonce: nonce || null,
-      iat:   iat   || null
-    });
-    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-
-    const a = Buffer.from(String(assertion), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      console.warn('[AGE-DIRECT] invalid assertion — rejected.');
-      return res.status(401).json({ error: 'Invalid verifier assertion.' });
-    }
-
-    // AP4-27: iat mandatory, 5-min window, nonce single-use.
-    const stale = checkAssertionFreshness(nonce, iat);
-    if (stale) return res.status(401).json({ error: stale });
+    // AP4-47: the age/direct canonical carries `direct:true` INSTEAD of a
+    // sessionId, so an upgrade assertion can never be replayed here.
+    if (!checkVerifierAssertion('age/direct', 'AGE-DIRECT', res,
+                                { ageOver, assertion, nonce, iat })) return;
 
     // AK-28: no session-less age bootstrap. The assertion was valid, but an age
     // proof requires a session with a verified email → /hhttps/age/upgrade.
@@ -3952,8 +3721,9 @@ app.post('/hhttps/age/direct', async (req, res) => {
       detail: 'Age proof requires a session with a verified email. Use /hhttps/age/upgrade.'
     });
   } catch (e) {
+    // AP4-49 (#235) / AP4-33: a generic code to the caller, the detail to the log.
     console.error('[AGE-DIRECT] error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
@@ -3977,26 +3747,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       return res.status(400).json({ error: 'sessionId and assertion are required.' });
     }
 
-    const secret = process.env.EUDI_VERIFIER_SECRET;
-    if (!secret) {
-      console.error('[EID-UPGRADE] EUDI_VERIFIER_SECRET not configured — refusing.');
-      return res.status(503).json({ error: 'EUDI verification not configured.' });
-    }
-
-    const canonical = JSON.stringify({
-      sessionId, eidVerified: true, nonce: nonce || null, iat: iat || null
-    });
-    const expected = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-    const a = Buffer.from(String(assertion), 'utf8');
-    const b = Buffer.from(expected, 'utf8');
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-      console.warn(`[EID-UPGRADE] invalid assertion for session ${String(sessionId).slice(0,8)}…`);
-      return res.status(401).json({ error: 'Invalid verifier assertion.' });
-    }
-
-    // AP4-27: iat mandatory, 5-min window, nonce single-use.
-    const stale = checkAssertionFreshness(nonce, iat);
-    if (stale) return res.status(401).json({ error: stale });
+    // AP4-47: HMAC over the eid/upgrade canonical ({sessionId, eidVerified:true}).
+    if (!checkVerifierAssertion('eid/upgrade', 'EID-UPGRADE', res,
+                                { sessionId, assertion, nonce, iat })) return;
 
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) {
@@ -4024,21 +3777,13 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
             age_verification_method: prev.age_verification_method || null
           };
         }
-      } catch (_) { /* invalid/expired/revoked token — reissue without age */ }
+      } catch { /* invalid/expired/revoked token — reissue without age */ }
     }
 
     // Recompute the verification surface with eudi now true → +40.
-    const flags = {
-      email:       !!session.emailVerified,
-      passkey:     !!(session.hasPasskey || session.credentialId),
-      domain:      !!session.emailDomain,
-      domainTrust: session.emailTrustBonus || 0,
-      domainValue: session.emailDomain || null,
-      github:      !!session.githubVerified,
-      eudi:        true,
-      age:         ageCarry.age_verified === true
-    };
-    const v = computeVerification(flags);
+    const v = computeVerification(sessionFlags(session, {
+      eudi: true, age: ageCarry.age_verified === true
+    }));
 
     const { token } = await issueAccessToken({
       userId:     session.userId,
@@ -4048,7 +3793,7 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       trustScore: v.trust,
       method:     'verification-methods',
       deviceType: session.deviceType,
-      ...tokenSurface(session, v),
+      ...tokenSurface({ methods: v.methods, emailDomain: session.emailDomain, pseudonym: session.pseudonym }),
       eudi_verified:       true,
       ...ageCarry
     });
@@ -4075,8 +3820,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       message: '✓ EUDI verified (eID)'
     });
   } catch (e) {
+    // AP4-49 (#235) / AP4-33: a generic code to the caller, the detail to the log.
     console.error('[EID-UPGRADE] error:', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'internal_error' });
   }
 });
 
@@ -4100,20 +3846,14 @@ app.post('/hhttps/role/card', async (req, res) => {
     const documentProvided = req.body?.documentProvided === true;
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
-    // AP4-06 (#71) / AK-13: the confirmed e-mail is the mandatory method — the
-    // same gate as /hhttps/role/declare (the old ||-chain also read session
-    // fields that sessions._normalize never sets).
+    // AP4-06 (#71) / AK-13: the confirmed e-mail is the mandatory method. This
+    // IS the same gate as /hhttps/role/declare now — before AP4-06 it was an
+    // ad-hoc ||-chain that also read session fields sessions._normalize never
+    // sets, so it let e-mail-less sessions through.
     if (!requireEmailVerified(session, res)) return;
     // Human = at least one genuinely verified method on the session (the same
     // surface the sign-in gate in role/declare uses), not "has a passkey".
-    const v = computeVerification({
-      email:       !!session.emailVerified,
-      passkey:     !!session.credentialId,
-      domain:      !!session.emailDomain,
-      domainTrust: session.emailTrustBonus || 0,
-      domainValue: session.emailDomain || null,
-      github:      !!session.githubVerified
-    });
+    const v = computeVerification(sessionFlags(session));
     const humanVerified = v.methods.filter(m => m !== 'age').length > 0;
 
     let roleInput = null, custom = false, customLabel = null, reservedKey = null;
@@ -4184,7 +3924,8 @@ app.post('/hhttps/role/card', async (req, res) => {
     });
   } catch (e) {
     console.error('[ROLE-CARD] error:', e.message);
-    res.status(502).json({ error: 'Card issuance failed.', detail: e.message });
+    res.status(502).json({ error: 'card_issuance_failed',
+                           detail: 'The wallet card could not be issued. Please try again later.' });
   }
 });
 
@@ -4261,7 +4002,7 @@ app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
     res.json({ hhttps: { status: 'revoked' }, revoked: true, jti, ...(expired ? { expired: true } : {}) });
   } catch (e) {
     console.error('[REVOKE] error:', e.message);
-    res.status(500).json({ error: 'Revocation failed.' });
+    res.status(500).json({ error: 'internal_error', detail: 'Revocation failed.' });
   }
 });
 
@@ -4270,12 +4011,15 @@ app.get('/hhttps/revoke/status', async (req, res) => {
   const jti = typeof req.query.jti === 'string' ? req.query.jti : null;
   if (!jti) return res.status(400).json({ error: 'jti required' });
   try {
-    const revoked = await db.revokedTokens.has(jti);
-    const active  = await db.tokens.exists(jti);
+    // AP4-41: independent lookups — one roundtrip instead of two sequential ones.
+    const [revoked, active] = await Promise.all([
+      db.revokedTokens.has(jti),
+      db.tokens.exists(jti),
+    ]);
     res.json({ jti, revoked, active: active && !revoked });
   } catch (e) {
     console.error('[REVOKE-STATUS] error:', e.message);
-    res.status(500).json({ error: 'Lookup failed.' });
+    res.status(500).json({ error: 'internal_error', detail: 'Lookup failed.' });
   }
 });
 
@@ -4339,6 +4083,20 @@ app.get('/hhttps/protected', async (req, res) => {
 
 // ─── Machine Tokens ───────────────────────────────────────────────────────────
 
+// AP5-44: named instead of spelled out at four call sites.
+const HHTTPS_VERSION    = '0.5.0';
+const HHTTPS_ENVELOPE   = Object.freeze({ version: HHTTPS_VERSION });
+// A pragmatic "looks like an address" shape — reachability is proven by the
+// confirmation code, not by this regex.
+const OPERATOR_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+/** AP5-26: constant-time comparison of two hex digests of equal length. */
+function timingSafeHexEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+  const ba = Buffer.from(a, 'hex'), bb = Buffer.from(b, 'hex');
+  return ba.length === bb.length && ba.length > 0 && crypto.timingSafeEqual(ba, bb);
+}
+
 app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
   // #7: a DB error here used to be an unhandled rejection that killed the
   // process (missing column key_jkt). Answer 500 and keep serving.
@@ -4348,7 +4106,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
       return res.status(400).json({ error: 'operatorName and purpose are required.' });
     // The ONE rule for machines: an operator contact e-mail is required.
     // This is reachability, not a trust event — machine trustScore stays 0.
-    if (!contactEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(contactEmail)))
+    if (!contactEmail || !OPERATOR_EMAIL_RE.test(String(contactEmail)))
       return res.status(400).json({ error: 'operator_email_required',
         detail: 'A valid operator contact e-mail is required to register a machine.' });
     // The operator e-mail must be CONFIRMED via the code flow — we need to know
@@ -4400,7 +4158,7 @@ app.post('/hhttps/machine/register', limit.machine, async (req, res) => {
     });
 
     res.status(201).json({
-      hhttps: { version: '0.5.0' },
+      hhttps: HHTTPS_ENVELOPE,
       operatorId, apiKey,
       keyJkt: keyJkt || null,
       role: normalizedRole,
@@ -4424,8 +4182,11 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
     const op = await db.machineOperators.get(operatorId);
     if (!op) return res.status(404).json({ error: 'Operator not found.' });
 
+    // AP5-26: `!==` on the hex digests leaks the position of the first
+    // differing byte through timing. Both sides are sha256 hex, so the
+    // buffers always have the same length and timingSafeEqual never throws.
     const keyHash = crypto.createHash('sha256').update(apiKey).digest('hex');
-    if (keyHash !== op.api_key_hash)
+    if (!timingSafeHexEqual(keyHash, op.api_key_hash))
       return res.status(401).json({ error: 'Invalid API key.' });
 
     const jti   = uuid();
@@ -4446,16 +4207,18 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
     if (op.key_jkt) { tokenPayload.cnf = { jkt: op.key_jkt }; }
     const token = signToken(tokenPayload, { expiresIn: MACHINE_TTL });
 
-    await db.tokens.create({
-      jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000
-    });
-    await db.machineOperators.incrementTokensIssued(operatorId);
+    // AP5-33: two independent writes — the token row and the operator's
+    // counter. They were awaited one after the other for no reason.
+    await Promise.all([
+      db.tokens.create({ jti, type: 'machine', operatorId, ttlMs: MACHINE_TTL * 1000 }),
+      db.machineOperators.incrementTokensIssued(operatorId)
+    ]);
 
     setHHTPPS(res, { status: 'verified', human: false, actorType: 'bot',
                      method: 'machine-token', machineOperator: operatorId,
                      machinePurpose: op.purpose });
     res.json({
-      hhttps: { version: '0.5.0', human: false, actorType: 'bot' },
+      hhttps: { ...HHTTPS_ENVELOPE, human: false, actorType: 'bot' },
       token, expiresAt: new Date(Date.now() + MACHINE_TTL * 1000).toISOString(),
       operator: { id: operatorId, name: op.operator_name, purpose: op.purpose }
     });
@@ -4473,8 +4236,11 @@ app.post('/hhttps/machine/token', limit.machine, async (req, res) => {
 app.get('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   const u = await requireUser(req, res); if (!u) return;
   try {
-    res.json({ hhttps: { version: '0.5.0' }, webhooks: await listWebhooks(u.userId) });
-  } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
+    res.json({ hhttps: HHTTPS_ENVELOPE, webhooks: await listWebhooks(u.userId) });
+  } catch (e) { // AP5-24: the reason goes to the log, not to the caller.
+    console.error('[webhooks] list failed:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
 }));
 
 app.post('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
@@ -4488,7 +4254,7 @@ app.post('/hhttps/webhooks', limit.webhooks, wrap(async (req, res) => {
   try {
     const wh = await registerWebhook({ url, events, secret, ownerUserId: u.userId });
     res.status(201).json({
-      hhttps: { version: '0.5.0' },
+      hhttps: HHTTPS_ENVELOPE,
       webhook: { id: wh.id, url: wh.url, events: wh.events, secret: wh.secret },
       note: 'Speichere das Secret — es wird nur dieses eine Mal ausgegeben. Requests werden mit HMAC-SHA256 signiert (HHTTPS-Webhook-Sig).'
     });
@@ -4501,15 +4267,26 @@ app.delete('/hhttps/webhooks/:id', limit.webhooks, wrap(async (req, res) => {
     const ok = await removeWebhook(req.params.id, u.userId);
     ok ? res.json({ deleted: true, id: req.params.id })
        : res.status(404).json({ error: 'Webhook not found.' });
-  } catch (e) { res.status(500).json({ error: 'server_error', message: e.message }); }
+  } catch (e) { // AP5-24
+    console.error('[webhooks] delete failed:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
 }));
 
-app.post('/hhttps/webhooks/verify', (req, res) => {
-  const { payload, signature, secret } = req.body;
-  if (!payload || !signature || !secret)
+// AP5-12: a non-string payload/signature/secret used to reach createHmac and
+// throw — an unhandled 500 for what is plainly a bad request. AP5-43: the
+// route is an HMAC oracle and gets the same limiter as the rest of the group.
+app.post('/hhttps/webhooks/verify', limit.webhooks, (req, res) => {
+  const { payload, signature, secret } = req.body || {};
+  if (typeof payload !== 'string' || typeof signature !== 'string' || typeof secret !== 'string'
+      || !payload || !signature || !secret)
     return res.status(400).json({ error: 'payload, signature, secret are required.' });
   const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
-  res.json({ valid: expected === signature, expected, received: signature });
+  // AP5-12: the comparison itself is constant-time. The caller already knows
+  // the secret here, but the helper is free and keeps the habit.
+  const valid = expected.length === signature.length
+    && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  res.json({ valid, expected, received: signature });
 });
 
 // ─── Phase 3b: Developer Self-Service + Admin ─────────────────────────────
@@ -4536,34 +4313,8 @@ app.post('/hhttps/webhooks/verify', (req, res) => {
 //   3. dns_verified_at IS NOT NULL      (TXT record at _hhttps-verify.<apex>)
 //   4. Admin clicked Approve            (verification_status='verified')
 
-/** Resolve apex domain (last two parts, with two-part TLDs like co.uk handled). */
-function apexDomainFromUrl(urlOrHost) {
-  if (!urlOrHost) return null;
-  let host;
-  try {
-    host = (urlOrHost.includes('://') ? new URL(urlOrHost).hostname : urlOrHost).toLowerCase();
-  } catch (e) {
-    return null;
-  }
-  return normalizeApexDomain(host);
-}
-function apexDomainFromEmail(email) {
-  if (!email || !email.includes('@')) return null;
-  return normalizeApexDomain(email.split('@')[1].toLowerCase());
-}
-
-/** Variant A: email's apex must equal platform's apex.
- *  Subdomain mail is accepted (e.g. admin@team.example.com for example.com). */
-function emailMatchesPlatform(email, homepageUrl) {
-  const e = apexDomainFromEmail(email);
-  const h = apexDomainFromUrl(homepageUrl);
-  return !!(e && h && e === h);
-}
-
-/** Generate a short random hex token (URL-safe). */
-function randomToken(bytes = 24) {
-  return crypto.randomBytes(bytes).toString('base64url');
-}
+// apexDomainFromUrl / apexDomainFromEmail / emailMatchesPlatform / randomToken
+// moved to ./client-registration.js (AP5-38) — see the import block up top.
 
 // AP5-09: Express 4 does not catch a rejected async handler — the request
 // hung until the client gave up. wrap() forwards the rejection to the
@@ -4678,19 +4429,7 @@ async function requirePortalUser(req, res) {
   return null;
 }
 
-/** Validate redirect URI format. Must be a syntactically valid HTTPS URL
- *  (or http://localhost for dev). */
-function isValidRedirectUri(uri) {
-  if (typeof uri !== 'string' || uri.length > 500) return false;
-  try {
-    const u = new URL(uri);
-    if (u.protocol === 'https:') return true;
-    if (u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1')) return true;
-    return false;
-  } catch (e) {
-    return false;
-  }
-}
+// isValidRedirectUri moved to ./client-registration.js (AP5-38).
 
 // AP5-23: logo_url / impressum_url are rendered by the dashboard (href / img
 // src) and impressum_url is a hard requirement for `verified` — both were
@@ -4733,17 +4472,7 @@ function assertTransition(res, client, action) {
   return false;
 }
 
-/** Slug-ify a platform name for client_id generation.
- *  Returns something like "my-platform-x4z7". */
-function generateClientId(name) {
-  const slug = (name || 'platform')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 32);
-  const tail = crypto.randomBytes(2).toString('hex');
-  return `${slug || 'platform'}-${tail}`;
-}
+// generateClientId moved to ./client-registration.js (AP5-38).
 
 // ─── GET /hhttps/whoami — who am I, and is this identity durable? ──────────
 // Zero-PII by construction: everything here already lives in the caller's own
@@ -4764,6 +4493,13 @@ app.get('/hhttps/whoami', wrap(async (req, res) => {
   // comes back on every sign-in. An eID identity is durable in the same sense.
   const durable  = hasKey || methods.includes('eudi');
   const isAdmin  = await db.admins.isAdmin(u.userId);
+  // AP5-25: the shell recipe below names an absolute path on the server's
+  // filesystem — deployment detail, handed to every signed-in caller. It is
+  // only useful in two situations, so it is only shown in those two: the
+  // caller is already an admin, or nobody is (first boot, bootstrap).
+  const noAdminsYet = isAdmin
+    ? false
+    : (await db.pool().query('SELECT 1 FROM admins LIMIT 1')).rows.length === 0;
 
   res.json({
     user_id:          u.userId,
@@ -4788,8 +4524,10 @@ app.get('/hhttps/whoami', wrap(async (req, res) => {
         : 'This user_id was minted for this session only. Signing in again produces a NEW id — ' +
           'platform ownership and admin membership will not carry over. Register a passkey.'
     },
-    grant_admin_command:
-      `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
+    ...(isAdmin || noAdminsYet ? {
+      grant_admin_command:
+        `/var/www/hhttps/scripts/make-admin.sh --grant ${u.userId} --note "Project operator"`
+    } : {})
   });
 }));
 
@@ -4806,7 +4544,7 @@ app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
     return res.status(400).json({ error: 'invalid_name',
       message: 'Name must be 2-120 characters' });
   }
-  if (!homepage_url || !apexDomainFromUrl(homepage_url)) {
+  if (!isValidHomepageUrl(homepage_url)) {                     // AP5-14
     return res.status(400).json({ error: 'invalid_homepage',
       message: 'homepage_url must be a valid HTTPS URL' });
   }
@@ -4850,7 +4588,7 @@ app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
   // Compute domain match + generate tokens
   const domainMatch  = emailMatchesPlatform(contact_email, homepage_url);
   const emailToken   = randomToken(24);
-  const emailExpires = new Date(Date.now() + 48 * 3600 * 1000); // 48h
+  const emailExpires = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
   const dnsToken     = `hhttps-verify=${randomToken(20)}`;
   const clientId     = generateClientId(name);
 
@@ -4868,8 +4606,10 @@ app.post('/hhttps/developers/clients', limit.check, wrap(async (req, res) => {
       dnsToken
     });
   } catch (err) {
-    console.error('[DEVELOPERS] createDraft failed:', err.message);
-    return res.status(500).json({ error: 'creation_failed', message: err.message });
+    // AP5-24: a Postgres error text names columns, constraints and values.
+    console.error('[DEVELOPERS] createDraft failed:', err);
+    return res.status(500).json({ error: 'creation_failed',
+      message: 'The platform could not be created. Please try again.' });
   }
 
   // Send confirmation email
@@ -4950,7 +4690,7 @@ app.get('/hhttps/developers/confirm-email', wrap(async (req, res) => {
 
   // Platforms registered through a CMS plugin continue in the plugin's own
   // setup wizard, not in the developer portal.
-  const isWpPlugin = client.owner_user_id === 'wp-plugin' && !!client.homepage_url;
+  const isWpPlugin = client.owner_user_id === WP_PLUGIN_OWNER_ID && !!client.homepage_url;
   const wpSetupUrl = isWpPlugin
     ? String(client.homepage_url).replace(/\/+$/, '') +
       '/wp-admin/options-general.php?page=iamhmn-verify-setup'
@@ -5050,7 +4790,7 @@ app.patch('/hhttps/developers/clients/:id', wrap(async (req, res) => {
     }
     const newMatch = emailMatchesPlatform(contact_email, client.homepage_url);
     const newToken = randomToken(24);
-    const newExp   = new Date(Date.now() + 48 * 3600 * 1000);
+    const newExp   = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
     await db.oauthClients.updateContactEmail(client.client_id, contact_email, newMatch, newToken, newExp);
     try {
       const confirmUrl = `${BASE_URL}/hhttps/developers/confirm-email?token=${newToken}`;
@@ -5114,15 +4854,9 @@ app.delete('/hhttps/developers/clients/:id', wrap(async (req, res) => {
 // ─── POST /hhttps/developers/clients/:id/dns-check ────────────────────────
 // Triggers a DNS lookup for _hhttps-verify.<apex> and matches against dns_token.
 // AP5-31: the lookup has a timeout, the route a limiter and a minimum
-// interval per client (dns_last_checked_at).
-const DNS_TIMEOUT_MS      = 3000;
-const DNS_MIN_INTERVAL_MS = 15_000;
+// interval per client (dns_last_checked_at) — the lookup itself and the
+// interval rule live in ./dns-verify.js (AP5-39), shared with the plugin flow.
 limit.dnsCheck = rl(10, 60_000);
-
-function dnsCheckTooSoon(client) {
-  const last = client.dns_last_checked_at ? new Date(client.dns_last_checked_at).getTime() : 0;
-  return last && (Date.now() - last) < DNS_MIN_INTERVAL_MS;
-}
 
 app.post('/hhttps/developers/clients/:id/dns-check', limit.dnsCheck, wrap(async (req, res) => {
   const u = await requirePortalUser(req, res);
@@ -5148,56 +4882,10 @@ app.post('/hhttps/developers/clients/:id/dns-check', limit.dnsCheck, wrap(async 
       message: 'Cannot resolve apex domain from homepage_url' });
   }
 
-  // DNS lookup via Node's dns/promises — bounded by the resolver timeout AND
-  // a hard deadline (the resolver timeout is per attempt / per server).
-  const { Resolver } = await import('dns/promises');
-  const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
-  resolver.setServers(['1.1.1.1', '8.8.8.8']);
-
-  let found = false;
-  let records = [];
-  try {
-    records = await Promise.race([
-      resolver.resolveTxt(`_hhttps-verify.${apex}`),
-      new Promise((_, reject) => setTimeout(() => {
-        const e = new Error('DNS lookup timed out'); e.code = 'ETIMEOUT'; reject(e);
-      }, DNS_TIMEOUT_MS * 2 + 500).unref())
-    ]);
-    // records is array of arrays of strings (TXT can have multiple chunks)
-    for (const recordChunks of records) {
-      const joined = recordChunks.join('');
-      if (joined.trim() === client.dns_token.trim()) {
-        found = true;
-        break;
-      }
-    }
-  } catch (err) {
-    await db.oauthClients.touchDnsCheck(client.client_id);
-    return res.json({
-      success: false,
-      dns_verified: false,
-      error: 'dns_lookup_failed',
-      message: `Could not resolve _hhttps-verify.${apex}: ${err.code || err.message}`,
-      expected_record: client.dns_token,
-      expected_host: `_hhttps-verify.${apex}`
-    });
-  }
-
-  await db.oauthClients.touchDnsCheck(client.client_id);
-  if (found) {
-    await db.oauthClients.setDnsVerified(client.client_id);
-    return res.json({ success: true, dns_verified: true });
-  }
-
-  return res.json({
-    success: false,
-    dns_verified: false,
-    error: 'record_not_found',
-    message: 'TXT record exists but value does not match. Make sure the value is exactly the dns_token.',
-    expected_record: client.dns_token,
-    expected_host: `_hhttps-verify.${apex}`,
-    found_records: records.map(r => r.join(''))
-  });
+  // AP5-39: one implementation, shared with POST /hhttps/plugin/dns-check.
+  // Auto-approval stays exclusive to the plugin flow — a portal client is
+  // approved by an admin.
+  res.json(await verifyDnsToken(db, client));
 }));
 
 // ─── POST /hhttps/developers/clients/:id/submit-review ─────────────────────
@@ -5269,13 +4957,14 @@ app.post('/hhttps/developers/clients/:id/resend-email', limit.email, wrap(async 
   }
 
   const emailToken   = randomToken(24);
-  const emailExpires = new Date(Date.now() + 48 * 3600 * 1000); // 48h, same as registration
+  const emailExpires = new Date(Date.now() + PLATFORM_EMAIL_TOKEN_TTL_MS);
 
   try {
     await db.oauthClients.refreshEmailToken(client.client_id, emailToken, emailExpires);
   } catch (err) {
-    console.error('[DEVELOPERS] refreshEmailToken failed:', err.message);
-    return res.status(500).json({ error: 'token_refresh_failed', message: err.message });
+    console.error('[DEVELOPERS] refreshEmailToken failed:', err);   // AP5-24
+    return res.status(500).json({ error: 'token_refresh_failed',
+      message: 'The confirmation token could not be refreshed. Please try again.' });
   }
 
   try {
@@ -5287,8 +4976,9 @@ app.post('/hhttps/developers/clients/:id/resend-email', limit.email, wrap(async 
       kind:         'resend'
     });
   } catch (err) {
-    console.warn('[DEVELOPERS] resend email failed:', err.message);
-    return res.status(500).json({ error: 'send_failed', message: err.message });
+    console.warn('[DEVELOPERS] resend email failed:', err);          // AP5-24
+    return res.status(500).json({ error: 'send_failed',
+      message: 'The confirmation e-mail could not be sent. Please try again.' });
   }
 
   // Mask the address — the owner knows it, the response body need not carry it.
@@ -5385,22 +5075,46 @@ app.post('/hhttps/admin/clients/:id/suspend', wrap(async (req, res) => {
 }));
 
 // GET /hhttps/admin/clients — list all (with filter)
+//
+// AP5-34: the query was a bare `LIMIT 200`, so past 200 platforms the admin
+// view silently stopped showing rows with no way to reach them and no sign
+// that anything was missing. `?limit=` / `?offset=` now page through the list
+// and `total` says how many rows the filter actually matches. The defaults are
+// the old behaviour (first 200, newest first), so existing callers see no
+// change. The review queue has its own endpoint (/admin/clients/pending) and
+// is therefore never affected by this page window.
+const ADMIN_CLIENTS_DEFAULT_LIMIT = 200;
+const ADMIN_CLIENTS_MAX_LIMIT     = 500;
+
+/** A positive integer query parameter, clamped; `fallback` when absent/invalid. */
+function intParam(value, { fallback, min = 0, max }) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
+}
+
 app.get('/hhttps/admin/clients', wrap(async (req, res) => {
   const a = await requireAdmin(req, res);
   if (!a) return;
   const status = req.query.status;
-  const { rows } = await db.pool().query(
-    status
-      ? `SELECT * FROM oauth_clients WHERE verification_status = $1 ORDER BY created_at DESC LIMIT 200`
-      : `SELECT * FROM oauth_clients ORDER BY created_at DESC LIMIT 200`,
-    status ? [status] : []
-  );
-  const clients = rows.map(r => {
-    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-    return serializeClientForAdmin(r);
+  const limit  = intParam(req.query.limit,
+    { fallback: ADMIN_CLIENTS_DEFAULT_LIMIT, min: 1, max: ADMIN_CLIENTS_MAX_LIMIT });
+  const offset = intParam(req.query.offset, { fallback: 0, min: 0, max: 1_000_000 });
+  const where  = status ? 'WHERE verification_status = $1' : '';
+  const args   = status ? [status] : [];
+  const [page, count] = await Promise.all([
+    db.pool().query(
+      `SELECT * FROM oauth_clients ${where}
+        ORDER BY created_at DESC LIMIT $${args.length + 1} OFFSET $${args.length + 2}`,
+      [...args, limit, offset]),
+    db.pool().query(`SELECT COUNT(*)::int AS n FROM oauth_clients ${where}`, args)
+  ]);
+  const total = count.rows[0].n;
+  res.json({
+    success: true,
+    clients: page.rows.map(r => serializeClientForAdmin(parseClientRow(r))),
+    total, limit, offset, has_more: offset + page.rows.length < total
   });
-  res.json({ success: true, clients });
 }));
 
 // GET /hhttps/admin/stats — system overview
@@ -5421,6 +5135,17 @@ app.get('/hhttps/admin/stats', wrap(async (req, res) => {
 }));
 
 // ─── Helpers used by Phase 3b endpoints ────────────────────────────────────
+
+/** AP5-40: raw oauth_clients rows keep redirect_uris / allowed_scopes as JSON
+ *  TEXT. db.oauthClients.* parses them; the admin list queries the pool
+ *  directly, so it has to do the same — in one place, not inline per column. */
+function parseClientRow(row) {
+  for (const col of ['redirect_uris', 'allowed_scopes']) {
+    if (typeof row[col] !== 'string') continue;
+    try { row[col] = JSON.parse(row[col]); } catch { row[col] = []; }
+  }
+  return row;
+}
 
 /** Serialize a client for owner-facing dashboard. Includes sensitive metadata
  *  (DNS token, contact email) but never the client_secret_hash. */
@@ -5443,7 +5168,7 @@ function serializeClientForOwner(c) {
     dns_verified_at:        c.dns_verified_at,
     dns_last_checked_at:    c.dns_last_checked_at,
     dns_token:              c.dns_token,
-    dns_record_host:        apex ? `_hhttps-verify.${apex}` : null,
+    dns_record_host:        expectedDnsHost(apex),
     submitted_for_review_at:c.submitted_for_review_at,
     reviewed_at:            c.reviewed_at,
     rejection_reason:       c.rejection_reason,
@@ -5517,7 +5242,7 @@ async function computePublicStats() {
   ]);
   const total = dist.reduce((sum, r) => sum + r.n, 0);
   return {
-    hhttps: { version: '0.5.0' },
+    hhttps: HHTTPS_ENVELOPE,
     stats: {
       verifications:       s.verifications      || 0,
       tokensIssued:        s.tokens_issued      || 0,
@@ -5568,6 +5293,13 @@ async function main() {
   // 1. Init keys
   loadOrCreateKeys();
 
+  // 1a. AP4-52 (#245): the EUDI verifier is mounted unconditionally, but every
+  // upstream call needs EUDIPLO_CLIENT_SECRET. Without it the failure used to
+  // surface only when a user started an age or eID flow. Say it at boot.
+  if (!process.env.EUDIPLO_CLIENT_SECRET) {
+    console.warn('[EUDI] EUDIPLO_CLIENT_SECRET is not set — /eudi/* is mounted but every age/eID verification will fail at the first upstream call.');
+  }
+
   // 1b. AP4-18: PID issuer trust must be bound explicitly (operator step).
   warnIfPidTrustUnbound();
 
@@ -5591,10 +5323,6 @@ async function main() {
     process.exit(1);
   }
 
-  mountWpPluginRegistration(app, { db, sendPlatformRegistrationEmail, BASE_URL }); // WP-PLUGIN-REG
-  // AP5-05: PoP checks the token like every other route (signature + exp +
-  // revocation + active), not just the signature.
-  mountPopVerify(app, { db, checkTokenValid, RP_ID, BASE_URL }); // POP-VERIFY
   // AP5-09: last — catches every forwarded async rejection.
   app.use(centralErrorHandler);
   app.listen(PORT, () => {

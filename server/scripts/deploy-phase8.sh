@@ -62,15 +62,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-G=$'\033[0;32m'; Y=$'\033[0;33m'; R=$'\033[0;31m'; B=$'\033[0;36m'; N=$'\033[0m'
-ok()   { printf "  ${G}✓${N} %s\n" "$1"; }
-warn() { printf "  ${Y}⚠${N}  %s\n" "$1"; }
-step() { printf "\n${B}═══ %s ═══${N}\n" "$1"; }
-fail() { printf "  ${R}✗${N} %s\n" "$1"; exit 1; }
+# AP6-57 (#213) / AP6-48 (#192): Farben, Log-Helfer und der .env-Leser
+# (env_get) kommen aus der einen gemeinsamen Bibliothek.
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
 run()  { if [[ $DRY_RUN -eq 1 ]]; then printf "  ${Y}[dry-run]${N} %s\n" "$*"; else "$@"; fi; }
-
-# .env-Wert lesen (ohne die Datei zu sourcen)
-envval() { { grep -E "^${1}=" "$2" 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" ; return 0; }
 
 TS="$(date +%Y%m%d-%H%M%S)"
 
@@ -111,7 +106,9 @@ if [[ $DO_LINK -eq 1 ]]; then
     ok "nginx liest nicht direkt aus $INSTALL_DIR (nur Proxy) — Symlink-Ziel darf unter /root liegen"
   fi
   # Lokale Zustände/Extras, die nicht im Git-Repo liegen, mit übernehmen
-  for f in .env keys eudi-keys developers force-verify-client.mjs; do
+  # AP6-25 / AP6-58 (#213): force-verify-client.mjs is NOT carried over — it
+  # lives in the repo under server/scripts/ and is run from there on demand.
+  for f in .env keys eudi-keys developers; do
     if [[ -e "$INSTALL_DIR/$f" && ! -e "$SRC_DIR/$f" ]]; then
       run mkdir -p "$(dirname "$SRC_DIR/$f")"
       run cp -a "$INSTALL_DIR/$f" "$SRC_DIR/$f"; ok "übernommen: $f"
@@ -120,8 +117,11 @@ if [[ $DO_LINK -eq 1 ]]; then
   # Lokal geänderte, aber git-getrackte Dateien: Kopie ablegen, nicht überschreiben
   DC="eudi-verifier/docker/docker-compose.yaml"
   if [[ -f "$INSTALL_DIR/$DC" ]] && ! cmp -s "$INSTALL_DIR/$DC" "$SRC_DIR/$DC"; then
-    run cp -a "$INSTALL_DIR/$DC" "$SRC_DIR/${DC}.local-${TS}"
-    warn "$DC weicht lokal ab — Kopie unter ${DC}.local-${TS}; Unterschiede ins Repo übernehmen (laufende Container sind nicht betroffen)"
+    # AP6-20 (#213): NOT into the repo working tree — a copy there would be
+    # picked up by any `git add -A` and pushed.
+    run mkdir -p "$BACKUP_ROOT/$TS"
+    run cp -a "$INSTALL_DIR/$DC" "$BACKUP_ROOT/$TS/docker-compose.yaml.local"
+    warn "$DC weicht lokal ab — Kopie unter $BACKUP_ROOT/$TS/docker-compose.yaml.local; Unterschiede ins Repo übernehmen (laufende Container sind nicht betroffen)"
   fi
   run pm2 stop "$PM2_APP"
   run mv "$INSTALL_DIR" "${INSTALL_DIR}_pre-link_${TS}"
@@ -160,7 +160,7 @@ command -v pm2 >/dev/null || fail "pm2 nicht gefunden"
 command -v psql >/dev/null || fail "psql nicht gefunden"
 command -v rsync >/dev/null || fail "rsync nicht gefunden"
 
-PEPPER="$(envval HHTTPS_VERIFICATION_PEPPER "$ENV_FILE")"
+PEPPER="$(env_get HHTTPS_VERIFICATION_PEPPER "$ENV_FILE")"
 if [[ -z "$PEPPER" ]]; then
   echo
   echo "  HHTTPS_VERIFICATION_PEPPER fehlt in $ENV_FILE."
@@ -174,22 +174,23 @@ fi
 [[ ${#PEPPER} -ge 32 ]] || warn "Pepper ist kurz (${#PEPPER} Zeichen) — ≥ 32 empfohlen"
 ok "HHTTPS_VERIFICATION_PEPPER gesetzt"
 
-NODE_ENV_VAL="$(envval NODE_ENV "$ENV_FILE")"
+NODE_ENV_VAL="$(env_get NODE_ENV "$ENV_FILE")"
 [[ "$NODE_ENV_VAL" == "production" ]] || fail "NODE_ENV=production fehlt in $ENV_FILE (ohne das greifen Pepper-Pflicht und Dev-Mail-Schutz nicht)"
 ok "NODE_ENV=production"
-[[ -z "$(envval EMAIL_DEV_MODE "$ENV_FILE")" ]] || fail "EMAIL_DEV_MODE darf in Produktion nicht gesetzt sein"
+[[ -z "$(env_get EMAIL_DEV_MODE "$ENV_FILE")" ]] || fail "EMAIL_DEV_MODE darf in Produktion nicht gesetzt sein"
 for k in SMTP_HOST SMTP_USER SMTP_PASS; do
-  [[ -n "$(envval "$k" "$ENV_FILE")" ]] || warn "$k leer — ohne SMTP antwortet /hhttps/email/send mit 503 (E-Mail ist jetzt Pflicht!)"
+  [[ -n "$(env_get "$k" "$ENV_FILE")" ]] || warn "$k leer — ohne SMTP antwortet /hhttps/email/send mit 503 (E-Mail ist jetzt Pflicht!)"
 done
-[[ -n "$(envval EUDI_VERIFIER_SECRET "$ENV_FILE")" ]] || warn "EUDI_VERIFIER_SECRET leer — EUDI/Age-Upgrade antwortet 503"
+[[ -n "$(env_get EUDI_VERIFIER_SECRET "$ENV_FILE")" ]] || warn "EUDI_VERIFIER_SECRET leer — EUDI/Age-Upgrade antwortet 503"
 
-DB_HOST="$(envval DB_HOST "$ENV_FILE")"; DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="$(envval DB_PORT "$ENV_FILE")"; DB_PORT="${DB_PORT:-5432}"
-DB_NAME="$(envval DB_NAME "$ENV_FILE")"; DB_NAME="${DB_NAME:-hhttps}"
-DB_USER="$(envval DB_USER "$ENV_FILE")"; DB_USER="${DB_USER:-hhttps}"
-DB_PASSWORD="$(envval DB_PASSWORD "$ENV_FILE")"
-export PGPASSWORD="$DB_PASSWORD"
-PSQL=(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -qtA)
+DB_HOST="$(env_get DB_HOST "$ENV_FILE")"; DB_HOST="${DB_HOST:-localhost}"
+DB_PORT="$(env_get DB_PORT "$ENV_FILE")"; DB_PORT="${DB_PORT:-5432}"
+DB_NAME="$(env_get DB_NAME "$ENV_FILE")"; DB_NAME="${DB_NAME:-hhttps}"
+DB_USER="$(env_get DB_USER "$ENV_FILE")"; DB_USER="${DB_USER:-hhttps}"
+DB_PASSWORD="$(env_get DB_PASSWORD "$ENV_FILE")"
+# AP6-21 (#213): PGPASSWORD is set per invocation instead of exported for the
+# whole script — pm2, npm and node must not inherit the database password.
+PSQL=(env "PGPASSWORD=$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -v ON_ERROR_STOP=1 -qtA)
 "${PSQL[@]}" -c "SELECT 1" >/dev/null 2>&1 || fail "Postgres nicht erreichbar ($DB_USER@$DB_HOST:$DB_PORT/$DB_NAME)"
 ok "Postgres erreichbar"
 [[ $DRY_RUN -eq 1 ]] && { ok "Dry-run: Preflight bestanden, keine Änderungen"; exit 0; }
@@ -200,7 +201,8 @@ BK="$BACKUP_ROOT/$TS"; mkdir -p "$BK"
 cp -a "$ENV_FILE" "$BK/.env"
 for d in keys eudi-keys; do [[ -e "$STATE_DIR/$d" ]] && cp -a "$STATE_DIR/$d" "$BK/$d"; done
 if command -v pg_dump >/dev/null; then
-  pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" | gzip > "$BK/db.sql.gz" && ok "pg_dump: $BK/db.sql.gz"
+  env "PGPASSWORD=$DB_PASSWORD" pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" "$DB_NAME" \
+    | gzip > "$BK/db.sql.gz" && ok "pg_dump: $BK/db.sql.gz"
 else
   warn "pg_dump nicht gefunden — kein DB-Backup"
 fi
@@ -230,7 +232,7 @@ if [[ $LINKED -eq 1 ]]; then
   ok "übersprungen (Symlink-Layout)"
 else
   # Kein --delete: in INSTALL_DIR liegen lokale Extras (developers/, demo.html,
-  # force-verify-client.mjs, Backups), die nicht im Repo sind. Lokal angepasste,
+  # Backups), die nicht im Repo sind. Lokal angepasste,
   # git-getrackte Dateien (docker-compose.yaml) werden nicht überschrieben.
   rsync -a \
     --exclude '.env' --exclude 'keys/' --exclude 'eudi-keys/' \
@@ -290,7 +292,7 @@ CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: applica
 [[ "$CODE" == "400" ]] && ok "register/start ohne sessionId → 400 (Gate aktiv)" || warn "register/start ohne sessionId → $CODE (erwartet 400)"
 CODE="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"sessionId":"x","email":"deploy-check@example.org"}' "$BASE/hhttps/email/send")"
 [[ "$CODE" == "401" ]] && ok "email/send mit unbekannter Session → 401" || warn "email/send → $CODE (erwartet 401)"
-RP="$(envval RP_ID "$ENV_FILE")"
+RP="$(env_get RP_ID "$ENV_FILE")"
 [[ -n "$RP" ]] && { curl -fsS "https://$RP/hhttps/info" >/dev/null && ok "https://$RP/hhttps/info erreichbar" || warn "https://$RP/hhttps/info nicht erreichbar (nginx/TLS prüfen)"; }
 
 echo

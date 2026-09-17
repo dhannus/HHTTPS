@@ -27,6 +27,16 @@ export const WEBHOOK_EVENTS = Object.freeze([
 ]);
 const VALID_EVENTS = [...WEBHOOK_EVENTS, '*'];
 
+// AP1-64 (#220): the delivery-path tuning used to be magic numbers scattered
+// over deliverWithRetry. One block, named.
+const DELIVERY_MAX_ATTEMPTS  = 3;       // initial POST + 2 retries
+const DELIVERY_TIMEOUT_MS    = 8000;    // per attempt
+const DELIVERY_RETRY_BASE_MS = 1000;    // exponential: 2 s, 4 s
+// Recorded FAILED attempts (not deliveries — each delivery logs up to
+// DELIVERY_MAX_ATTEMPTS of them) after which the webhook is switched off.
+const DEACTIVATE_AFTER_FAILURES = 10;
+const WEBHOOK_USER_AGENT = 'HHTTPS-Webhook/4.1';
+
 // ─── SSRF guard (AP1-21, Review 2026-09) ──────────────────────────────────────
 // Webhook targets are attacker-supplied URLs that the server POSTs to. Only
 // https (http outside production), no credentials, no loopback / private /
@@ -81,8 +91,14 @@ export async function registerWebhook({ url, events, secret, ownerUserId }) {
   if (!ownerUserId) throw new Error('Webhook owner is required.');
   await assertSafeWebhookUrl(url);
 
-  const invalid = events.find(e => !VALID_EVENTS.includes(e));
-  if (invalid) throw new Error(`Unbekanntes Event: ${invalid}`);
+  // AP1-19 (#220): `events` arrived straight from the request body — a string,
+  // an object or a missing field made `.find` throw a TypeError (500) instead of
+  // a 400. AP1-64: the message is English like every other error in this module.
+  if (!Array.isArray(events) || events.length === 0) {
+    throw new Error('events must be a non-empty array.');
+  }
+  const invalid = events.find(e => typeof e !== 'string' || !VALID_EVENTS.includes(e));
+  if (invalid !== undefined) throw new Error(`Unknown event: ${invalid}`);
 
   const expanded = events.includes('*')
     ? [...WEBHOOK_EVENTS]
@@ -132,7 +148,7 @@ export async function fireEvent(eventType, payload) {
 // ─── Delivery with retry ──────────────────────────────────────────────────────
 async function deliverWithRetry(wh, body, event, attempt = 1) {
   const sig = 'sha256=' + crypto.createHmac('sha256', wh.secret).update(body).digest('hex');
-  const MAX = 3;
+  const MAX = DELIVERY_MAX_ATTEMPTS;
 
   try {
     const res = await fetch(wh.url, {
@@ -141,11 +157,11 @@ async function deliverWithRetry(wh, body, event, attempt = 1) {
         'Content-Type':         'application/json',
         'HHTTPS-Webhook-Sig':   sig,
         'HHTTPS-Webhook-Event': event,
-        'User-Agent':           'HHTTPS-Webhook/4.1'
+        'User-Agent':           WEBHOOK_USER_AGENT
       },
       body,
       redirect: 'error',                 // AP1-21: never follow to an internal target
-      signal: AbortSignal.timeout(8000)
+      signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS)
     });
 
     if (res.ok) {
@@ -158,13 +174,16 @@ async function deliverWithRetry(wh, body, event, attempt = 1) {
     await dbWebhooks.recordDelivery(wh.id, event, 'failed', null, attempt);
 
     if (attempt < MAX) {
-      const delay = 1000 * Math.pow(2, attempt); // 2s, 4s
+      const delay = DELIVERY_RETRY_BASE_MS * Math.pow(2, attempt); // 2s, 4s
       await new Promise(r => setTimeout(r, delay));
       return deliverWithRetry(wh, body, event, attempt + 1);
     }
 
-    // Disable webhook after too many consecutive failures
-    const disabled = await dbWebhooks.deactivateIfFailing(wh.id, 10);
-    if (disabled) console.warn(`[WEBHOOK] Disabled after 10 failures: ${wh.url}`);
+    // AP1-19 (#220): the counter behind this counts FAILED ATTEMPTS and is
+    // reset by any successful delivery — the old comment said "consecutive
+    // failures", which read as failed deliveries and overstated the threshold
+    // by a factor of DELIVERY_MAX_ATTEMPTS.
+    const disabled = await dbWebhooks.deactivateIfFailing(wh.id, DEACTIVATE_AFTER_FAILURES);
+    if (disabled) console.warn(`[WEBHOOK] Disabled after ${DEACTIVATE_AFTER_FAILURES} failed attempts: ${wh.url}`);
   }
 }

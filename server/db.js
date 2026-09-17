@@ -1,8 +1,8 @@
 /**
- * HHTTPS v4.1 — Database Access Layer
+ * HHTTPS — Database Access Layer (PostgreSQL)
  *
- * Replaces all in-memory Maps with PostgreSQL-backed persistence.
- * Uses connection pooling for performance and prepared statements for safety.
+ * Every access object in this module talks to the pool created by `init()`.
+ * The pool is shared across all queries and reconnects automatically.
  *
  * Required environment variables (from .env):
  *   DB_HOST     — default: localhost
@@ -11,7 +11,44 @@
  *   DB_USER     — default: hhttps
  *   DB_PASSWORD — required
  *
- * The pool is shared across all queries. Reconnects automatically.
+ * ── SCHEMA: ONE WAY, ONE LEDGER (AP6-40, #160) ──────────────────────────────
+ *
+ * There used to be four competing schema mechanisms (a fire-and-forget ALTER
+ * on module import, this boot list, the Privacy-Pass migration runner, and
+ * loose SQL files applied by hand). There is now exactly one:
+ *
+ *   `MIGRATIONS` below is THE ordered registry of every file under sql/.
+ *   scripts/migrate.js imports it (as `MIGRATION_ORDER`), applies the pending
+ *   files in that order and records each one in the `schema_migrations`
+ *   ledger. That runner is what install-pg.sh, scripts/deploy-all.sh and CI
+ *   use, and it is the only supported way to bring a database up to date.
+ *
+ *   A subset of the registry is additionally marked `boot` (see `bootDdl`).
+ *   Those files carry idempotent DDL that a *running* server needs, so
+ *   `ensureBootSchema()` — awaited by server.js main() before it listens —
+ *   applies them when their applied-check fails. This is the safety net for
+ *   an installation that was updated without running the migration runner;
+ *   it is NOT a second mechanism: it runs files from the same registry, in
+ *   the same order, and writes its own rows into the same ledger
+ *   (`<file>#boot-ddl`, so a later full `migrate.js` run still applies the
+ *   OPERATOR section of that file). A boot-DDL failure aborts the boot.
+ *
+ *   Operator sections (data updates, grants, DROPs) are never run at boot.
+ *   Adding a migration therefore means: put the file in sql/, add ONE entry
+ *   to `MIGRATIONS`, and mark it `boot` only if a running server needs it.
+ *
+ * ── RETURN SHAPES (AP6-43, #172) ────────────────────────────────────────────
+ *
+ * Access objects come in two flavours, and each method says which it is:
+ *   • normalised — the object has a `_normalize(row)` and returns camelCase
+ *     application objects (credentials, sessions, challenges, identityAnchors,
+ *     identityClaimsCache, webhooks).
+ *   • raw row — the method returns the pg row as-is, snake_case
+ *     (tokens.get, refreshTokens.get, rolesDeclared.get, machineOperators.get,
+ *     signatures.*, oauthClients.*, authCodes.claim, adminActions.*,
+ *     clientStats.*, connectedPlatforms.*). These are marked `@returns {row}`.
+ * Callers in server.js depend on the raw shape; converting them is a separate
+ * change that has to touch server.js and is tracked in #172.
  */
 
 import crypto from 'node:crypto';
@@ -30,6 +67,24 @@ export const STATEMENT_TIMEOUT_MS = 15_000;
 export const QUERY_TIMEOUT_MS     = 20_000;
 // cleanup_expired() may legitimately run longer after a long standstill.
 const CLEANUP_TIMEOUT_MS = 60_000;
+
+// AP6-55 (#213): TTLs and thresholds that used to sit inline as magic numbers.
+// They are the DEFAULTS of the access objects below; callers that pass an
+// explicit value (server.js) still win.
+/** WebAuthn challenge lifetime. */
+export const CHALLENGE_TTL_MS = 120_000;
+/** Session lifetime. */
+export const SESSION_TTL_MS = 600_000;
+/** Trust score a session starts with when the caller does not supply one. */
+export const DEFAULT_TRUST_SCORE = 60;
+/** E-mail verification code / magic link lifetime. */
+export const EMAIL_VERIFICATION_TTL_MS = 900_000;
+/** Plaintext identity claims are dropped after this long at the latest (D5). */
+export const CLAIMS_CACHE_TTL_MS = 7 * 24 * 3600 * 1000;
+/** OAuth authorization code lifetime. */
+export const AUTH_CODE_TTL_SEC = 60;
+/** Consecutive delivery failures after which a webhook is deactivated. */
+export const WEBHOOK_FAILURE_THRESHOLD = 10;
 
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 
@@ -142,7 +197,7 @@ export const credentials = {
 // ─── CHALLENGES ───────────────────────────────────────────────────────────────
 
 export const challenges = {
-  async create(challengeId, challenge, userId, context, ttlMs = 120_000) {
+  async create(challengeId, challenge, userId, context, ttlMs = CHALLENGE_TTL_MS) {
     await q(
       `INSERT INTO challenges (challenge_id, challenge, user_id, context, expires_at)
        VALUES ($1, $2, $3, $4, NOW() + ($5 || ' milliseconds')::interval)
@@ -178,7 +233,7 @@ export const challenges = {
 // ─── SESSIONS ─────────────────────────────────────────────────────────────────
 
 export const sessions = {
-  async create(sessionId, data, ttlMs = 600_000) {
+  async create(sessionId, data, ttlMs = SESSION_TTL_MS) {
     // Phase 8 (P-4/W-4): `pseudonym` is written on INSERT (D3: it travels
     // anchor → session → token) — no follow-up UPDATE needed.
     await q(
@@ -188,7 +243,7 @@ export const sessions = {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + ($9 || ' milliseconds')::interval)`,
       [
         sessionId, data.userId, data.credentialId, data.deviceType, data.backedUp,
-        data.verified !== false, data.trustScore || 60, data.pseudonym || null, ttlMs
+        data.verified !== false, data.trustScore ?? DEFAULT_TRUST_SCORE, data.pseudonym || null, ttlMs
       ]
     );
   },
@@ -292,6 +347,7 @@ export const tokens = {
     return rows.length > 0;
   },
 
+  /** @returns {object|null} raw snake_case row (see module header, #172) */
   async get(jti) {
     const { rows } = await q(`SELECT * FROM tokens WHERE jti = $1 AND expires_at > NOW()`, [jti]);
     return rows[0] || null;
@@ -337,6 +393,7 @@ export const refreshTokens = {
     return rows;
   },
 
+  /** @returns {object|null} raw snake_case row (see module header, #172) */
   async get(jti) {
     const { rows } = await q(
       `SELECT * FROM refresh_tokens WHERE jti = $1 AND expires_at > NOW()`, [jti]
@@ -388,7 +445,7 @@ export const emailVerifications = {
   // the legacy magic-link fallback at the bottom of the email). The column is
   // part of schema.sql and of the phase-10 boot DDL (AP6-06, #73) — it is no
   // longer created by a fire-and-forget ALTER on module import.
-  async create({ token, code, email, domain, level, trustBonus, category, sessionId, ttlMs = 900_000 }) {
+  async create({ token, code, email, domain, level, trustBonus, category, sessionId, ttlMs = EMAIL_VERIFICATION_TTL_MS }) {
     await q(
       `INSERT INTO email_verifications (token, code, email, domain, level, trust_bonus, category, session_id, expires_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + ($9 || ' milliseconds')::interval)`,
@@ -431,13 +488,14 @@ export const emailVerifications = {
   }
 };
 
-// ─── BOOT-DDL MIGRATIONS ──────────────────────────────────────────────────────
+// ─── SCHEMA MIGRATIONS ────────────────────────────────────────────────────────
 //
-// Some migration files under sql/ are applied by the server itself at boot
-// (F-7 / K-6 / P-2): only their DDL section (tables / columns / indexes,
-// idempotent), only when an applied-check shows the schema is missing, and
-// main() awaits the whole list before listening. Operator sections (data
-// updates, grants) are never run automatically.
+// See the module header: `MIGRATIONS` is the ONE ordered registry, the ledger
+// is `schema_migrations`, scripts/migrate.js is the runner, and the entries
+// carrying a `boot` block are additionally applied by `ensureBootSchema()`
+// when the running server would otherwise query a column that is not there
+// (F-7 / K-6 / P-2). Boot applies only the DDL section (idempotent) and only
+// when the applied-check fails; operator sections are never run at boot.
 //
 // Phase 8: sql/migration-phase-8-email-anchored-identity.sql is the single
 // reference (for operators AND for the boot). The file has two sections
@@ -502,28 +560,63 @@ export async function phase10SchemaApplied() {
 }
 
 /**
- * Boot-DDL list, in apply order. Each entry: the file under sql/, optionally
- * an `endMarker` (only the text above it is run), and an applied-check —
- * either a list of [table, column] pairs that must all exist, or a custom
- * `applied()` predicate.
+ * THE migration registry (AP6-40, #160) — every file under sql/ in apply
+ * order. scripts/migrate.js applies the pending ones and records them in the
+ * `schema_migrations` ledger.
+ *
+ * An entry with a `boot` block is additionally applied by ensureBootSchema()
+ * when its applied-check fails, because a running server would otherwise hit
+ * a missing column. `boot` holds:
+ *   endMarker  only the text above it is run (the DDL section of a two-section
+ *              migration file); the OPERATOR section stays for the runner.
+ *   applied()  custom predicate, or `columns: [[table, column], …]` — all must
+ *              exist for the file to count as applied.
+ *   note       printed with the log line, for the operator.
  */
-export const BOOT_DDL_FILES = [
-  { file: PHASE8_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END, applied: phase8SchemaApplied,
-    note: 'DDL only — run the OPERATOR section of the migration file for the data update' },
+export const MIGRATIONS = [
+  { file: 'schema.sql' },
+  { file: 'migration-phase-2.5.sql' },
+  { file: 'migration-phase-3a.sql' },
+  { file: 'migration-phase-3b.sql' },
+  { file: 'migration-phase-3b.1.sql' },
+  { file: 'migration-phase-4-machine-roles.sql' },
+  { file: 'migration-phase-5-external-verify.sql' },
+  { file: 'migration-phase-6-workload-identity.sql' },
+  { file: 'migration-phase-7-age-group.sql' },
+  { file: 'migration-portal-oauth-client.sql' },
+  { file: PHASE8_MIGRATION_FILE,
+    boot: { endMarker: PHASE8_BOOT_DDL_END, applied: phase8SchemaApplied,
+            note: 'DDL only — run the OPERATOR section of the migration file for the data update' } },
   // #7: machineOperators.create writes key_jkt; the column never had a migration.
-  { file: 'migration-phase-4b-machine-key-jkt.sql', columns: [['machine_operators', 'key_jkt']] },
+  { file: 'migration-phase-4b-machine-key-jkt.sql',
+    boot: { columns: [['machine_operators', 'key_jkt']] } },
   // #31: state/nonce/pkce_challenge were VARCHAR(128); longer client values broke the login.
-  { file: 'migration-phase-3a1-authcodes-text.sql', applied: authCodesTextApplied },
+  { file: 'migration-phase-3a1-authcodes-text.sql',
+    boot: { applied: authCodesTextApplied } },
   // Review 2026-09 Welle 0: webhooks get an owner (AP5-16); Privacy-Pass tables are
   // dropped by the OPERATOR section of the same file (never at boot).
-  { file: PHASE9_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END,
-    columns: [['webhooks', 'owner_user_id'], ['refresh_tokens', 'client_id']] },
+  { file: PHASE9_MIGRATION_FILE,
+    boot: { endMarker: PHASE8_BOOT_DDL_END,
+            columns: [['webhooks', 'owner_user_id'], ['refresh_tokens', 'client_id']] } },
   // Review 2026-09 Welle 2: email_verifications.code becomes part of the schema
   // (AP6-06), the hot-path index moves to session_id and cleanup_expired() also
   // removes consumed rows (AP6-03).
-  { file: PHASE10_MIGRATION_FILE, endMarker: PHASE8_BOOT_DDL_END, applied: phase10SchemaApplied,
-    note: 'DDL only — run the OPERATOR section of the migration file to invalidate plaintext client e-mail tokens (AP6-15)' },
+  { file: PHASE10_MIGRATION_FILE,
+    boot: { endMarker: PHASE8_BOOT_DDL_END, applied: phase10SchemaApplied,
+            note: 'DDL only — run the OPERATOR section of the migration file to invalidate plaintext client e-mail tokens (AP6-15)' } },
+  // Review 2026-09 Welle 3: the six vestigial counter COLUMNS on `stats` go,
+  // the metrics become rows like all the others (AP6-11). No boot entry — the
+  // running server never read those columns.
+  { file: 'migration-phase-11-review-welle-3.sql' },
 ];
+
+/** The subset of MIGRATIONS that ensureBootSchema() applies, in the same order. */
+export const BOOT_DDL_FILES = MIGRATIONS
+  .filter(m => m.boot)
+  .map(m => ({ file: m.file, ...m.boot }));
+
+/** Ledger name a boot-applied DDL section is recorded under (see module header). */
+export const bootLedgerName = (file) => `${file}#boot-ddl`;
 
 function bootDdlOf({ file, endMarker }) {
   const text = fs.readFileSync(path.join(SQL_DIR, file), 'utf8');
@@ -549,6 +642,22 @@ async function bootDdlApplied(entry) {
   return columnsExist(entry.columns || []);
 }
 
+/**
+ * Record what the boot applied in the shared ledger. Best effort on purpose:
+ * the ledger is documentation of what ran, not the gate (the applied-checks
+ * are). A database whose user may not create the table still boots.
+ */
+async function recordInLedger(file) {
+  try {
+    await q(`CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+    await q(`INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING`,
+      [bootLedgerName(file)]);
+  } catch (e) {
+    console.warn(`[db] could not record ${bootLedgerName(file)} in schema_migrations: ${e.message}`);
+  }
+}
+
 // Memoised: returns the same promise on repeated calls; a failure clears the
 // memo so an explicit retry is possible. NOT started on import — the caller
 // (server.js main) awaits it explicitly.
@@ -563,6 +672,7 @@ export function ensureBootSchema() {
         // several statements in one round trip.
         await q(bootDdlOf(entry));
         console.log(`[db] boot schema applied: ${entry.file}${entry.note ? ` (${entry.note})` : ''}`);
+        await recordInLedger(entry.file);
       }
     } catch (e) {
       console.error('[db] ensureBootSchema:', e.message);
@@ -572,9 +682,6 @@ export function ensureBootSchema() {
   })();
   return _bootReady;
 }
-
-/** Backwards-compatible name: runs the whole boot-DDL list (phase 8 included). */
-export const ensurePhase8Schema = ensureBootSchema;
 
 // identity_anchors: HMAC(email) → stable user_id + pseudonym (D1/D2/D3)
 export const identityAnchors = {
@@ -629,7 +736,7 @@ export const identityAnchors = {
 // identity_claims_cache: plaintext email + pseudonym + verified_methods per
 // user_id, kept until transferred to the platform, expiring after ≤ 7 days (D5)
 export const identityClaimsCache = {
-  async upsert({ userId, email, pseudonym, verifiedMethods, ttlMs = 7 * 24 * 3600 * 1000 }) {
+  async upsert({ userId, email, pseudonym, verifiedMethods, ttlMs = CLAIMS_CACHE_TTL_MS }) {
     await q(
       `INSERT INTO identity_claims_cache (user_id, email, pseudonym, verified_methods, updated_at, expires_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW() + ($5 || ' milliseconds')::interval)
@@ -685,6 +792,7 @@ export const rolesDeclared = {
     );
   },
 
+  /** @returns {object|null} raw snake_case row (see module header, #172) */
   async get(userId) {
     const { rows } = await q(`SELECT * FROM roles_declared WHERE user_id = $1`, [userId]);
     return rows[0] || null;
@@ -709,6 +817,7 @@ export const machineOperators = {
     );
   },
 
+  /** @returns {object|null} raw snake_case row (see module header, #172) */
   async get(operatorId) {
     const { rows } = await q(
       `SELECT * FROM machine_operators WHERE operator_id = $1 AND active = TRUE`,
@@ -749,11 +858,7 @@ export const webhooks = {
       [ownerUserId]
     );
     return rows.map(r => ({
-      id:           r.webhook_id,
-      url:          r.url,
-      events:       r.events,
-      failures:     r.failures,
-      deliveries:   r.deliveries,
+      ...this._normalize(r),
       lastDelivery: r.last_delivery_at,
       createdAt:    r.created_at
     }));
@@ -763,10 +868,8 @@ export const webhooks = {
     const { rows } = await q(
       `SELECT * FROM webhooks WHERE active = TRUE AND $1 = ANY(events)`, [event]
     );
-    return rows.map(r => ({
-      id: r.webhook_id, url: r.url, events: r.events, secret: r.secret,
-      failures: r.failures, deliveries: r.deliveries
-    }));
+    // The only place the HMAC secret leaves the database (AP6-16, #112).
+    return rows.map(r => ({ ...this._normalize(r), secret: r.secret }));
   },
 
   async delete(id, ownerUserId) {
@@ -776,29 +879,41 @@ export const webhooks = {
     return rowCount > 0;
   },
 
+  // AP6-36 (#213): log line + counter update in ONE round trip instead of two.
   async recordDelivery(webhookId, event, status, statusCode = null, attempt = 1) {
     await q(
-      `INSERT INTO webhook_deliveries (webhook_id, event, status, status_code, attempt)
-       VALUES ($1, $2, $3, $4, $5)`,
+      `WITH logged AS (
+         INSERT INTO webhook_deliveries (webhook_id, event, status, status_code, attempt)
+         VALUES ($1, $2, $3, $4, $5)
+       )
+       UPDATE webhooks SET
+         deliveries       = deliveries + CASE WHEN $3 = 'success' THEN 1 ELSE 0 END,
+         failures         = CASE WHEN $3 = 'success' THEN 0 ELSE failures + 1 END,
+         last_delivery_at = CASE WHEN $3 = 'success' THEN NOW() ELSE last_delivery_at END
+       WHERE webhook_id = $1`,
       [webhookId, event, status, statusCode, attempt]
     );
-    if (status === 'success') {
-      await q(
-        `UPDATE webhooks SET deliveries = deliveries + 1, failures = 0, last_delivery_at = NOW()
-         WHERE webhook_id = $1`, [webhookId]
-      );
-    } else {
-      await q(`UPDATE webhooks SET failures = failures + 1 WHERE webhook_id = $1`, [webhookId]);
-    }
   },
 
-  async deactivateIfFailing(webhookId, threshold = 10) {
-    const { rows } = await q(`SELECT failures FROM webhooks WHERE webhook_id = $1`, [webhookId]);
-    if (rows[0]?.failures >= threshold) {
-      await q(`UPDATE webhooks SET active = FALSE WHERE webhook_id = $1`, [webhookId]);
-      return true;
-    }
-    return false;
+  // AP6-36: one conditional UPDATE instead of SELECT-then-UPDATE. Returns true
+  // whenever the failure count is at or above the threshold — unchanged, and
+  // deliberately also on a webhook that is already inactive.
+  async deactivateIfFailing(webhookId, threshold = WEBHOOK_FAILURE_THRESHOLD) {
+    const { rowCount } = await q(
+      `UPDATE webhooks SET active = FALSE WHERE webhook_id = $1 AND failures >= $2`,
+      [webhookId, threshold]
+    );
+    return rowCount > 0;
+  },
+
+  _normalize(r) {
+    return {
+      id:         r.webhook_id,
+      url:        r.url,
+      events:     r.events,
+      failures:   r.failures,
+      deliveries: r.deliveries
+    };
   }
 };
 
@@ -822,6 +937,7 @@ export const signatures = {
     );
   },
 
+  /** @returns {object|null} raw snake_case row (see module header, #172) */
   async get(id) {
     const { rows } = await q(`SELECT * FROM signatures WHERE id = $1`, [id]);
     return rows[0] || null;
@@ -892,6 +1008,14 @@ export const signatures = {
   }
 };
 
+// AP6-42 (#213): oauth_clients rows carry two JSON-encoded array columns. One
+// helper hydrates them in place instead of ten copied try/catch pairs.
+function hydrateClient(r) {
+  r.redirect_uris  = parseJsonArray(r.redirect_uris);
+  r.allowed_scopes = parseJsonArray(r.allowed_scopes);
+  return r;
+}
+
 // ─── OAUTH 2.0 / OIDC (Phase 3a) ──────────────────────────────────────────────
 
 export const oauthClients = {
@@ -913,28 +1037,14 @@ export const oauthClients = {
     );
   },
 
+  /** @returns {object|null} raw snake_case row, JSON columns hydrated (#172) */
   async get(clientId) {
     const { rows } = await q(
       `SELECT * FROM oauth_clients WHERE client_id = $1 AND is_active = TRUE`,
       [clientId]
     );
     if (!rows[0]) return null;
-    const r = rows[0];
-    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-    return r;
-  },
-
-  async listByOwner(ownerUserId) {
-    const { rows } = await q(
-      `SELECT * FROM oauth_clients WHERE owner_user_id = $1 ORDER BY created_at DESC`,
-      [ownerUserId]
-    );
-    return rows.map(r => {
-      try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-      try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-      return r;
-    });
+    return hydrateClient(rows[0]);
   },
 
   async setVerified(clientId, verifiedBy) {
@@ -989,10 +1099,7 @@ export const oauthClients = {
       [sha256(token)]
     );
     if (!rows[0]) return null;
-    const r = rows[0];
-    try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-    try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-    return r;
+    return hydrateClient(rows[0]);
   },
 
   /**
@@ -1149,11 +1256,7 @@ export const oauthClients = {
           owner_trust_at_submit DESC NULLS LAST,
           submitted_for_review_at ASC`
     );
-    return rows.map(r => {
-      try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-      try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-      return r;
-    });
+    return rows.map(hydrateClient);
   },
 
   /** All clients owned by a user (any status, including draft). */
@@ -1164,11 +1267,7 @@ export const oauthClients = {
         ORDER BY created_at DESC`,
       [ownerUserId]
     );
-    return rows.map(r => {
-      try { r.redirect_uris  = JSON.parse(r.redirect_uris); } catch (e) { r.redirect_uris = []; }
-      try { r.allowed_scopes = JSON.parse(r.allowed_scopes); } catch (e) { r.allowed_scopes = []; }
-      return r;
-    });
+    return rows.map(hydrateClient);
   },
 
   /** Count clients created by an owner in last 24h — for rate limiting. */
@@ -1309,7 +1408,7 @@ export const authCodes = {
                  pkceChallenge, pkceMethod, state, nonce,
                  role, trustScore, verificationMethod,
                  ageGroup, ageVerified, ageVerificationMethod,
-                 email, pseudonym, verifiedMethods, ttlSec = 60 }) {
+                 email, pseudonym, verifiedMethods, ttlSec = AUTH_CODE_TTL_SEC }) {
     await q(
       `INSERT INTO authorization_codes
        (code, client_id, user_id, redirect_uri, scopes,
@@ -1393,7 +1492,7 @@ export const connectedPlatforms = {
       [userId]
     );
     return rows.map(r => {
-      try { r.scopes_granted = JSON.parse(r.scopes_granted); } catch (e) { r.scopes_granted = []; }
+      r.scopes_granted = parseJsonArray(r.scopes_granted);
       return r;
     });
   },

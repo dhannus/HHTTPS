@@ -51,10 +51,8 @@
   ],
   "permissions": [
     "storage",
-    "activeTab",
     "alarms",
-    "contextMenus",
-    "scripting"
+    "contextMenus"
   ],
   "host_permissions": [
     "https://hhttps.org/*"

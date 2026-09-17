@@ -1,17 +1,21 @@
 // server/eudi-verifier/index.js
 //
-// HHTTPS Phase 3 — EUDI age-verification ORCHESTRATOR (Node module).
+// HHTTPS — EUDI verification ORCHESTRATOR (in-process Express router).
 //
-// This module does NOT implement OpenID4VP/mdoc/ZKP/trusted-list itself — the
-// official EU Verifier Endpoint backend (Docker, :8080) does all of that. This
-// module is the bridge between that backend and HHTTPS:
+// This module does NOT implement OpenID4VP/mdoc/trusted-list itself: EUDIPLO
+// (OpenWallet Foundation, same host, :3002 — see backend-client.js) does all of
+// that. This module is the bridge between EUDIPLO and HHTTPS. It runs INSIDE
+// the HHTTPS server process (mounted in server.js), not as a separate service:
 //
-//   1. POST /eudi/age/request      → init a transaction on the EU backend with an
-//                                     age_over_NN DCQL query; return QR + deep-link.
-//   2. GET  /eudi/age/status/:id   → poll the EU backend; on success, read the
-//                                     validated age_over_NN, build the HMAC
-//                                     assertion, and call /hhttps/age/upgrade
-//                                     (Phase 3 step 2) to issue a verified token.
+//   1. POST /eudi/<kind>/request    → create an EUDIPLO presentation offer;
+//                                     return the openid4vp:// wallet link.
+//   2. GET  /eudi/<kind>/status/:id → poll EUDIPLO; on a validated presentation,
+//                                     sign the HMAC assertion (assertion.js) and
+//                                     call the matching internal HHTTPS endpoint
+//                                     to reissue the holder's token.
+//
+//   kind = age (age_over_NN via PID) | av (EU AV Profile attestation) | eid
+//          (PID presentation → the `eudi` method).
 //
 // Same openid4vp:// URL is offered both as a QR (cross-device) and a deep-link
 // (same-device) — the frontend decides which to show.
@@ -28,10 +32,11 @@ import {
   buildWalletLink,
   pollWalletResponse,
   extractVerifiedAgeClaims,
-  forgetSession,
-  config as backendConfig
+  forgetSession
 } from './backend-client.js';
 import { BackendError, mapBackendError } from './errors.js';
+// AP4-47 (#228): the canonical assertion structures are shared with server.js.
+import { signAssertion } from './assertion.js';
 
 // NOTE: No QR library dependency on the backend. The module returns the
 // openid4vp:// `deepLink`; the frontend renders it as a QR code (cross-device)
@@ -42,6 +47,12 @@ import { BackendError, mapBackendError } from './errors.js';
 // Sessions are short-lived (age verification completes in minutes); a Map with
 // TTL cleanup is sufficient and avoids a DB schema change (consistent with the
 // client-driven design — age_group lives in the token, not the DB).
+//
+// AP4-45 — OPERATING CONSTRAINT: this store is PROCESS-LOCAL. The HHTTPS server
+// must run as a SINGLE Node instance (no cluster mode, no second replica behind
+// a load balancer): a /eudi/*/status poll that lands on another instance than
+// the /eudi/*/request that created the transaction answers 404 `expired`.
+// Horizontal scaling needs this store in the database first.
 const txStore = new Map();
 const TX_TTL_MS = 10 * 60 * 1000; // 10 min
 // AP4-37 (#214): hard upper bound on pending transactions (each one is an
@@ -90,20 +101,13 @@ setInterval(() => purgeExpiredTx(), 60_000).unref?.();
 /** Test hook: number of stored transactions (AP4-37 regression test). */
 export function _txStoreSize() { return txStore.size; }
 
-// Build the HMAC-SHA256 assertion that /hhttps/age/upgrade (step 2) expects.
-// MUST match the canonical structure the upgrade endpoint recomputes exactly.
-function buildUpgradeAssertion(secret, { sessionId, ageOver, nonce, iat }) {
-  const canonical = JSON.stringify({
-    sessionId,
-    ageOver: {
-      age_over_14: ageOver.age_over_14 === true,
-      age_over_16: ageOver.age_over_16 === true,
-      age_over_18: ageOver.age_over_18 === true
-    },
-    nonce: nonce || null,
-    iat: iat || null
-  });
-  return crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+// AP4-50 (#239): ONE place that reads the shared secret, ONE place that builds
+// the internal URL, ONE place that POSTs — the three call* wrappers below only
+// differ in the canonical payload (assertion.js) and the request body.
+function verifierSecret() {
+  const secret = process.env.EUDI_VERIFIER_SECRET;
+  if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
+  return secret;
 }
 
 const internalBase = () => process.env.HHTTPS_INTERNAL_URL || 'http://127.0.0.1:3000';
@@ -120,19 +124,18 @@ async function postInternal(endpoint, body) {
   return data;
 }
 
+/** A fresh single-use {nonce, iat} pair — the replay protection of AP4-27. */
+const freshAssertionContext = () => ({ nonce: crypto.randomUUID(), iat: Date.now() });
+
 // Call the internal /hhttps/age/upgrade endpoint with the verified age claims.
 async function callAgeUpgrade(ageOver, hhttpsSessionId, currentToken) {
-  const secret = process.env.EUDI_VERIFIER_SECRET;
-  if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
-
-  const nonce = crypto.randomUUID();
-  const iat = Date.now();
-  const assertion = buildUpgradeAssertion(secret, {
-    sessionId: hhttpsSessionId, ageOver, nonce, iat
-  });
+  const { nonce, iat } = freshAssertionContext();
+  const payload = { sessionId: hhttpsSessionId, ageOver, nonce, iat };
   // → { hhttps:{token}, ageGroup:{...} }
   return postInternal('age/upgrade', {
-    sessionId: hhttpsSessionId, ageOver, assertion, nonce, iat, currentToken: currentToken || null
+    ...payload,
+    currentToken: currentToken || null,
+    assertion: signAssertion('age/upgrade', verifierSecret(), payload)
   });
 }
 
@@ -143,39 +146,25 @@ async function callAgeUpgrade(ageOver, hhttpsSessionId, currentToken) {
 // deliberately differs from the upgrade canonical (direct:true instead of a
 // sessionId), so an assertion can never be replayed across the two endpoints.
 async function callAgeDirect(ageOver) {
-  const secret = process.env.EUDI_VERIFIER_SECRET;
-  if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
-
-  const nonce = crypto.randomUUID();
-  const iat = Date.now();
-  const canonical = JSON.stringify({
-    direct: true,
-    ageOver: {
-      age_over_14: ageOver.age_over_14 === true,
-      age_over_16: ageOver.age_over_16 === true,
-      age_over_18: ageOver.age_over_18 === true
-    },
-    nonce, iat
+  const { nonce, iat } = freshAssertionContext();
+  const payload = { ageOver, nonce, iat };
+  return postInternal('age/direct', {
+    ...payload,
+    assertion: signAssertion('age/direct', verifierSecret(), payload)
   });
-  const assertion = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
-  // → { hhttps:{token, refreshToken, sessionId, userId}, ageGroup:{...} }
-  return postInternal('age/direct', { ageOver, assertion, nonce, iat });
 }
 
 // Call the internal /hhttps/eid/upgrade endpoint after a valid PID presentation.
 // Carries the holder's current token (if any) so orthogonal age claims survive
 // the reissue. Zero-PII: no PID attribute is sent — the proof is the presentation.
 async function callEidUpgrade(hhttpsSessionId, currentToken) {
-  const secret = process.env.EUDI_VERIFIER_SECRET;
-  if (!secret) throw new Error('EUDI_VERIFIER_SECRET not configured');
-
-  const nonce = crypto.randomUUID();
-  const iat = Date.now();
-  const canonical = JSON.stringify({ sessionId: hhttpsSessionId, eidVerified: true, nonce, iat });
-  const assertion = crypto.createHmac('sha256', secret).update(canonical).digest('hex');
+  const { nonce, iat } = freshAssertionContext();
+  const payload = { sessionId: hhttpsSessionId, nonce, iat };
   // → { hhttps:{token}, eudi:{...} }
   return postInternal('eid/upgrade', {
-    sessionId: hhttpsSessionId, currentToken: currentToken || null, nonce, iat, assertion
+    ...payload,
+    currentToken: currentToken || null,
+    assertion: signAssertion('eid/upgrade', verifierSecret(), payload)
   });
 }
 
@@ -261,16 +250,70 @@ export function createEudiVerifierRouter({ setIdentityCookie, getSession } = {})
     forgetSession(tx.transactionId);
   }
 
-  // Health: confirms the module is mounted and shows backend config (no secrets).
+  // AP4-50 (#239): the three status routes were copies of each other — the only
+  // real differences are the log/debug label, the result key and what is done
+  // once the wallet has answered. `complete` returns { <resultKey>, hhttps } or
+  // null when it has already answered the request itself (terminal failure).
+  function statusHandler({ route, debugLabel, resultKey, complete }) {
+    return async (req, res) => {
+      const tx = getTx(req.params.requestId);
+      if (!tx) return res.status(404).json({ status: 'expired' });
+      // AP4-08/AP4-14: a terminal result (verified OR failed) is served from the
+      // transaction — EUDIPLO is never polled again for it.
+      if (cachedResult(tx, res, resultKey)) return;
+
+      tx.inflight = true;
+      try {
+        const poll = await pollWalletResponse(tx.transactionId);
+        if (poll.status === 'pending') return res.json({ status: 'pending' });
+        if (poll.status === 'failed') {
+          markFailed(tx, poll.reason);
+          return res.json({ status: 'failed', reason: tx.reason });
+        }
+        debugKeys(debugLabel, poll.walletResponse);
+
+        const result = await complete(tx, poll, res);
+        if (!result) return;                       // `complete` already answered
+
+        tx.status    = 'verified';
+        tx[resultKey] = result[resultKey];
+        tx.hhttps     = result.hhttps;
+
+        if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
+        res.json({ status: 'verified', [resultKey]: result[resultKey], hhttps: result.hhttps });
+      } catch (e) {
+        console.error(`[EUDI-VERIFIER] ${route} error:`, e.message);
+        const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
+        res.status(httpStatus).json(body);
+      } finally {
+        tx.inflight = false;
+      }
+    };
+  }
+
+  // Shared tail of the two AGE routes: read the validated booleans, refuse a
+  // presentation that disclosed nothing, then bridge into HHTTPS.
+  async function completeAge(tx, poll, res, bridge) {
+    const ageOver = extractVerifiedAgeClaims(poll.walletResponse);
+    if (!Object.values(ageOver).some(v => v === true)) {
+      markFailed(tx, 'no_age_claim_disclosed');
+      res.json({ status: 'failed', reason: tx.reason });
+      return null;
+    }
+    const result = await bridge(ageOver, tx);
+    return { ageGroup: result.ageGroup, hhttps: result.hhttps };
+  }
+
+  // Health: confirms the module is mounted and whether it is usable at all.
+  // AP4-34: this route is UNAUTHENTICATED, so it must not disclose the internal
+  // EUDIPLO URL, the requested doctypes or the wallet scheme — that is an
+  // inventory of the deployment for anyone who asks. `ready` is the one bit a
+  // monitor needs: the shared secret is present, so an upgrade can be signed.
   router.get('/age/health', (_req, res) => {
     res.json({
       module: 'eudi-verifier',
       status: 'ok',
-      backend: backendConfig.BACKEND,
-      doctype: backendConfig.AV_DOCTYPE,
-      avProfileDoctype: backendConfig.AV_PROFILE_DOCTYPE,
-      scheme: backendConfig.AUTH_SCHEME,
-      secretConfigured: !!process.env.EUDI_VERIFIER_SECRET
+      ready: !!process.env.EUDI_VERIFIER_SECRET
     });
   });
 
@@ -312,47 +355,12 @@ export function createEudiVerifierRouter({ setIdentityCookie, getSession } = {})
   });
 
   // 2. Poll status. Frontend hits this every ~2s until 'verified' or 'failed'.
-  router.get('/age/status/:requestId', async (req, res) => {
-    const tx = getTx(req.params.requestId);
-    if (!tx) return res.status(404).json({ status: 'expired' });
-    if (cachedResult(tx, res, 'ageGroup')) return;
-
-    tx.inflight = true;
-    try {
-      const poll = await pollWalletResponse(tx.transactionId, req.query.response_code);
-      if (poll.status === 'pending') {
-        return res.json({ status: 'pending' });
-      }
-      if (poll.status === 'failed') {
-        markFailed(tx, poll.reason);
-        return res.json({ status: 'failed', reason: tx.reason });
-      }
-
-      // Wallet responded — extract validated age booleans.
-      const ageOver = extractVerifiedAgeClaims(poll.walletResponse);
-      debugKeys('walletResponse', poll.walletResponse);
-      const proven = Object.values(ageOver).some(v => v === true);
-      if (!proven) {
-        markFailed(tx, 'no_age_claim_disclosed');
-        return res.json({ status: 'failed', reason: tx.reason });
-      }
-
-      // Bridge to HHTTPS: issue a verified token via /hhttps/age/upgrade.
-      const upgrade = await callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken);
-      tx.status = 'verified';
-      tx.ageGroup = upgrade.ageGroup;
-      tx.hhttps = upgrade.hhttps;
-
-      if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
-      res.json({ status: 'verified', ageGroup: upgrade.ageGroup, hhttps: upgrade.hhttps });
-    } catch (e) {
-      console.error('[EUDI-VERIFIER] /age/status error:', e.message);
-      const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
-      res.status(httpStatus).json(body);
-    } finally {
-      tx.inflight = false;
-    }
-  });
+  router.get('/age/status/:requestId', statusHandler({
+    route: '/age/status', debugLabel: 'walletResponse', resultKey: 'ageGroup',
+    // Bridge to HHTTPS: issue a verified token via /hhttps/age/upgrade.
+    complete: (tx, poll, res) => completeAge(tx, poll, res,
+      (ageOver) => callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken))
+  }));
 
   // ─── AV Profile acceptance (e-mail-verified session required) ────────────────
   //
@@ -416,50 +424,15 @@ export function createEudiVerifierRouter({ setIdentityCookie, getSession } = {})
   });
 
   // 2. Poll direct AV status.
-  router.get('/av/status/:requestId', async (req, res) => {
-    const tx = getTx(req.params.requestId);
-    if (!tx) return res.status(404).json({ status: 'expired' });
-    if (cachedResult(tx, res, 'ageGroup')) return;
-
-    tx.inflight = true;
-    try {
-      const poll = await pollWalletResponse(tx.transactionId, req.query.response_code);
-      if (poll.status === 'pending') {
-        return res.json({ status: 'pending' });
-      }
-      if (poll.status === 'failed') {
-        markFailed(tx, poll.reason);
-        return res.json({ status: 'failed', reason: tx.reason });
-      }
-
-      const ageOver = extractVerifiedAgeClaims(poll.walletResponse);
-      debugKeys('AV walletResponse', poll.walletResponse);
-      const proven = Object.values(ageOver).some(v => v === true);
-      if (!proven) {
-        markFailed(tx, 'no_age_claim_disclosed');
-        return res.json({ status: 'failed', reason: tx.reason });
-      }
-
-      // Session supplied → verified age lands on the EXISTING identity (upgrade
-      // path). No session → age/direct, which always answers 403 (AK-28).
-      const result = tx.hhttpsSession
-        ? await callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken)
-        : await callAgeDirect(ageOver);
-
-      tx.status = 'verified';
-      tx.ageGroup = result.ageGroup;
-      tx.hhttps = result.hhttps;
-
-      if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
-      res.json({ status: 'verified', ageGroup: result.ageGroup, hhttps: result.hhttps });
-    } catch (e) {
-      console.error('[EUDI-VERIFIER] /av/status error:', e.message);
-      const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
-      res.status(httpStatus).json(body);
-    } finally {
-      tx.inflight = false;
-    }
-  });
+  router.get('/av/status/:requestId', statusHandler({
+    route: '/av/status', debugLabel: 'AV walletResponse', resultKey: 'ageGroup',
+    // Session supplied → verified age lands on the EXISTING identity (upgrade
+    // path). No session → age/direct, which always answers 403 (AK-28).
+    complete: (tx, poll, res) => completeAge(tx, poll, res,
+      (ageOver) => tx.hhttpsSession
+        ? callAgeUpgrade(ageOver, tx.hhttpsSession, tx.currentToken)
+        : callAgeDirect(ageOver))
+  }));
 
   // ─── eID identity (orthogonal to age) ───────────────────────────────────────
 
@@ -495,41 +468,16 @@ export function createEudiVerifierRouter({ setIdentityCookie, getSession } = {})
   });
 
   // 2. Poll eID status. A POSITIVE terminal EUDIPLO session = a valid PID
-  //    presentation (AP4-24: negative/unknown states never count).
-  router.get('/eid/status/:requestId', async (req, res) => {
-    const tx = getTx(req.params.requestId);
-    if (!tx) return res.status(404).json({ status: 'expired' });
-    if (cachedResult(tx, res, 'eudi')) return;
-
-    tx.inflight = true;
-    try {
-      const poll = await pollWalletResponse(tx.transactionId, req.query.response_code);
-      if (poll.status === 'pending') {
-        return res.json({ status: 'pending' });
-      }
-      if (poll.status === 'failed') {
-        markFailed(tx, poll.reason);
-        return res.json({ status: 'failed', reason: tx.reason });
-      }
-      debugKeys('eID walletResponse', poll.walletResponse);
-
-      // Terminal session → valid PID presentation. ZERO-PII: we deliberately do
-      // NOT read any disclosed attribute; the validated presentation is the proof.
+  //    presentation (AP4-24: negative/unknown states never count). ZERO-PII: we
+  //    deliberately do NOT read any disclosed attribute; the validated
+  //    presentation itself is the proof.
+  router.get('/eid/status/:requestId', statusHandler({
+    route: '/eid/status', debugLabel: 'eID walletResponse', resultKey: 'eudi',
+    complete: async (tx) => {
       const upgrade = await callEidUpgrade(tx.hhttpsSession, tx.currentToken);
-      tx.status = 'verified';
-      tx.eudi = upgrade.eudi;
-      tx.hhttps = upgrade.hhttps;
-
-      if (tx.hhttps?.token) setCookie(res, tx.hhttps.token);  // ← mirror into browser cookie
-      res.json({ status: 'verified', eudi: upgrade.eudi, hhttps: upgrade.hhttps });
-    } catch (e) {
-      console.error('[EUDI-VERIFIER] /eid/status error:', e.message);
-      const { httpStatus, body } = mapBackendError(e);   // 4xx of the backend pass through (#26)
-      res.status(httpStatus).json(body);
-    } finally {
-      tx.inflight = false;
+      return { eudi: upgrade.eudi, hhttps: upgrade.hhttps };
     }
-  });
+  }));
 
   return router;
 }
