@@ -3115,8 +3115,19 @@ app.post('/hhttps/verify/github/status', async (req, res) => {
 
 // ─── Role Declaration ─────────────────────────────────────────────────────────
 
+// AP4-05 (#64): the handler body runs under try/catch — a thrown error must
+// answer 500 instead of leaving the request hanging (no error middleware here).
 app.post('/hhttps/role/declare', async (req, res) => {
-  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body;
+  try {
+    await roleDeclare(req, res);
+  } catch (e) {
+    console.error('[ROLE-DECLARE] error:', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Role declaration failed.' });
+  }
+});
+
+async function roleDeclare(req, res) {
+  const { sessionId, role, verificationMethod, verificationData, ageGroup } = req.body || {};
   const session = await db.sessions.get(sessionId);
   if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
   // AK-13 / D4: email is the mandatory method — passkey/GitHub/EUDI alone no longer suffice.
@@ -3141,10 +3152,13 @@ app.post('/hhttps/role/declare', async (req, res) => {
   // honestly labelled, low trust, age_verified:false. Phase 3 will set this
   // from an EUDI Wallet PID presentation (age_over_NN) with method 'eudi-wallet'.
   let ageClaims = null;
-  if (ageGroup) {
-    const ag = AGE_GROUPS[ageGroup];
+  if (ageGroup !== undefined && ageGroup !== null && ageGroup !== '') {
+    // AP4-31 (#203): AGE_GROUPS is a plain object — an own-property check, not a
+    // property lookup ('constructor' & co. used to pass and crash after issuance).
+    const ag = (typeof ageGroup === 'string' && Object.hasOwn(AGE_GROUPS, ageGroup))
+      ? AGE_GROUPS[ageGroup] : null;
     if (!ag) return res.status(400).json({
-      error: `Unknown age group: ${ageGroup}`, available: Object.keys(AGE_GROUPS)
+      error: `Unknown age group: ${String(ageGroup).slice(0, 64)}`, available: Object.keys(AGE_GROUPS)
     });
     const ageMethod = AGE_VERIFICATION_METHODS['self-declared'];
     ageClaims = {
@@ -3250,7 +3264,49 @@ app.post('/hhttps/role/declare', async (req, res) => {
     } : null,
     message: `✓ Human verified · ${badges.length} method(s) · Access (1h) + Refresh (7d)`
   });
-});
+}
+
+// ─── AP4-27 (#182): internal verifier endpoints — loopback + nonce + iat ─────
+//
+// /hhttps/age/upgrade, /hhttps/age/direct and /hhttps/eid/upgrade are called
+// ONLY by the in-process eudi-verifier over http://127.0.0.1. nginx proxies
+// `location /` as a whole, so the "127.0.0.1 only" comment used to be wishful:
+// the HMAC was the single line of defence. Now, fail-closed:
+//   1. the TCP peer must be a loopback address (req.socket.remoteAddress — NOT
+//      req.ip, which is the forwarded client address behind `trust proxy`);
+//   2. `iat` is mandatory and must be within the 5-minute window;
+//   3. `nonce` is mandatory and single-use within that window.
+function isLoopbackAddress(addr) {
+  const a = String(addr || '');
+  return a === '::1' || a === '::ffff:127.0.0.1' || a.startsWith('127.') || a.startsWith('::ffff:127.');
+}
+function requireInternalCaller(req, res, tag) {
+  if (!isLoopbackAddress(req.socket?.remoteAddress)) {
+    console.warn(`[${tag}] refused: non-loopback caller ${req.socket?.remoteAddress}`);
+    res.status(403).json({ error: 'internal_endpoint' });
+    return false;
+  }
+  return true;
+}
+const INTERNAL_ASSERTION_WINDOW_MS = 300_000;
+const seenAssertionNonces = new Map();   // nonce → expiry (ms)
+function purgeAssertionNonces(now) {
+  for (const [n, exp] of seenAssertionNonces) if (exp <= now) seenAssertionNonces.delete(n);
+}
+// Validates freshness + single use of an ALREADY signature-checked assertion.
+// Returns null when fine, otherwise the error string for a 401.
+function checkAssertionFreshness(nonce, iat) {
+  const now = Date.now();
+  const ageMs = now - Number(iat);
+  if (iat === undefined || iat === null || iat === '' || !Number.isFinite(ageMs)) return 'Assertion iat required.';
+  if (ageMs < -60_000 || ageMs > INTERNAL_ASSERTION_WINDOW_MS) return 'Assertion expired or clock skew too large.';
+  if (typeof nonce !== 'string' || !nonce || nonce.length > 128) return 'Assertion nonce required.';
+  if (seenAssertionNonces.size > 10_000) purgeAssertionNonces(now);
+  if (seenAssertionNonces.has(nonce) && seenAssertionNonces.get(nonce) > now) return 'Assertion replayed.';
+  seenAssertionNonces.set(nonce, now + INTERNAL_ASSERTION_WINDOW_MS + 60_000);
+  return null;
+}
+setInterval(() => purgeAssertionNonces(Date.now()), 60_000).unref?.();
 
 // ─── EUDI age upgrade (Phase 3) ───────────────────────────────────────────────
 //
@@ -3274,6 +3330,7 @@ app.post('/hhttps/role/declare', async (req, res) => {
 // }
 app.post('/hhttps/age/upgrade', async (req, res) => {
   try {
+    if (!requireInternalCaller(req, res, 'AGE-UPGRADE')) return;   // AP4-27
     const { sessionId, ageOver, assertion, nonce, iat, currentToken } = req.body || {};
 
     if (!sessionId || typeof ageOver !== 'object' || ageOver === null || !assertion) {
@@ -3307,13 +3364,9 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
       return res.status(401).json({ error: 'Invalid verifier assertion.' });
     }
 
-    // Reject stale assertions (replay window: 5 min) when iat is provided.
-    if (iat) {
-      const ageMs = Date.now() - Number(iat);
-      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
-        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
-      }
-    }
+    // AP4-27: iat mandatory, 5-min window, nonce single-use.
+    const stale = checkAssertionFreshness(nonce, iat);
+    if (stale) return res.status(401).json({ error: stale });
 
     // Session must exist and be a verified human session.
     const session = await db.sessions.get(sessionId);
@@ -3436,6 +3489,7 @@ app.post('/hhttps/age/upgrade', async (req, res) => {
 //   assertion = HMAC-SHA256 over canonical { direct:true, ageOver, nonce, iat }
 app.post('/hhttps/age/direct', async (req, res) => {
   try {
+    if (!requireInternalCaller(req, res, 'AGE-DIRECT')) return;   // AP4-27
     const { ageOver, assertion, nonce, iat } = req.body || {};
 
     if (typeof ageOver !== 'object' || ageOver === null || !assertion) {
@@ -3469,13 +3523,9 @@ app.post('/hhttps/age/direct', async (req, res) => {
       return res.status(401).json({ error: 'Invalid verifier assertion.' });
     }
 
-    // Reject stale assertions (replay window: 5 min) when iat is provided.
-    if (iat) {
-      const ageMs = Date.now() - Number(iat);
-      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
-        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
-      }
-    }
+    // AP4-27: iat mandatory, 5-min window, nonce single-use.
+    const stale = checkAssertionFreshness(nonce, iat);
+    if (stale) return res.status(401).json({ error: stale });
 
     // AK-28: no session-less age bootstrap. The assertion was valid, but an age
     // proof requires a session with a verified email → /hhttps/age/upgrade.
@@ -3504,6 +3554,7 @@ app.post('/hhttps/age/direct', async (req, res) => {
 //   assertion = HMAC-SHA256 over canonical { sessionId, eidVerified:true, nonce, iat }
 app.post('/hhttps/eid/upgrade', async (req, res) => {
   try {
+    if (!requireInternalCaller(req, res, 'EID-UPGRADE')) return;   // AP4-27
     const { sessionId, currentToken, nonce, iat, assertion } = req.body || {};
     if (!sessionId || !assertion) {
       return res.status(400).json({ error: 'sessionId and assertion are required.' });
@@ -3526,12 +3577,9 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
       return res.status(401).json({ error: 'Invalid verifier assertion.' });
     }
 
-    if (iat) {
-      const ageMs = Date.now() - Number(iat);
-      if (!Number.isFinite(ageMs) || ageMs < -60_000 || ageMs > 300_000) {
-        return res.status(401).json({ error: 'Assertion expired or clock skew too large.' });
-      }
-    }
+    // AP4-27: iat mandatory, 5-min window, nonce single-use.
+    const stale = checkAssertionFreshness(nonce, iat);
+    if (stale) return res.status(401).json({ error: stale });
 
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) {
@@ -3630,14 +3678,26 @@ app.post('/hhttps/eid/upgrade', async (req, res) => {
 // Body: { sessionId, esco?:{label,isco08,escoUri}, customRole?, documentProvided?, locale? }
 app.post('/hhttps/role/card', async (req, res) => {
   try {
-    const { sessionId, esco = null, customRole = null, documentProvided = false } = req.body || {};
+    const { sessionId, esco = null, customRole = null } = req.body || {};
+    // AP4-07 (#78): a strict boolean — "false", "0" or {} used to count as a document.
+    const documentProvided = req.body?.documentProvided === true;
     const session = await db.sessions.get(sessionId);
     if (!session?.verified) return res.status(401).json({ error: 'Invalid or expired session.' });
-    // Method-neutral human gate (v0.5): any one genuinely verified method qualifies,
-    // not email specifically (consistent with /hhttps/role/declare).
-    const hasMethod = !!(session.emailVerified || session.hasPasskey || session.credentialId
-                         || session.githubVerified || session.eudiVerified);
-    if (!hasMethod) return res.status(403).json({ error: 'At least one verified method is required first.' });
+    // AP4-06 (#71) / AK-13: the confirmed e-mail is the mandatory method — the
+    // same gate as /hhttps/role/declare (the old ||-chain also read session
+    // fields that sessions._normalize never sets).
+    if (!requireEmailVerified(session, res)) return;
+    // Human = at least one genuinely verified method on the session (the same
+    // surface the sign-in gate in role/declare uses), not "has a passkey".
+    const v = computeVerification({
+      email:       !!session.emailVerified,
+      passkey:     !!session.credentialId,
+      domain:      !!session.emailDomain,
+      domainTrust: session.emailTrustBonus || 0,
+      domainValue: session.emailDomain || null,
+      github:      !!session.githubVerified
+    });
+    const humanVerified = v.methods.filter(m => m !== 'age').length > 0;
 
     let roleInput = null, custom = false, customLabel = null, reservedKey = null;
     if (customRole) {
@@ -3671,12 +3731,13 @@ app.post('/hhttps/role/card', async (req, res) => {
     // self-assertion — labelled as such, RAL0, never `verified`.
     const method = documentProvided ? 'self-asserted-document' : 'self-declared';
     const verificationStatus = 'self-declared';
-    const humanVerified = !!(session.hasPasskey || session.credentialId);
 
     const built = buildRoleClaim({ roleInput, custom, customLabel, verificationStatus, method, humanVerified });
 
+    // AP4-29 (#195): NO userId on the card — it is the stable account key
+    // (sessions, tokens, anchors). The card carries the role + RAL only; the
+    // holder binding is the wallet's job (zero-PII, no linkable identifier).
     const cardClaims = {
-      userId:     session.userId,
       role:       built.role.id,
       roleLabel:  built.role.label,
       ral:        built.ral,
@@ -3712,15 +3773,59 @@ app.post('/hhttps/role/card', async (req, res) => {
 
 // ─── Token Revocation ─────────────────────────────────────────────────────────
 
+// AP4-40 (#225): revoked_tokens used to be a permanent list. A revocation only
+// matters while the token could still verify, i.e. until its `exp`; the longest
+// TTL of any token we sign is OAUTH_REFRESH_TTL (30 d). Rows older than that
+// are purged opportunistically on every revoke (cheap: indexed on revoked_at).
+const REVOKED_RETENTION_DAYS = 31;
+async function purgeStaleRevocations() {
+  try {
+    await db.q(`DELETE FROM revoked_tokens WHERE revoked_at < NOW() - ($1 || ' days')::interval`,
+               [String(REVOKED_RETENTION_DAYS)]);
+  } catch (e) { console.error('[REVOKE] purge failed:', e.message); }
+}
+// Every jti we sign is a UUID (issueAccessToken / issueRefreshToken / OAuth / machine).
+const REVOKABLE_JTI_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Payload of a token whose SIGNATURE has already been verified (see below) —
+// jsonwebtoken raises TokenExpiredError only after the signature check passed.
+function jwtDecode(token) {
+  try { return JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8')); }
+  catch { return null; }
+}
+
+// AP4-04 (#57) / AP4-25 (#174): the token is trusted ONLY after its signature
+// verified. An expired token is still revocable (its jti is deleted from the
+// active tables; nothing is written to revoked_tokens because it cannot verify
+// any more — AP4-40), but a token with a broken signature or without a jti is
+// refused without any database write.
 app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(400).json({ error: 'token required' });
+  const { token } = req.body || {};
+  if (!token || typeof token !== 'string') return res.status(400).json({ error: 'token required' });
+
+  let decoded = null, expired = false;
+  try {
+    decoded = verifyToken(token);
+  } catch (e) {
+    if (e?.name !== 'TokenExpiredError') {
+      return res.status(401).json({ error: e.message });
+    }
+    // jsonwebtoken checks the signature BEFORE exp — an expired token has a
+    // valid signature, so its payload can be trusted.
+    expired = true;
+    decoded = jwtDecode(token) || {};
+  }
+
+  const jti = decoded.jti;
+  if (typeof jti !== 'string' || !REVOKABLE_JTI_RE.test(jti)) {
+    return res.status(400).json({ error: 'Token carries no revocable jti.' });
+  }
 
   try {
-    const decoded = verifyToken(token);
-    await db.revokedTokens.add(decoded.jti, decoded.role, 'user-requested');
-    await db.tokens.delete(decoded.jti);
-    await db.refreshTokens.delete(decoded.jti);
+    // AP4-40: an EXPIRED token can no longer verify, so a ban-list row for it
+    // would only be storage — the active-table rows still go.
+    if (!expired) await db.revokedTokens.add(jti, decoded.role, 'user-requested');
+    await db.tokens.delete(jti);
+    await db.refreshTokens.delete(jti);
     // AP4-03: "revoked" means the whole HHTTPS sign-in — every refresh token of
     // the holder goes too, otherwise a stolen refresh token re-issues access.
     const uid = decoded.userId || decoded.uid || null;
@@ -3729,33 +3834,32 @@ app.post('/hhttps/revoke', limit.revoke, async (req, res) => {
       for (const r of ended) await db.revokedTokens.add(r.jti, r.role, 'user-requested');
     }
     await db.stats.increment('tokens_revoked');
+    await purgeStaleRevocations();
 
-    console.log(`[REVOKE] jti=${decoded.jti.slice(0, 8)}... role=${decoded.role}`);
+    console.log(`[REVOKE] jti=${jti.slice(0, 8)}... role=${decoded.role}${expired ? ' (expired)' : ''}`);
     fireEvent('token.revoked', { role: decoded.role });
 
     setHHTPPS(res, { status: 'revoked', human: false, actorType: 'unknown' });
     clearIdentityCookie(res);  // drop the hhttps.org-scoped convenience cookie
-    res.json({ hhttps: { status: 'revoked' }, revoked: true, jti: decoded.jti });
+    res.json({ hhttps: { status: 'revoked' }, revoked: true, jti, ...(expired ? { expired: true } : {}) });
   } catch (e) {
-    // Allow revoking expired tokens by extracting jti from payload
-    try {
-      const raw = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
-      if (raw.jti) {
-        await db.revokedTokens.add(raw.jti, raw.role, 'user-requested-expired');
-        await db.tokens.delete(raw.jti);
-        await db.refreshTokens.delete(raw.jti);
-      }
-    } catch {}
-    res.status(401).json({ error: e.message });
+    console.error('[REVOKE] error:', e.message);
+    res.status(500).json({ error: 'Revocation failed.' });
   }
 });
 
 app.get('/hhttps/revoke/status', async (req, res) => {
-  const { jti } = req.query;
+  // AP4-05 (#64): `?jti=a&jti=b` arrives as an array — normalise to one string.
+  const jti = typeof req.query.jti === 'string' ? req.query.jti : null;
   if (!jti) return res.status(400).json({ error: 'jti required' });
-  const revoked = await db.revokedTokens.has(jti);
-  const active  = await db.tokens.exists(jti);
-  res.json({ jti, revoked, active: active && !revoked });
+  try {
+    const revoked = await db.revokedTokens.has(jti);
+    const active  = await db.tokens.exists(jti);
+    res.json({ jti, revoked, active: active && !revoked });
+  } catch (e) {
+    console.error('[REVOKE-STATUS] error:', e.message);
+    res.status(500).json({ error: 'Lookup failed.' });
+  }
 });
 
 // ─── Token Validate ──────────────────────────────────────────────────────────
