@@ -373,24 +373,35 @@ app.use(express.json({ limit: '2mb' }));
 // its own Content-Type, so JSON endpoints are unaffected.
 app.use(express.urlencoded({ extended: false, limit: '2mb' }));
 
-app.use(cors({
-  exposedHeaders: [
-    'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
-    'HHTTPS-Actor-Type','HHTTPS-Role','HHTTPS-Role-Label',
-    'HHTTPS-Role-Level','HHTTPS-Trust-Score',
-    'HHTTPS-Issuer','HHTTPS-Method',
-    'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
-    'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method'
-  ]
-}));
+// AP1-05: every HHTTPS-* header setHHTPPS() / setRoleHeaders() can emit must be
+// readable by cross-origin JavaScript. The per-method headers derive from the
+// VERIFICATION_METHODS registry so a new method is exposed automatically.
+const HHTTPS_EXPOSED_HEADERS = [
+  'HHTTPS-Protocol-Version','HHTTPS-Status','HHTTPS-Human',
+  'HHTTPS-Actor-Type','HHTTPS-Role','HHTTPS-Role-Label',
+  'HHTTPS-Role-Level','HHTTPS-Trust-Score',
+  'HHTTPS-Issuer','HHTTPS-Method',
+  'HHTTPS-Machine-Operator','HHTTPS-Machine-Purpose',
+  'HHTTPS-Age-Group','HHTTPS-Age-Verified','HHTTPS-Age-Method',
+  // v0.5 verification surface + role assurance (roles.eaa.js setRoleHeaders)
+  'HHTTPS-Verified-Methods', 'HHTTPS-RAL', 'HHTTPS-Role-ISCO08',
+  ...Object.values(VERIFICATION_METHODS).flatMap(m => [m.header, m.valueHeader].filter(Boolean))
+];
+app.use(cors({ exposedHeaders: [...new Set(HHTTPS_EXPOSED_HEADERS)] }));
 
 // CRITICAL: scriptSrcAttr must allow 'unsafe-inline' so the existing onclick=
 // handlers in index.html keep working. Without this, all buttons silently fail.
+// AP1-25 (partial): third-party scripts are pinned to the two exact bundles
+// public/index.html loads instead of the whole of unpkg.com. Dropping
+// 'unsafe-inline' needs the inline handlers in public/*.html replaced first.
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc:  ["'self'", "'unsafe-inline'", 'unpkg.com', 'fonts.googleapis.com'],
+      scriptSrc:  ["'self'", "'unsafe-inline'",
+                   'https://unpkg.com/qrcode-generator@1.4.4/qrcode.js',
+                   'https://unpkg.com/@simplewebauthn/browser@9.0.1/dist/bundle/index.umd.min.js',
+                   'fonts.googleapis.com'],
       scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc:   ["'self'", "'unsafe-inline'", 'fonts.googleapis.com'],
       fontSrc:    ["'self'", 'fonts.gstatic.com'],
@@ -425,13 +436,41 @@ const limit = {
   email:    rl(30, 60 * 60_000),
   revoke:   rl(30),
   webhooks: rl(20, 60 * 60_000),
-  machine:  rl(60)
+  machine:  rl(60),
+  // AP1-32: /hhttps/info used to be exempt from every limiter while running six
+  // COUNT(*) per call — now it has its own budget (plus a 30 s counter cache).
+  info:     rl(60),
+  // AP1-08: the ESCO proxy talks to an external API per call — own budget.
+  esco:     rl(60)
 };
 
 app.use((req, res, next) => {
-  if (req.path === '/' || req.path === '/hhttps/info') return next();
+  if (req.path === '/') return next();
   limit.global(req, res, next);
 });
+
+// ─── AP1-33: in-process stats accumulator ────────────────────────────────────
+// Hot counters (check_calls, machine_checks) are no longer written to the
+// single `stats` row on every request; they accumulate here and are flushed
+// with one UPDATE per metric every STATS_FLUSH_MS (default 10 s).
+const STATS_FLUSH_MS = Math.max(200, parseInt(process.env.STATS_FLUSH_MS || '10000', 10) || 10000);
+const _pendingStats = new Map();
+function bumpStat(metric, by = 1) {
+  _pendingStats.set(metric, (_pendingStats.get(metric) || 0) + by);
+}
+async function flushStats() {
+  if (!_pendingStats.size) return;
+  const batch = [..._pendingStats.entries()];
+  _pendingStats.clear();
+  for (const [metric, by] of batch) {
+    try { await db.stats.increment(metric, by); }
+    catch (e) {
+      _pendingStats.set(metric, (_pendingStats.get(metric) || 0) + by); // retry next tick
+      console.error('[STATS] flush failed:', e.message);
+    }
+  }
+}
+setInterval(flushStats, STATS_FLUSH_MS).unref();
 
 // ─── HHTTPS identity cookie (additive convenience feature) ────────────────────
 //
@@ -479,30 +518,49 @@ function readIdentityCookie(req) {
 // valid identity cookie (i.e. they logged in on hhttps.org), surface their real
 // identity in the headers; otherwise emit the issuer-level headers. We never
 // invent identity — headers reflect a verified token or nothing.
-app.use((req, res, next) => {
+// AP1-17: the cookie is checked like any other bearer — positive list
+// (sub === 'human-verified' with a jti; text signatures, OAuth access tokens
+// and refresh tokens are NOT identities) plus the revocation list. The
+// revocation lookup is cached per jti so a page with many asset requests costs
+// one query, not one per request.
+const COOKIE_REVOKE_CACHE_MS = 60_000;
+const _cookieRevoked = new Map(); // jti → { revoked, until }
+async function cookieTokenRevoked(jti) {
+  const now = Date.now();
+  const hit = _cookieRevoked.get(jti);
+  if (hit && hit.until > now) return hit.revoked;
+  const revoked = await db.revokedTokens.has(jti);
+  if (_cookieRevoked.size > 5000) _cookieRevoked.clear();
+  _cookieRevoked.set(jti, { revoked, until: now + COOKIE_REVOKE_CACHE_MS });
+  return revoked;
+}
+
+app.use(async (req, res, next) => {
   res.setHeader('HHTTPS-Protocol-Version', '0.5.0');
 
   const cookieToken = readIdentityCookie(req);
   if (cookieToken) {
     try {
       const d = verifyToken(cookieToken);
-      if (d.sub !== 'refresh' && !(d.actorType === 'bot')) {
-        setHHTPPS(res, {
-          status:     'verified',
-          human:      true,
-          actorType:  'human',
-          role:       d.role,
-          roleLevel:  d.roleLevel,
-          trustScore: d.trustScore ?? 0,
-          method:     d.method || 'webauthn-passkey',
-          ageGroup:              d.age_group || null,
-          ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
-          ageVerificationMethod: d.age_verification_method || null
-        });
-        return next();
+      if (d.sub !== 'human-verified' || typeof d.jti !== 'string' || !d.jti) {
+        throw new Error('not an identity token');
       }
+      if (await cookieTokenRevoked(d.jti)) throw new Error('revoked');
+      setHHTPPS(res, {
+        status:     'verified',
+        human:      true,
+        actorType:  'human',
+        role:       d.role,
+        roleLevel:  d.roleLevel,
+        trustScore: d.trustScore ?? 0,
+        method:     d.method || 'webauthn-passkey',
+        ageGroup:              d.age_group || null,
+        ageVerified:           d.age_group ? (d.age_verified ?? false) : null,
+        ageVerificationMethod: d.age_verification_method || null
+      });
+      return next();
     } catch {
-      // Expired/invalid cookie token → fall through to issuer headers and clear it.
+      // Expired/invalid/revoked/foreign cookie token → issuer headers, cookie cleared.
       clearIdentityCookie(res);
     }
   }
@@ -716,7 +774,9 @@ setInterval(async () => {
     const total = (r.deleted_tokens || 0) + (r.deleted_refresh || 0) +
                   (r.deleted_sessions || 0) + (r.deleted_challenges || 0) +
                   (r.deleted_emails || 0) + (r.deleted_claims_cache || 0) +
-                  (r.deleted_auth_codes || 0);
+                  (r.deleted_auth_codes || 0) +
+                  // AP1-34 / AP1-35 (phase-10 cleanup_expired): revoked jtis, delivery log
+                  (r.deleted_revoked || 0) + (r.deleted_webhook_deliveries || 0);
     if (total > 0) console.log(`[CLEANUP] removed ${total} expired records`);
   } catch (err) {
     console.error('[CLEANUP] failed:', err.message);
@@ -771,14 +831,23 @@ app.get('/.well-known/hhttps-role-assurance', (req, res) => {
 
 // ESCO occupation typeahead (server-side proxy → avoids CORS, keeps the browser
 // dependency-free). Returns up to 8 { label, isco08, escoUri, reserved } hits.
-app.get('/hhttps/esco/suggest', async (req, res) => {
-  const q = String(req.query.q || '').trim();
+// AP1-08: own rate limit, a hard timeout on the upstream call and a small TTL
+// cache per lang:q so a typeahead burst does not become an ESCO burst.
+const ESCO_TIMEOUT_MS   = 4000;
+const ESCO_CACHE_TTL_MS = 5 * 60_000;
+const ESCO_CACHE_MAX    = 500;
+const _escoCache = new Map(); // `${lang}:${q}` → { results, until }
+app.get('/hhttps/esco/suggest', limit.esco, async (req, res) => {
+  const q = String(req.query.q || '').trim().slice(0, 80);
   const lang = (String(req.query.lang || 'de') === 'en') ? 'en' : 'de';
   if (q.length < 2) return res.json({ results: [] });
+  const cacheKey = `${lang}:${q.toLowerCase()}`;
+  const cached = _escoCache.get(cacheKey);
+  if (cached && cached.until > Date.now()) return res.json({ results: cached.results, cached: true });
   try {
     const url = `https://ec.europa.eu/esco/api/search?type=occupation&language=${lang}` +
                 `&text=${encodeURIComponent(q)}&full=false&limit=8`;
-    const r = await fetch(url, { headers: { accept: 'application/json' } });
+    const r = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(ESCO_TIMEOUT_MS) });
     if (!r.ok) return res.json({ results: [] });
     const j = await r.json();
     const hits = j?._embedded?.results || [];
@@ -788,6 +857,8 @@ app.get('/hhttps/esco/suggest', async (req, res) => {
       const g = guardReservedRole(label, isco08);
       return { label, isco08, escoUri: h.uri || null, reserved: g.reserved, reservedKey: g.key || null };
     }).filter(x => x.label);
+    if (_escoCache.size >= ESCO_CACHE_MAX) _escoCache.delete(_escoCache.keys().next().value);
+    _escoCache.set(cacheKey, { results, until: Date.now() + ESCO_CACHE_TTL_MS });
     res.json({ results });
   } catch (e) {
     res.json({ results: [], error: 'esco_unreachable' });
@@ -796,13 +867,37 @@ app.get('/hhttps/esco/suggest', async (req, res) => {
 
 // ─── Info ─────────────────────────────────────────────────────────────────────
 
-app.get('/hhttps/info', async (req, res) => {
-  setHHTPPS(res, { status: 'info', actorType: 'api' });
-
+// AP1-32: the six COUNT(*) behind the stats block are cached for 30 s
+// (in-process) and the response carries a matching Cache-Control.
+const INFO_CACHE_MS = 30_000;
+let _infoCounts = null; // { counts, until }
+async function infoCounts() {
+  if (_infoCounts && _infoCounts.until > Date.now()) return _infoCounts.counts;
   const counts = await Promise.all([
     db.credentials.count(), db.tokens.count(), db.refreshTokens.count(),
     db.sessions.count(), db.revokedTokens.count(), db.machineOperators.count()
   ]);
+  _infoCounts = { counts, until: Date.now() + INFO_CACHE_MS };
+  return counts;
+}
+
+app.get('/hhttps/info', limit.info, async (req, res) => {
+  setHHTPPS(res, { status: 'info', actorType: 'api' });
+
+  let counts;
+  try {
+    counts = await infoCounts();
+  } catch (e) {
+    // AP1-02: a DB error must answer, not hang the request.
+    console.error('[INFO] stats unavailable:', e.message);
+    return res.status(500).json({ error: 'server_error', message: 'stats unavailable' });
+  }
+  // sendJson negotiates HTML vs JSON on Accept/User-Agent, so a shared cache
+  // must key on them — otherwise `public` would hand the viewer HTML to an API
+  // client (and vice versa).
+  res.vary('Accept');
+  res.vary('User-Agent');
+  res.setHeader('Cache-Control', `public, max-age=${INFO_CACHE_MS / 1000}`);
 
   sendJson(req, res, {
     protocol: 'HHTTPS — Human-verified HTTPS', version: '0.5.0',
@@ -863,7 +958,8 @@ app.get('/hhttps/info', async (req, res) => {
 // ─── Core Check ──────────────────────────────────────────────────────────────
 
 app.post('/hhttps/check', limit.check, async (req, res) => {
-  await db.stats.increment('check_calls');
+  // AP1-33: counted in-process, flushed periodically — no write before the check.
+  bumpStat('check_calls');
   const token = req.headers['hhttps-token'] ||
                 req.headers['authorization']?.replace('Bearer ', '') ||
                 req.body?.token;
@@ -880,7 +976,7 @@ app.post('/hhttps/check', limit.check, async (req, res) => {
     const d = await checkTokenValid(token);
 
     if (d.sub === 'machine') {
-      await db.stats.increment('machine_checks');
+      bumpStat('machine_checks');
       setHHTPPS(res, { status: 'verified', human: false, actorType: 'bot',
                        method: 'machine-token', machineOperator: d.operatorId,
                        machinePurpose: d.purpose });
@@ -1010,7 +1106,10 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
   }
 
   try {
-    const d = verifyToken(signature);
+    // AP1-03: verify the signature itself with expiry ignored, then report an
+    // expired-but-authentic signature as `expired` (jwt.verify would otherwise
+    // throw TokenExpiredError and the branch below was unreachable).
+    const d = verifyToken(signature, { ignoreExpiration: true });
     if (d.sub !== 'text-signature') {
       return res.status(400).json({ error: 'not a text signature' });
     }
@@ -1036,7 +1135,7 @@ app.post('/hhttps/verify-text', limit.check, async (req, res) => {
         message: 'Signature was revoked.'
       });
     }
-    if (d.exp * 1000 < Date.now()) {
+    if (typeof d.exp !== 'number' || d.exp * 1000 < Date.now()) {
       return res.json({
         hhttps: { status: 'expired', match: true },
         match:  true,
@@ -1112,7 +1211,12 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
       }
     } while (await db.signatures.slugExists(slug) || await db.signatures.isReservedSlug(slug));
 
-    const roleDef = ROLES[d.role] || ROLES.citizen;
+    // AP1-09: since v0.5 an access token carries NO role unless an EUDI (Q)EAA
+    // supplied one, but signatures.role is NOT NULL — every signature by an
+    // ordinary signed-in human failed with a DB error (reported as a bogus 401).
+    // The role snapshot falls back to the same default `roleDef` already used.
+    const roleId  = d.role || 'citizen';
+    const roleDef = ROLES[roleId] || ROLES.citizen;
     const vlevel  = VERIFICATION_LEVELS[d.roleLevel] || {};
 
     const textPreview = text.length <= 120 ? text : text.slice(0, 117) + '…';
@@ -1120,7 +1224,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
     await db.signatures.create({
       id:              slug,
       signerId:        d.uid || d.userId || d.sub,   // pseudonymous user id
-      role:            d.role,
+      role:            roleId,
       roleLabel:       roleDef.label,
       roleIcon:        roleDef.icon,
       trustScore:      d.trustScore,
@@ -1143,7 +1247,7 @@ app.post('/hhttps/signatures', limit.check, async (req, res) => {
       marker:  `#hhttps:s:${slug}`,
       url:     `${BASE_URL}/s/${slug}`,
       role: {
-        id:    d.role,
+        id:    roleId,
         label: roleDef.label,
         icon:  roleDef.icon,
         trustScore: d.trustScore
@@ -1166,7 +1270,14 @@ app.get('/hhttps/s/:slug', async (req, res) => {
   if (!/^hp-[A-Z0-9\-]+$/i.test(slug)) {
     return res.status(400).json({ error: 'invalid slug format' });
   }
-  const sig = await db.signatures.get(slug);
+  let sig;
+  try {
+    sig = await db.signatures.get(slug);
+  } catch (e) {
+    // AP1-02: a DB error answers 500 instead of leaving the request hanging.
+    console.error('[SIGNATURES] lookup failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
   if (!sig) {
     return res.status(404).json({
       hhttps: { status: 'unknown' },
@@ -1179,8 +1290,13 @@ app.get('/hhttps/s/:slug', async (req, res) => {
 
   const reqDomain = req.query.domain ? normalizeApexDomain(req.query.domain) : null;
 
-  // First-seen-lock: only record on first valid verification with a domain
-  if (!sig.first_seen_at && reqDomain) {
+  // First-seen-lock (AP1-26): the endpoint is public and ?domain= is
+  // caller-supplied, so the lock is only recorded when the observed domain IS
+  // the bound domain. Any other caller (wrong domain, unbound e-mail/document
+  // signatures) leaves firstSeen unset rather than letting an anonymous
+  // stranger stamp an arbitrary domain onto someone else's signature.
+  if (!sig.first_seen_at && reqDomain && sig.binding_type === 'web' &&
+      sig.bound_domain && reqDomain === sig.bound_domain) {
     await db.signatures.setFirstSeen(slug, reqDomain).catch(() => {});
   }
 
@@ -1272,8 +1388,15 @@ app.post('/hhttps/signatures/batch', async (req, res) => {
     return res.status(400).json({ error: 'too many slugs (max 100)' });
   }
 
-  const cleanSlugs = slugs.filter(s => /^hp-[A-Z0-9\-]+$/i.test(s));
-  const sigs = await db.signatures.getMany(cleanSlugs);
+  const cleanSlugs = slugs.filter(s => typeof s === 'string' && /^hp-[A-Z0-9\-]+$/i.test(s));
+  let sigs;
+  try {
+    sigs = await db.signatures.getMany(cleanSlugs);
+  } catch (e) {
+    // AP1-02: a DB error answers 500 instead of leaving the request hanging.
+    console.error('[SIGNATURES] batch lookup failed:', e.message);
+    return res.status(500).json({ error: 'server_error' });
+  }
   const reqDomain = domain ? normalizeApexDomain(domain) : null;
 
   const out = {};

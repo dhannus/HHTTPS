@@ -27,7 +27,9 @@ import { fileURLToPath }                                            from 'url';
 import jwt                                                          from 'jsonwebtoken';
 
 const __dirname   = dirname(fileURLToPath(import.meta.url));
-const KEYS_DIR    = join(__dirname, 'keys');
+// HHTTPS_KEYS_DIR lets tests (and unusual deployments) point the key store
+// elsewhere; the default stays ./keys next to this file.
+const KEYS_DIR    = process.env.HHTTPS_KEYS_DIR || join(__dirname, 'keys');
 const RETIRED_DIR = join(KEYS_DIR, 'retired');
 
 const PRIV_FILE = join(KEYS_DIR, 'private.pem');
@@ -161,7 +163,10 @@ export function signToken(payload, options = {}) {
 // ─── Verify a JWT against the active OR any retired public key ────────────────
 // Selects the key by the token header's `kid` when present, so verification keeps
 // working across a rotation. Falls back to the active key when no kid is given.
-export function verifyToken(token) {
+// `options` are passed through to jwt.verify (e.g. `{ ignoreExpiration: true }`
+// when the caller wants to report an expired-but-authentic token itself, AP1-03);
+// the algorithm is always pinned to ES256.
+export function verifyToken(token, options = {}) {
   const decodedHeader = jwt.decode(token, { complete: true })?.header || {};
   const kid = decodedHeader.kid;
 
@@ -169,7 +174,7 @@ export function verifyToken(token) {
   if (kid && kid !== _kid && _retired.has(kid)) {
     key = _retired.get(kid);
   }
-  return jwt.verify(token, key, { algorithms: ['ES256'] });
+  return jwt.verify(token, key, { ...options, algorithms: ['ES256'] });
 }
 
 // ─── JWKS JSON for /.well-known/jwks.json ─────────────────────────────────────

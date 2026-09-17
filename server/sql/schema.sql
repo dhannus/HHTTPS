@@ -189,19 +189,30 @@ INSERT INTO stats (metric, value) VALUES
 ON CONFLICT (metric) DO NOTHING;
 
 -- ─── Cleanup function (called every 5 minutes by application) ───────────────
-CREATE OR REPLACE FUNCTION cleanup_expired() RETURNS TABLE(
+-- Review 2026-09 Welle 2 (AP1-34 / AP1-35): revoked_tokens and
+-- webhook_deliveries get a retention. A revoked jti is meaningless once the
+-- longest token it could belong to (REFRESH_TTL, 7 d) has expired — 8 days
+-- keeps a safety margin; delivery audit rows are kept for 30 days.
+-- The return signature changed (two new columns), hence DROP + CREATE (Postgres
+-- refuses CREATE OR REPLACE with a different RETURNS TABLE). Existing
+-- installations: sql/migration-phase-10-review-welle-2.sql (same body).
+DROP FUNCTION IF EXISTS cleanup_expired();
+CREATE FUNCTION cleanup_expired() RETURNS TABLE(
   deleted_tokens INT, deleted_refresh INT, deleted_sessions INT,
-  deleted_challenges INT, deleted_emails INT
+  deleted_challenges INT, deleted_emails INT,
+  deleted_revoked INT, deleted_webhook_deliveries INT
 ) AS $$
 DECLARE
-  t INT; r INT; s INT; c INT; e INT;
+  t INT; r INT; s INT; c INT; e INT; v INT; w INT;
 BEGIN
   DELETE FROM tokens             WHERE expires_at < NOW();           GET DIAGNOSTICS t = ROW_COUNT;
   DELETE FROM refresh_tokens     WHERE expires_at < NOW();           GET DIAGNOSTICS r = ROW_COUNT;
   DELETE FROM sessions           WHERE expires_at < NOW();           GET DIAGNOSTICS s = ROW_COUNT;
   DELETE FROM challenges         WHERE expires_at < NOW();           GET DIAGNOSTICS c = ROW_COUNT;
   DELETE FROM email_verifications WHERE expires_at < NOW() AND used = FALSE;  GET DIAGNOSTICS e = ROW_COUNT;
-  RETURN QUERY SELECT t, r, s, c, e;
+  DELETE FROM revoked_tokens     WHERE revoked_at < NOW() - INTERVAL '8 days';     GET DIAGNOSTICS v = ROW_COUNT;
+  DELETE FROM webhook_deliveries WHERE delivered_at < NOW() - INTERVAL '30 days';  GET DIAGNOSTICS w = ROW_COUNT;
+  RETURN QUERY SELECT t, r, s, c, e, v, w;
 END;
 $$ LANGUAGE plpgsql;
 
