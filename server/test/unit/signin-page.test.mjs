@@ -167,18 +167,27 @@ test('#23: passkeyRun() sends sessionId with /hhttps/webauthn/register/finish', 
 });
 
 // ── #26: pollEudi/pollAge stop on the backend e-mail gate instead of polling on ──
-test('#26: pollEudi() and pollAge() stop on status:error email_verification_required and show email.first', () => {
+// AP8-07 (#98): the three hand-rolled polling loops were merged into one
+// pollStatus() helper, so the e-mail gate now lives there — once, instead of
+// three copies. The per-method functions only have to route into it with the
+// right hint element.
+test('#26: the poller stops on status:error email_verification_required and shows email.first', () => {
   const js = inlineScript();
+  const poll = js.match(/async function pollStatus\([^)]*\)\{([\s\S]*?)\n\}/);
+  assert.ok(poll, 'pollStatus() is defined');
+  const body = poll[1];
+  assert.match(body, /d\.status==='error'/, "pollStatus checks status:'error'");
+  assert.match(body, /d\.error==='email_verification_required'/, "pollStatus checks error:'email_verification_required'");
+  const gate = body.match(/d\.status==='error'[\s\S]*?email_verification_required[\s\S]*?\{([\s\S]*?)\}/);
+  assert.ok(gate, 'pollStatus has a gate branch');
+  assert.match(gate[1], /hint\.textContent=tr\('email\.first'\)/, "the gate shows tr('email.first')");
+  assert.match(gate[1], /\breturn\b/, 'the gate returns (stops polling)');
+
   for (const [name, hintId] of [['pollEudi', 'eudiHint'], ['pollAge', 'ageHint']]) {
     const fn = js.match(new RegExp(`async function ${name}\\([^)]*\\)\\{([\\s\\S]*?)\\n\\}`));
     assert.ok(fn, `${name}() is defined`);
-    const body = fn[1];
-    assert.match(body, /d\.status==='error'/, `${name} checks status:'error'`);
-    assert.match(body, /d\.error==='email_verification_required'/, `${name} checks error:'email_verification_required'`);
-    assert.ok(body.includes(`getElementById('${hintId}').textContent=tr('email.first')`), `${name} shows tr('email.first') in #${hintId}`);
-    const gate = body.match(/d\.status==='error'[\s\S]*?email_verification_required[\s\S]*?\{([\s\S]*?)\}/);
-    assert.ok(gate, `${name} has a gate branch`);
-    assert.match(gate[1], /\breturn\b/, `${name} returns (stops polling) on the e-mail gate`);
+    assert.ok(fn[1].includes(`pollStatus('${name === 'pollEudi' ? 'eudi' : 'age'}','${hintId}'`),
+      `${name} polls through pollStatus() and reports into #${hintId}`);
   }
 });
 

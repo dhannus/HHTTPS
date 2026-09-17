@@ -18,9 +18,36 @@
  * Events: card-offer { uri, crossDeviceUri, ral, role } · card-error { error }
  */
 
-const RESERVED_STEMS = ['arzt','aerztin','dr. med','dr.med','drmed','physician','doctor','mediziner','chirurg','psychiater','approbation','anwalt','anwaelt','attorney','lawyer','advokat','notar','notary','polizei','polizist','police','kriminalbeamt','staatsanwalt','prosecutor','pfleger','pflegerin','pflegekraft','krankenpfleg','krankenschwester','nurse','altenpfleg','richter','judge'];
+/* AP1-06 / AP8: the same reserved-profession matching the server does in
+   roles.taxonomy.js — kept in sync deliberately, so the warning the user sees
+   here matches the 400 the server would answer with.
+   German compound stems match as SUBSTRINGS ("Fachärztin", "Krankenpfleger");
+   English words only on WORD BOUNDARIES — a plain `includes()` flagged
+   "nursery teacher" as a nurse and "doctoral student" as a doctor. A few
+   compounds that merely contain a stem are blanked out first, and when several
+   stems match the longest one wins. */
+const RESERVED_SUBSTRING_STEMS = ['arzt','aerzt','notarzt','dr. med','dr.med','drmed','mediziner',
+  'chirurg','psychiater','approbation','anwalt','anwaelt','advokat','notar',
+  'polizei','polizist','kriminalbeamt','staatsanwalt','staatsanwaelt',
+  'pfleger','pflegerin','pflegekraft','krankenpfleg','krankenschwester','altenpfleg','richter'];
+const RESERVED_WORD_STEMS = ['physician','doctor','attorney','lawyer','notary','police',
+  'prosecutor','nurse','judge'];
+/* Compounds that CONTAIN a reserved stem but are not reserved professions. */
+const NOT_RESERVED = ['tierpfleg','einrichter'];
 const fold = s => String(s||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/\s+/g,' ').trim();
-const reservedHit = s => { const n=fold(s); return RESERVED_STEMS.find(st=>n.includes(st))||null; };
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const reservedHit = s => {
+  let n = fold(s);
+  if (!n) return null;
+  for (const ex of NOT_RESERVED) n = n.replace(new RegExp(`(^|[^a-z])${ex}[a-z]*`,'g'), '$1');
+  let best = null;
+  const consider = st => { if (!best || st.length > best.length) best = st; };
+  for (const st of RESERVED_SUBSTRING_STEMS) if (n.includes(st)) consider(st);
+  for (const st of RESERVED_WORD_STEMS) {
+    if (new RegExp(`(^|[^a-z])${escapeRe(st)}([^a-z]|$)`).test(n)) consider(st);
+  }
+  return best;
+};
 
 const T = {
   de: {

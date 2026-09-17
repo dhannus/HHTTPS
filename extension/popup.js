@@ -204,11 +204,20 @@ async function renderPageState() {
   } catch (e) {}
 
   if (state && state.status && state.status !== 'none' && state.status !== 'unknown') {
-    pageRow.querySelector('.page-icon').textContent =
-      state.human ? '✓' : (state.status === 'unverified' ? '!' : '?');
-    pageLabel.textContent = state.status === 'verified'
-      ? chrome.i18n.getMessage('pageHhttpsActive', [state.role || chrome.i18n.getMessage('verifiedFallback')])
-      : chrome.i18n.getMessage('pageSupportedNotVerified');
+    // AP8-19 (#167): a state the page merely ASSERTS (via <meta name="hhttps-*">)
+    // is nothing the extension can check — not a signature, not a server
+    // answer. It is shown neutrally ("the page claims support") instead of a
+    // check mark, which would read as a verification the extension performed.
+    if (state.claimed) {
+      pageRow.querySelector('.page-icon').textContent = '?';
+      pageLabel.textContent = chrome.i18n.getMessage('pageClaimsSupport');
+    } else {
+      pageRow.querySelector('.page-icon').textContent =
+        state.human ? '✓' : (state.status === 'unverified' ? '!' : '?');
+      pageLabel.textContent = state.status === 'verified'
+        ? chrome.i18n.getMessage('pageHhttpsActive', [state.role || chrome.i18n.getMessage('verifiedFallback')])
+        : chrome.i18n.getMessage('pageSupportedNotVerified');
+    }
   } else {
     pageRow.querySelector('.page-icon').textContent = '○';
     pageLabel.textContent = chrome.i18n.getMessage('pageNotSupported');
