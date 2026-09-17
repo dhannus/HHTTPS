@@ -17,7 +17,7 @@ Stand: `main` @ `bf0a82b`.
 **Empfehlung:** `DELETE FROM pp_email_pending WHERE expires_at < NOW()` in den periodischen Cleanup aufnehmen (nutzt den bereits vorhandenen Index).
 
 ### [S3] [Performance] server/privacy-pass/verifications-api.js:L262-335 — /email/start hat keinen eigenen Rate-Limiter: pro Aufruf DB-Insert + SMTP-Versand, nur durch das globale 300/min/IP-Limit begrenzt
-**Begründung:** Der Handler prüft nur Session-Existenz (L276), erzeugt dann eine `pp_email_pending`-Zeile (L298) und ruft `sendPrivacyPassVerification` (L312) auf. server/server.js definiert `limit.email = rl(30, 60min)` (L427) für die eigenen `/hhttps/email/*`-Routen; der Privacy-Pass-Router (server.js L523) ist davon nicht erfasst, es greift nur `limit.global` (300/min). Ein einziger gültiger `sessionId` genügt, um bis zu 300 Mails/min an beliebige Adressen zu senden (die Domain-Prüfung L286 greift nur bei Rollen mit Pattern; `citizen` hat keines).
+**Begründung:** Der Handler prüft nur Session-Existenz (L276), erzeugt dann eine `pp_email_pending`-Zeile (L298) und ruft `sendPrivacyPassVerification` (L312) auf. server/server.js definiert `limit.email = rl(30, 60min)` (L428) für die eigenen `/hhttps/email/*`-Routen; der Privacy-Pass-Router (server.js L523) ist davon nicht erfasst, es greift nur `limit.global` (300/min). Ein einziger gültiger `sessionId` genügt, um bis zu 300 Mails/min an beliebige Adressen zu senden (die Domain-Prüfung L286 greift nur bei Rollen mit Pattern; `citizen` hat keines).
 **Auswirkung:** SMTP-Transport (nodemailer, synchron `await` im Request-Pfad) und Tabelle wachsen im Takt des globalen Limits; bei ~5 gleichzeitigen IPs mehrere Sekunden Mail-Versand pro Sekunde Event-Loop-Belegung und Reputationsschaden beim Mail-Provider. Überschneidung mit Sicherheit (Mail-Bombing), hier als Last-/Wachstumsproblem gemeldet.
 **Empfehlung:** `limit.email` (oder einen eigenen `rl(5, 15min)`) auf `/privacy-pass/email/start` mounten und zusätzlich pro `credential_id` eine Obergrenze offener `pp_email_pending`-Zeilen prüfen (z. B. max. 3 im 15-min-Fenster) bevor gesendet wird.
 
@@ -47,7 +47,7 @@ Stand: `main` @ `bf0a82b`.
 **Empfehlung:** Laufendes Fetch-Promise in `this._jwksPromise` halten und wiederverwenden, bis es erfüllt ist; `_keyCache` nur leeren, wenn sich das Key-Set tatsächlich geändert hat.
 
 ### [S4] [Performance] server/privacy-pass/issuer.js:L171-194 — Öffentliche VOPRF-Endpunkte (P-384 Scalar-Mult + DLEQ-Proof) nur durch das globale IP-Limit geschützt
-**Begründung:** `/token-request` (blindEvaluate inkl. DLEQ-Proof, L185), `/verify` und `/redeem` (evaluate mit Hash-to-Curve, verifier-internal.js L584) sind unauthentifiziert und CPU-gebunden in reinem JS (`@cloudflare/voprf-ts`, Event-Loop-blockierend, mehrere ms pro Aufruf). Es gilt nur `limit.global` (300/min/IP, server.js L420).
+**Begründung:** `/token-request` (blindEvaluate inkl. DLEQ-Proof, L185), `/verify` und `/redeem` (evaluate mit Hash-to-Curve, verifier-internal.js L584) sind unauthentifiziert und CPU-gebunden in reinem JS (`@cloudflare/voprf-ts`, Event-Loop-blockierend, mehrere ms pro Aufruf). Es gilt nur `limit.global` (300/min/IP, server.js L420/L436).
 **Auswirkung:** Pro IP ~1–2 s CPU/min erreichbar; erst bei verteilten Quellen spürbar. Kein akuter Engpass, aber der Issuer teilt sich den einen Event-Loop mit OAuth/WebAuthn.
 **Empfehlung:** Eigene, engere Limiter für `/token-request`, `/verify`, `/redeem` (z. B. 60/min) und den Verifier-Pfad perspektivisch in einen Worker-Thread auslagern.
 
