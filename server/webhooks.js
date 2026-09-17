@@ -4,7 +4,8 @@
  * Now backed by PostgreSQL via db.js — webhooks survive server restarts,
  * delivery audit log persists, retry state is durable.
  *
- * Events: token.issued, token.revoked, role.declared
+ * Events: see WEBHOOK_EVENTS (the single source of truth for what can be
+ * subscribed AND what fireEvent may emit).
  * Delivery: HTTP POST with HMAC-SHA256 signature.
  */
 
@@ -13,7 +14,18 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { webhooks as dbWebhooks } from './db.js';
 
-const VALID_EVENTS = ['token.issued', 'token.revoked', 'role.declared', '*'];
+// AP1-04: the event catalogue. Everything server.js fires is listed here,
+// registration validates against it, '*' expands to it, and fireEvent refuses
+// anything not in it — so the catalogue and the emitted events cannot drift.
+export const WEBHOOK_EVENTS = Object.freeze([
+  'identity.verified',   // e-mail-first flow completed, identity established
+  'token.issued',        // HHTTPS access token issued
+  'token.revoked',       // HHTTPS access token revoked
+  'age.verified',        // age group confirmed (EUDI Wallet)
+  'eudi.verified',       // eID identity confirmed (EUDI Wallet)
+  'card.issued',         // iamhmn-card (role EAA) issued
+]);
+const VALID_EVENTS = [...WEBHOOK_EVENTS, '*'];
 
 // ─── SSRF guard (AP1-21, Review 2026-09) ──────────────────────────────────────
 // Webhook targets are attacker-supplied URLs that the server POSTs to. Only
@@ -73,8 +85,8 @@ export async function registerWebhook({ url, events, secret, ownerUserId }) {
   if (invalid) throw new Error(`Unbekanntes Event: ${invalid}`);
 
   const expanded = events.includes('*')
-    ? ['token.issued', 'token.revoked', 'role.declared']
-    : events;
+    ? [...WEBHOOK_EVENTS]
+    : [...new Set(events)];
 
   const id        = crypto.randomBytes(12).toString('hex');
   const secretVal = secret || crypto.randomBytes(32).toString('hex');
@@ -97,6 +109,12 @@ export async function listWebhooks(ownerUserId) {
 
 // ─── Fire event ───────────────────────────────────────────────────────────────
 export async function fireEvent(eventType, payload) {
+  if (!WEBHOOK_EVENTS.includes(eventType)) {
+    // A programming error, not a runtime condition: surface it loudly in the
+    // log, never deliver an event nobody could have subscribed to.
+    console.error(`[WEBHOOK] fireEvent: unknown event "${eventType}" (not in WEBHOOK_EVENTS)`);
+    return;
+  }
   const matching = await dbWebhooks.findForEvent(eventType);
   if (!matching.length) return;
 
