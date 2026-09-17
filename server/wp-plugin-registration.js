@@ -88,6 +88,47 @@ const registrationLimiter = rateLimit({
     message: 'Too many registrations from this address. Try again later.' })
 });
 
+// AP5-31: the DNS check is unauthenticated (client_id only) and used to run
+// an unbounded lookup per call — now 10 calls / min per IP, a resolver
+// timeout, a hard deadline and a minimum interval per client.
+const DNS_TIMEOUT_MS      = 3000;
+const DNS_MIN_INTERVAL_MS = 15_000;
+const dnsCheckLimiter = rateLimit({
+  windowMs: 60_000, limit: 10, standardHeaders: true, legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({ error: 'rate_limited',
+    message: 'Too many DNS checks from this address. Try again later.' })
+});
+function dnsCheckTooSoon(client) {
+  const last = client.dns_last_checked_at ? new Date(client.dns_last_checked_at).getTime() : 0;
+  return last && (Date.now() - last) < DNS_MIN_INTERVAL_MS;
+}
+function resolveTxtWithDeadline(host) {
+  const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: 1 });
+  return Promise.race([
+    resolver.resolveTxt(host),
+    new Promise((_, reject) => setTimeout(() => {
+      const e = new Error('DNS lookup timed out'); e.code = 'ETIMEOUT'; reject(e);
+    }, DNS_TIMEOUT_MS * 2 + 500).unref())
+  ]);
+}
+
+// AP5-29: an unauthenticated registration writes a row and sends a mail per
+// call. Besides the IP limiter, at most this many UNCONFIRMED (email_pending,
+// token not yet expired) plugin drafts may exist per site apex.
+const MAX_OPEN_DRAFTS_PER_APEX = 3;
+async function countOpenDraftsForApex(db, apex) {
+  const { rows } = await db.q(
+    `SELECT homepage_url FROM oauth_clients
+      WHERE owner_user_id = 'wp-plugin'
+        AND verification_status = 'email_pending'
+        AND email_token_expires_at > NOW()`
+  );
+  return rows.filter(r => apexDomainFromUrl(r.homepage_url) === apex).length;
+}
+
+// AP5-09: forward async rejections to the app's central error handler.
+const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+
 /**
  * Mount the plugin-registration endpoints.
  *
@@ -100,7 +141,7 @@ export function mountWpPluginRegistration(app, deps) {
   const { db, sendPlatformRegistrationEmail, BASE_URL } = deps;
 
   // ── POST /hhttps/plugin/register ───────────────────────────────────────
-  app.post('/hhttps/plugin/register', registrationLimiter, async (req, res) => {
+  app.post('/hhttps/plugin/register', registrationLimiter, wrap(async (req, res) => {
 
     const { site_name, homepage_url, redirect_uri, contact_email } = req.body || {};
 
@@ -128,6 +169,12 @@ export function mountWpPluginRegistration(app, deps) {
     if (!isValidEmail(normalizeEmail(contact_email))) {
       return res.status(400).json({ error: 'invalid_email',
         message: 'Valid contact_email required' });
+    }
+
+    if (await countOpenDraftsForApex(db, apex) >= MAX_OPEN_DRAFTS_PER_APEX) {
+      return res.status(429).json({ error: 'too_many_pending',
+        message: `There are already ${MAX_OPEN_DRAFTS_PER_APEX} unconfirmed registrations for ${apex}. ` +
+                 'Confirm one of them via the e-mail link (or wait until they expire).' });
     }
 
     const domainMatch  = emailMatchesPlatform(contact_email, homepage_url);
@@ -185,10 +232,10 @@ export function mountWpPluginRegistration(app, deps) {
                  'Auto-approval requires an e-mail address at the site domain.'
       }]
     });
-  });
+  }));
 
   // ── GET /hhttps/plugin/status/:clientId ────────────────────────────────
-  app.get('/hhttps/plugin/status/:clientId', async (req, res) => {
+  app.get('/hhttps/plugin/status/:clientId', wrap(async (req, res) => {
     const client = await db.oauthClients.get(req.params.clientId);
     if (!client || client.owner_user_id !== 'wp-plugin') {
       return res.status(404).json({ error: 'not_found' });
@@ -205,10 +252,10 @@ export function mountWpPluginRegistration(app, deps) {
       // that it is no longer needed by the wizard.
       dns_token: client.verification_status === 'verified' ? null : client.dns_token
     });
-  });
+  }));
 
   // ── POST /hhttps/plugin/dns-check/:clientId ────────────────────────────
-  app.post('/hhttps/plugin/dns-check/:clientId', async (req, res) => {
+  app.post('/hhttps/plugin/dns-check/:clientId', dnsCheckLimiter, wrap(async (req, res) => {
     const client = await db.oauthClients.get(req.params.clientId);
     if (!client || client.owner_user_id !== 'wp-plugin') {
       return res.status(404).json({ error: 'not_found' });
@@ -216,15 +263,19 @@ export function mountWpPluginRegistration(app, deps) {
     if (!client.dns_token) {
       return res.status(400).json({ error: 'no_dns_token' });
     }
+    if (dnsCheckTooSoon(client)) {
+      return res.status(429).json({ error: 'dns_check_too_soon',
+        message: `Wait ${Math.ceil(DNS_MIN_INTERVAL_MS / 1000)} s between DNS checks.`,
+        retry_after: Math.ceil(DNS_MIN_INTERVAL_MS / 1000) });
+    }
     const apex = apexDomainFromUrl(client.homepage_url);
     if (!apex) {
       return res.status(400).json({ error: 'no_apex' });
     }
 
-    const resolver = new Resolver();
     let records = [];
     try {
-      records = await resolver.resolveTxt(`_hhttps-verify.${apex}`);
+      records = await resolveTxtWithDeadline(`_hhttps-verify.${apex}`);
     } catch (err) {
       await db.oauthClients.touchDnsCheck(client.client_id);
       return res.json({
@@ -274,5 +325,5 @@ export function mountWpPluginRegistration(app, deps) {
       auto_verified: autoVerified,
       verification_status: autoVerified ? 'verified' : fresh.verification_status
     });
-  });
+  }));
 }
