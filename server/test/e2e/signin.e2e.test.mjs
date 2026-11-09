@@ -56,11 +56,14 @@ async function openPage(path = '/') {
 
 const isDisabled = (page, id) => page.locator('#' + id).isDisabled();
 
-/** Email flow in the browser; returns the devCode-confirmed pseudonym text. */
-async function confirmEmailInBrowser(page, email, pseudonym) {
+/**
+ * Email flow in the browser; returns the devCode-confirmed pseudonym text.
+ * AK-36: there is no name field — a name reaches /email/send only as the
+ * platform hint (?pseudonym= on the page URL, see openPage()).
+ */
+async function confirmEmailInBrowser(page, email) {
   await page.click('#m-email');
   await page.fill('#emailInput', email);
-  if (pseudonym) await page.fill('#pseudoInput', pseudonym);
   const [sendRes] = await Promise.all([
     page.waitForResponse((r) => r.url().includes('/hhttps/email/send')),
     page.click('#emailSend'),
@@ -117,12 +120,14 @@ test('AK-14: on load passkey/eudi/github/age are disabled, email/machine enabled
   } finally { await context.close(); }
 });
 
-test('AK-15/AK-14: email panel → code with a space → confirm unlocks the methods and shows the pseudonym', { skip }, async () => {
-  const { context, page } = await openPage();
+test('AK-36/AK-14: ?pseudonym= hint → email panel (no name field) → code with a space → confirm unlocks the methods and shows the pseudonym', { skip }, async () => {
+  const { context, page } = await openPage('/?pseudonym=Anna');
   try {
-    const { sendRes, sent, confirmRes, confirmed } = await confirmEmailInBrowser(page, freshEmail('e2e-ak15'), 'Anna');
+    assert.equal(await page.locator('#pseudoInput').count(), 0, 'AK-36: no name field on the sign-in page');
+    assert.equal(new URL(page.url()).searchParams.has('pseudonym'), false, 'AK-36: hint stripped from the URL');
+    const { sendRes, sent, confirmRes, confirmed } = await confirmEmailInBrowser(page, freshEmail('e2e-ak15'));
     assert.equal(sendRes.status(), 200);
-    assert.equal(sendRes.request().postDataJSON().pseudonym, 'Anna', '/email/send body carries pseudonym');
+    assert.equal(sendRes.request().postDataJSON().pseudonym, 'Anna', '/email/send body carries the platform hint');
     assert.match(String(sent.devCode), /^\d{6}$/, 'dev mode delivers a 6-digit code');
     assert.equal(confirmRes.status(), 200, JSON.stringify(confirmed));
     assert.equal(confirmed.pseudonym, 'Anna');
@@ -175,7 +180,7 @@ test('AK-31/AK-32: ?login_hint=…&pseudonym=…&returnTo=… pre-fills the emai
     const sent = await sendRes.json();
     assert.equal(await page.locator('#panel-email').isVisible(), true, 'email panel open');
     assert.equal(await page.inputValue('#emailInput'), email, '#emailInput pre-filled');
-    assert.equal(await page.inputValue('#pseudoInput'), 'Anna', '#pseudoInput pre-filled');
+    assert.equal(await page.locator('#pseudoInput').count(), 0, 'AK-36: no name field to pre-fill');
     assert.equal(sends.length, 1, 'exactly one /email/send');
     assert.equal(sends[0].email, email);
     assert.equal(sends[0].pseudonym, 'Anna', '/email/send body carries pseudonym');

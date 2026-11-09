@@ -1529,7 +1529,7 @@ app.get('/hhttps/oauth/authorize', popupCoop, async (req, res) => {
 // short-lived authorization code.
 app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
   const { token, client_id, redirect_uri, scope, state, nonce,
-          code_challenge, code_challenge_method, pseudonym } = req.body || {};
+          code_challenge, code_challenge_method, pseudonym, set_pseudonym } = req.body || {};
 
   if (!token) return res.status(401).json({ error: 'token required' });
 
@@ -1592,9 +1592,28 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
       catch (e) { console.error('[OAUTH] claims cache read failed:', e.message); }
     }
     const cleanPseudo = sanitizePseudonym(pseudonym);
-    const accountPseudonym = d.pseudonym || cache?.pseudonym || null;
-    // D3: the code row covers every case (token > cache > consent input);
-    // the former `pseudo:<code>` challenge detour is gone (W-7).
+    // AK-34: the identity anchor is the single source of truth for the
+    // account pseudonym — a name changed on an earlier consent wins over the
+    // (possibly older) value inside the signed token or the cache.
+    let anchor = null;
+    if (!isMachine) {
+      try { anchor = await db.identityAnchors.getByUserId(userId); }
+      catch (e) { console.error('[OAUTH] anchor read failed:', e.message); }
+    }
+    let accountPseudonym = anchor?.pseudonym || d.pseudonym || cache?.pseudonym || null;
+    // AK-34: only an EXPLICIT set_pseudonym (the user opened the name field on
+    // the consent page) changes the account name; a bare `pseudonym` keeps
+    // the old rule (account name wins, input is only a fallback).
+    if (set_pseudonym === true && cleanPseudo && anchor && cleanPseudo !== anchor.pseudonym) {
+      const stored = await db.identityAnchors.setPseudonym(userId, cleanPseudo);
+      if (stored) {
+        accountPseudonym = stored;
+        try { await db.identityClaimsCache.setPseudonym(userId, stored); }
+        catch (e) { console.error('[OAUTH] claims cache pseudonym update failed:', e.message); }
+      }
+    }
+    // D3: the code row covers every case (anchor > token > cache > consent
+    // input); the former `pseudo:<code>` challenge detour is gone (W-7).
     const codePseudonym = accountPseudonym || cleanPseudo || null;
     const codeEmail = (scopes.includes('email') && cache?.email) ? cache.email : null;
 
@@ -1630,7 +1649,9 @@ app.post('/hhttps/oauth/approve', popupCoop, async (req, res) => {
     url.searchParams.set('code', code);
     if (state) url.searchParams.set('state', state);
 
-    return res.json({ redirect: url.toString() });
+    // AK-35: the consent page keeps the shown name in sync with the account
+    // (the signed token may still carry an older one until it is renewed).
+    return res.json({ redirect: url.toString(), ...(codePseudonym && !isMachine ? { pseudonym: codePseudonym } : {}) });
   } catch (e) {
     console.error('[OAUTH] approve failed:', e.message);
     return res.status(500).json({ error: 'server_error' });
@@ -2092,6 +2113,18 @@ function renderConsentPage({ client, scopes, params }) {
   .scope-title{font-weight:600;margin-bottom:2px}
   .scope-desc{font-size:13px;color:var(--ink-2);line-height:1.45}
 
+  .pseudo-field{padding:4px 28px 18px}
+  .pseudo-field[hidden],.pseudo-field [hidden]{display:none}
+  .pseudo-show{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;font-size:14px;color:var(--ink-2);
+    background:var(--bg);border:1px solid var(--line-subtle);border-radius:14px;padding:12px 14px}
+  .pseudo-show strong{color:var(--ink);font-weight:700;word-break:break-all}
+  .pseudo-edit{margin-left:auto;border:none;background:none;padding:0;font:600 13px/1 var(--font-ui);
+    color:var(--ink);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+  .pseudo-label{display:block;font-size:13px;color:var(--ink-2);margin-bottom:6px}
+  #pseudoInput{width:100%;padding:10px 12px;border:1px solid var(--line-subtle);border-radius:10px;
+    font:15px var(--font-ui);background:#fff;color:var(--ink)}
+  #pseudoInput:focus{outline:2px solid var(--ink);outline-offset:1px}
+  .pseudo-hint{font-size:12px;color:var(--ink-2);margin-top:5px}
   .status{padding:14px 28px;font-size:13px;text-align:center;display:none}
   .status.error{background:var(--warn-bg);color:var(--warn);display:block;font-weight:500}
 
@@ -2132,11 +2165,22 @@ function renderConsentPage({ client, scopes, params }) {
       <div class="scope-list-head" data-i18n="consent.scopeHead">Folgende Daten werden geteilt</div>
       ${scopeRows}
     </div>
-    <div class="pseudo-field" style="margin:14px 0 4px;">
-      <label for="pseudoInput" style="display:block;font-size:13px;opacity:.75;margin-bottom:6px;" data-i18n="consent.pseudoLabel">Anzeigename (frei wählbar, optional)</label>
-      <input id="pseudoInput" type="text" maxlength="32" autocomplete="nickname"
-             style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid rgba(0,0,0,.15);border-radius:10px;font-size:15px;background:#fff;" />
-      <div style="font-size:12px;opacity:.6;margin-top:5px;" data-i18n="consent.pseudoHint">Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.</div>
+    <!-- AK-33: the display name is asked ONCE per account. Signed in with a
+         chosen name → shown read-only with "ändern"; signed in with a
+         generated name → the field opens (pre-filled with the platform's
+         hint); not signed in yet → hidden (the sign-in page creates the
+         account and takes the platform's hint). Driven by the script below. -->
+    <div class="pseudo-field" id="pseudoBox" hidden>
+      <div class="pseudo-show" id="pseudoShow" hidden>
+        <span data-i18n="consent.pseudoAs">Du erscheinst als</span>
+        <strong id="pseudoName"></strong>
+        <button type="button" class="pseudo-edit" id="pseudoEdit" data-i18n="consent.pseudoChange">ändern</button>
+      </div>
+      <div id="pseudoEditBox" hidden>
+        <label for="pseudoInput" class="pseudo-label" data-i18n="consent.pseudoLabel">Anzeigename (frei wählbar, optional)</label>
+        <input id="pseudoInput" type="text" maxlength="32" autocomplete="nickname" />
+        <div class="pseudo-hint" data-i18n="consent.pseudoHint">Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.</div>
+      </div>
     </div>
     <div class="status" id="status"></div>
     <div class="actions">
@@ -2183,12 +2227,58 @@ function relogin(){
   if (pseudonym) url += '&pseudonym=' + encodeURIComponent(pseudonym);
   window.location = url;
 }
-// AK-30: pre-fill the display name from the platform's pseudonym hint — via
-// the DOM (never interpolated into the HTML).
+// AK-33: account pseudonyms the server generated itself (AK-7 shape).
+const GENERATED_PSEUDONYM = /^iamhmn_[a-z0-9]{10}$/;
+function readIdentity(){
+  try { const raw = localStorage.getItem('hhttps_identity'); return raw ? JSON.parse(raw) : null; }
+  catch(e){ return null; }
+}
+// AK-33: true once the user opened the name field — only then does approve
+// send set_pseudonym and change the account name (AK-34).
+let pseudoWanted = false;
+function openPseudoEdit(prefill){
+  const box = document.getElementById('pseudoEditBox');
+  const pi  = document.getElementById('pseudoInput');
+  document.getElementById('pseudoShow').hidden = true;
+  box.hidden = false;
+  // AK-30: pre-fill via the DOM (never interpolated into the HTML).
+  if (pi && !pi.value) pi.value = prefill || '';
+  pseudoWanted = true;
+}
+// AK-33: ask for the display name once per account, never on every consent.
 (function(){
-  const pi = document.getElementById('pseudoInput');
-  if (pi && !pi.value) pi.value = params.get('pseudonym') || '';
+  const ident = readIdentity();
+  if (!ident || !ident.token) return; // not signed in yet: the sign-in page creates the account
+  const box   = document.getElementById('pseudoBox');
+  const known = (ident.pseudonym || (jwtPayload(ident.token) || {}).pseudonym || '').toString();
+  const hint = params.get('pseudonym') || '';
+  box.hidden = false;
+  if (known && !GENERATED_PSEUDONYM.test(known)) {
+    document.getElementById('pseudoName').textContent = known;
+    document.getElementById('pseudoShow').hidden = false;
+    document.getElementById('pseudoEdit').addEventListener('click', () => {
+      openPseudoEdit(known);
+      document.getElementById('pseudoInput').focus();
+    });
+  } else {
+    openPseudoEdit(hint);
+  }
 })();
+// AK-34: what approve sends for the name — nothing unless the field is open.
+function pseudoPayload(){
+  if (!pseudoWanted) return { pseudonym: null };
+  const v = ((document.getElementById('pseudoInput') || {}).value || '').trim();
+  return v ? { pseudonym: v, set_pseudonym: true } : { pseudonym: null };
+}
+// AK-35: remember the account name the server confirmed, so the next consent
+// shows it even while the signed token still carries an older one.
+function rememberPseudonym(p){
+  if (!p) return;
+  const ident = readIdentity();
+  if (!ident) return;
+  ident.pseudonym = p;
+  try { localStorage.setItem('hhttps_identity', JSON.stringify(ident)); } catch(e){}
+}
 // Try to mint a fresh access token from the stored refresh token. Returns the
 // new access token, or null if refresh is impossible (then we re-login).
 async function tryRefresh(identity){
@@ -2257,7 +2347,7 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
         nonce:                 params.get('nonce'),
         code_challenge:        params.get('code_challenge'),
         code_challenge_method: params.get('code_challenge_method'),
-        pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
+        ...pseudoPayload()
       })
     });
     const d = await r.json();
@@ -2279,17 +2369,18 @@ document.getElementById('allowBtn').addEventListener('click', async () => {
               nonce:                 params.get('nonce'),
               code_challenge:        params.get('code_challenge'),
               code_challenge_method: params.get('code_challenge_method'),
-              pseudonym:             (document.getElementById('pseudoInput') || {}).value || null
+              ...pseudoPayload()
             })
           });
           const d2 = await r2.json();
-          if (r2.ok) { window.location = d2.redirect; return; }
+          if (r2.ok) { rememberPseudonym(d2.pseudonym); window.location = d2.redirect; return; }
         }
         relogin();
         return;
       }
       throw new Error(d.error || 'OAuth error');
     }
+    rememberPseudonym(d.pseudonym);
     window.location = d.redirect;
   } catch (e) {
     status.className = 'status error';
@@ -2308,7 +2399,7 @@ const CONSENT_I18N = {
     "consent.warnB2":"wirklich vertraust. Prüfe besonders, ob die URL in der Adressleiste mit",
     "consent.warnB3":"übereinstimmt.","consent.heading":"möchte deine Identität sehen",
     "consent.scopeHead":"Folgende Daten werden geteilt","consent.deny":"Ablehnen","consent.allow":"Erlauben",
-    "consent.pseudoLabel":"Anzeigename (frei wählbar, optional)","consent.pseudoHint":"Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.",
+    "consent.pseudoAs":"Du erscheinst als","consent.pseudoChange":"ändern","consent.pseudoLabel":"Anzeigename (frei wählbar, optional)","consent.pseudoHint":"Muss nicht dein echter Name sein. Du entscheidest, was du preisgibst.",
     "consent.footPre":"Keine persönlichen Daten. Du kannst die Verbindung jederzeit auf",
     "consent.footPost":"widerrufen.","consent.processing":"Wird verarbeitet…",
     "consent.noIdentity":"Keine HHTTPS-Identität gefunden. Bitte zuerst auf hhttps.org einloggen.",
@@ -2326,7 +2417,7 @@ const CONSENT_I18N = {
     "consent.warnB2":". Check in particular that the URL in the address bar matches",
     "consent.warnB3":".","consent.heading":"wants to see your identity",
     "consent.scopeHead":"The following data will be shared","consent.deny":"Deny","consent.allow":"Allow",
-    "consent.pseudoLabel":"Display name (your choice, optional)","consent.pseudoHint":"It does not have to be your real name. You decide what to reveal.",
+    "consent.pseudoAs":"You appear as","consent.pseudoChange":"change","consent.pseudoLabel":"Display name (your choice, optional)","consent.pseudoHint":"It does not have to be your real name. You decide what to reveal.",
     "consent.footPre":"No personal data is shared. You can revoke the connection any time at",
     "consent.footPost":".","consent.processing":"Processing…",
     "consent.noIdentity":"No HHTTPS identity found. Please log in at hhttps.org first.",

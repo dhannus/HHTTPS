@@ -50,6 +50,15 @@ export function generatePseudonym() {
   return `iamhmn_${s}`;
 }
 
+/**
+ * AK-33: true for a pseudonym the server generated itself (AK-7 shape
+ * 'iamhmn_' + 10 × [a-z0-9]). Such an account has not chosen a display name
+ * yet, so the consent page asks once instead of showing it read-only.
+ */
+export function isGeneratedPseudonym(p) {
+  return typeof p === 'string' && /^iamhmn_[a-z0-9]{10}$/.test(p);
+}
+
 /** AK-6/AK-7: sanitized user pseudonym, or a generated one if empty. */
 export function resolvePseudonym(input) {
   return sanitizePseudonym(input) ?? generatePseudonym();

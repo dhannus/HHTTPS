@@ -4,7 +4,7 @@
 // compiling it with `new Function` (never executed).
 //
 // #25: the BEHAVIOUR (AK-14 disabled buttons + unlock after confirm, AK-15
-// pseudonym in /email/send and next to the check mark, K-9 magic-link return,
+// server-assigned pseudonym next to the check mark (AK-36: no name field), K-9 magic-link return,
 // K-7 "482 913" code input, passkey/K-4) is covered in the browser by
 // test/e2e/signin.e2e.test.mjs (Playwright, `npm run test:e2e`); only the
 // checks without a DOM equivalent stay here (syntax, i18n, pick() guard, …).
@@ -49,24 +49,35 @@ test('AK-14: pick() bails out on a disabled method button and shows the email-fi
   assert.match(pick[1], /tr\(\s*'email\.first'\s*\)/, "pick() uses the 'email.first' text");
 });
 
-// ── AK-15: optional pseudonym input in the email panel, sent with /email/send ──
-test('AK-15: pseudonym input lives in the email panel', () => {
+// ── AK-36 (replaces the AK-15 name field): the sign-in page asks for no name ──
+test('AK-36: the email panel has no pseudonym field any more', () => {
   const panel = emailPanel();
-  const m = panel.match(/<input\b[^>]*\bid="pseudoInput"[^>]*>/);
-  assert.ok(m, '#pseudoInput exists inside #panel-email');
-  const tag = m[0];
-  assert.match(tag, /\btype="text"/, 'pseudoInput is a text input');
-  assert.match(tag, /\bmaxlength="32"/, 'pseudoInput is limited to 32 chars');
-  assert.match(tag, /\bautocomplete="nickname"/, 'pseudoInput uses autocomplete=nickname');
-  assert.match(tag, /\bdata-i18n-ph="email\.pseudo\.ph"/, 'pseudoInput placeholder is i18n-driven');
-  assert.ok(panel.indexOf('id="emailInput"') < panel.indexOf('id="pseudoInput"'), 'pseudonym field comes after the email field');
+  assert.doesNotMatch(panel, /id="pseudoInput"/, 'no #pseudoInput inside #panel-email');
+  assert.doesNotMatch(html, /id="pseudoInput"/, 'no #pseudoInput anywhere on the sign-in page');
 });
 
-test('AK-15: applyLang() sets the pseudonym placeholder', () => {
+test('AK-36: captureHintPseudonym() keeps ?pseudonym= in memory, strips it from the URL and runs before handleLoginHint()', () => {
   const js = inlineScript();
-  const fn = js.match(/function applyLang\(\)\{([\s\S]*?)\n\}/);
-  assert.ok(fn, 'applyLang() is defined');
-  assert.match(fn[1], /email\.pseudo\.ph/, 'applyLang sets the pseudoInput placeholder');
+  const fn = js.match(/function captureHintPseudonym\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'captureHintPseudonym() is defined');
+  const body = fn[1];
+  assert.match(body, /params\.get\('pseudonym'\)/, 'reads pseudonym');
+  assert.match(body, /HINT_PSEUDONYM=/, 'stores it in HINT_PSEUDONYM');
+  assert.match(body, /slice\(0,32\)/, 'bounded to 32 chars (server sanitizes again)');
+  assert.match(body, /params\.delete\('pseudonym'\)/, 'removes it from the params');
+  assert.match(body, /history\.replaceState\(/, 'cleans the URL');
+  const calls = js.match(/^captureHintPseudonym\(\);/gm) || [];
+  assert.equal(calls.length, 1, 'invoked exactly once at startup');
+  assert.ok(js.indexOf('\ncaptureHintPseudonym();') < js.indexOf('\nhandleLoginHint();'), 'runs before handleLoginHint()');
+});
+
+test('AK-36: emailStart() sends the platform hint (not a form field) with /email/send', () => {
+  const js = inlineScript();
+  const fn = js.match(/async function emailStart\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'emailStart() is defined');
+  assert.match(fn[1], /const pseudonym=HINT_PSEUDONYM;/, 'pseudonym comes from HINT_PSEUDONYM');
+  assert.match(fn[1], /pseudonym\?\{sessionId,email,pseudonym\}:\{sessionId,email\}/, 'sent only when present');
+  assert.doesNotMatch(fn[1], /pseudoInput/, 'no form field read');
 });
 
 // ── Passkey: register/start binds to the session (D4), not to a client-chosen userId ──
@@ -86,16 +97,15 @@ test('passkeyRun() calls register/start with {sessionId} after ensureSession()',
 });
 
 // ── i18n keys ──
-test('i18n: email.pseudo.ph, email.first, email.done exist in de and en', () => {
+test('i18n: email.first, email.done exist in de and en; email.pseudo.ph is gone (AK-36)', () => {
   for (const lang of ['de', 'en']) {
     const block = i18nBlock(lang);
-    for (const key of ['email.pseudo.ph', 'email.first', 'email.done']) {
+    assert.doesNotMatch(block, /'email\.pseudo\.ph':/, `${lang} has no 'email.pseudo.ph' any more`);
+    for (const key of ['email.first', 'email.done']) {
       assert.match(block, new RegExp(`'${key.replace('.', '\\.')}':`), `${lang} has '${key}'`);
     }
     assert.match(block, /'email\.done':'[^']*\{p\}/, `${lang} email.done contains the {p} placeholder`);
   }
-  assert.match(i18nBlock('de'), /'email\.pseudo\.ph':'Pseudonym \(optional\)'/);
-  assert.match(i18nBlock('en'), /'email\.pseudo\.ph':'Pseudonym \(optional\)'/);
   assert.match(i18nBlock('de'), /'email\.first':'Zuerst E-Mail bestätigen/);
   assert.match(i18nBlock('en'), /'email\.first':'Confirm your email first/);
 });
@@ -183,16 +193,15 @@ test('#26: pollEudi() and pollAge() stop on status:error email_verification_requ
 });
 
 // ── T9 / AK-31, AK-32: login_hint / pseudonym from the consent page ──
-test('AK-31: handleLoginHint() reads login_hint/pseudonym, pre-fills, cleans the URL and auto-sends once', () => {
+test('AK-31: handleLoginHint() reads login_hint, pre-fills, cleans the URL and auto-sends once', () => {
   const js = inlineScript();
   const fn = js.match(/function handleLoginHint\(\)\{([\s\S]*?)\n\}/);
   assert.ok(fn, 'handleLoginHint() is defined');
   const body = fn[1];
   assert.match(body, /params\.get\('login_hint'\)/, 'reads login_hint');
-  assert.match(body, /params\.get\('pseudonym'\)/, 'reads pseudonym');
   assert.match(body, /pick\('email'\)/, 'opens the email panel');
   assert.match(body, /getElementById\('emailInput'\)\.value=/, 'pre-fills #emailInput');
-  assert.match(body, /getElementById\('pseudoInput'\)/, 'pre-fills #pseudoInput');
+  assert.doesNotMatch(body, /pseudoInput/, 'AK-36: no name field to pre-fill');
   assert.match(body, /history\.replaceState\(/, 'removes the params via replaceState');
   assert.match(body, /emailStart\(\)/, 'triggers emailStart()');
   assert.match(body, /tr\('email\.hintAuto'\)/, "shows the 'email.hintAuto' text");

@@ -119,7 +119,7 @@ test('AK-29: pseudonym that sanitizes to nothing is omitted, empty strings are n
   assert.equal(params.has('pseudonym'), false);
 });
 
-test('AK-30: consent page relogin() forwards login_hint/pseudonym and pre-fills #pseudoInput from params', { skip }, async () => {
+test('AK-30/AK-33: consent page relogin() forwards login_hint/pseudonym and pre-fills #pseudoInput from params', { skip }, async () => {
   const clientId = await createClient();
   const { status, body } = await authorize(clientId, { login_hint: 'anna@example.org', pseudonym: 'Anna' });
   assert.equal(status, 200);
@@ -129,6 +129,6 @@ test('AK-30: consent page relogin() forwards login_hint/pseudonym and pre-fills 
   assert.match(fn[1], /login_hint/, 'relogin forwards login_hint');
   assert.match(fn[1], /pseudonym/, 'relogin forwards pseudonym');
   assert.match(fn[1], /encodeURIComponent/, 'values are URL-encoded');
-  assert.match(body, /getElementById\('pseudoInput'\)[\s\S]{0,120}params\.get\('pseudonym'\)/, '#pseudoInput is pre-filled via DOM from params');
+  assert.match(body, /const hint = params\.get\('pseudonym'\)[\s\S]{0,600}openPseudoEdit\(hint\)/, 'AK-33: #pseudoInput is pre-filled via DOM from params when the name field opens');
   assert.doesNotMatch(body, /id="pseudoInput"[^>]*value=/, 'pseudonym is NOT interpolated into the HTML value attribute');
 });
