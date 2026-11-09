@@ -528,6 +528,20 @@ export const identityAnchors = {
     return rows[0] ? this._normalize(rows[0]) : null;
   },
 
+  /**
+   * AK-34: the user changes the account pseudonym (consent page, explicit
+   * set_pseudonym). The anchor is the single source of truth for the name;
+   * returns the stored value, or null if the user has no anchor.
+   */
+  async setPseudonym(userId, pseudonym) {
+    const { rows } = await q(
+      `UPDATE identity_anchors SET pseudonym = $2, last_seen_at = NOW()
+       WHERE user_id = $1 RETURNING pseudonym`,
+      [userId, pseudonym]
+    );
+    return rows[0] ? rows[0].pseudonym : null;
+  },
+
   _normalize(r) {
     return {
       emailHash:  r.email_hash,
@@ -553,6 +567,14 @@ export const identityClaimsCache = {
          updated_at       = NOW(),
          expires_at       = EXCLUDED.expires_at`,
       [userId, email, pseudonym || null, JSON.stringify(verifiedMethods || []), ttlMs]
+    );
+  },
+
+  /** AK-34: keep a cached pseudonym in line with the anchor (no-op if no row). */
+  async setPseudonym(userId, pseudonym) {
+    await q(
+      `UPDATE identity_claims_cache SET pseudonym = $2, updated_at = NOW() WHERE user_id = $1`,
+      [userId, pseudonym || null]
     );
   },
 

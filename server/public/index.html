@@ -218,7 +218,6 @@ a{color:inherit}
     </button>
     <div class="panel hidden" id="panel-email">
       <input class="field" id="emailInput" type="email" autocomplete="email" inputmode="email" placeholder="name@example.com" aria-label="E-Mail">
-      <input class="field" id="pseudoInput" type="text" maxlength="32" autocomplete="nickname" data-i18n-ph="email.pseudo.ph" aria-label="Pseudonym" style="margin-top:10px">
       <div class="row"><button class="go" id="emailSend" onclick="emailStart()" style="flex:1" data-i18n="email.send"></button></div>
       <div class="hidden" id="emailCodeRow">
         <input class="field" id="emailCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="••••••" aria-label="Code" style="margin-top:10px">
@@ -416,7 +415,7 @@ const T={
    'machine.locked':'Maschinen-Identität aktiv — menschliche Methoden sind gesperrt.',
    'token.done.machine':'Du bist als Maschine deklariert \u2713',
    'machine.done':'Als Maschine deklariert','machine.key':'Dein Maschinen-Schlüssel (sicher speichern):',
-   'email.send':'Code senden','email.verify':'Bestätigen','email.pseudo.ph':'Pseudonym (optional)',
+   'email.send':'Code senden','email.verify':'Bestätigen',
    'email.first':'Zuerst E-Mail bestätigen — dann werden die weiteren Methoden freigeschaltet.',
    'email.done':'E-Mail bestätigt · Pseudonym: {p}',
    'passkey.hint':'Dein Gerät fragt nach Fingerabdruck, Gesicht oder Geräte-PIN. Es verlässt nichts dein Gerät.','passkey.go':'Passkey verwenden','passkey.existing':'Passkey erkannt — bitte bestätigen',
@@ -459,7 +458,7 @@ const T={
    'machine.locked':'Machine identity active — human methods are locked.',
    'token.done.machine':'You are declared as a machine \u2713',
    'machine.done':'Declared as a machine','machine.key':'Your machine key (store it safely):',
-   'email.send':'Send code','email.verify':'Confirm','email.pseudo.ph':'Pseudonym (optional)',
+   'email.send':'Send code','email.verify':'Confirm',
    'email.first':'Confirm your email first — the other methods unlock afterwards.',
    'email.done':'Email confirmed · pseudonym: {p}',
    'passkey.hint':'Your device asks for fingerprint, face or device PIN. Nothing leaves your device.','passkey.go':'Use passkey','passkey.existing':'Passkey found — please confirm',
@@ -490,7 +489,6 @@ function applyLang(){
   document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=tr(el.getAttribute('data-i18n'))});
   document.querySelector('.hero h1').innerHTML=tr('hero.a')+' <span class="em">'+tr('hero.em')+'</span>'+tr('hero.b');
   const mr=document.getElementById('machineRole'); if(mr) mr.placeholder=tr('machine.role.ph');
-  const pi=document.getElementById('pseudoInput'); if(pi) pi.placeholder=tr('email.pseudo.ph');
   const me=document.getElementById('machineEmail'); if(me) me.placeholder=tr('machine.email.ph');
   const ei=document.getElementById('escoInput'); if(ei) ei.placeholder=tr('role.search.ph');
   renderQualChips();
@@ -557,7 +555,10 @@ async function emailStart(){
   if(!/.+@.+\..+/.test(email)){hint.textContent=tr('err');return}
   try{
     await ensureSession();
-    const pseudonym=(document.getElementById('pseudoInput')?.value||'').trim();
+    /* AK-36: no name field here any more — a platform's name hint (from the
+       consent page) seeds a NEW account; the user can change it on the next
+       consent (AK-33/34). An existing account keeps its name (AK-8). */
+    const pseudonym=HINT_PSEUDONYM;
     const r=await fetch(API+'/hhttps/email/send',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(pseudonym?{sessionId,email,pseudonym}:{sessionId,email})});
     const d=await r.json(); if(!r.ok)throw 0;
     document.getElementById('emailCodeRow').classList.remove('hidden');
@@ -1024,10 +1025,26 @@ function handleEmailVerifyReturn(){
   }catch(e){}
 }
 
+/* AK-36: the platform's display-name hint arrives as ?pseudonym= (consent
+   relogin). Keep it in memory for /email/send and strip it from the URL —
+   with or without login_hint. */
+let HINT_PSEUDONYM='';
+function captureHintPseudonym(){
+  let params;
+  try{params=new URLSearchParams(window.location.search);}catch(e){return;}
+  if(!params.has('pseudonym'))return;
+  HINT_PSEUDONYM=(params.get('pseudonym')||'').trim().slice(0,32);
+  params.delete('pseudonym');
+  try{
+    const q=params.toString();
+    history.replaceState(null,'',window.location.pathname+(q?'?'+q:'')+window.location.hash);
+  }catch(e){}
+}
 /* ── T9 / AK-31, AK-32: login_hint from the OAuth consent page ─────────────
    The consent page (relogin) sends a not-yet-signed-in user here as
    /?returnTo=<consent-url>&login_hint=<email>&pseudonym=<name>. Open the
-   email panel, pre-fill both fields, strip login_hint/pseudonym from the URL
+   email panel, pre-fill the address, strip login_hint from the URL
+   (pseudonym: see captureHintPseudonym, AK-36)
    (returnTo stays — maybeReturnTo() needs it) and request the code ONCE.
    Because the params are removed BEFORE the send, a reload never re-sends;
    an invalid address just leaves the pre-filled panel with a hint. */
@@ -1036,15 +1053,13 @@ function handleLoginHint(){
   try{params=new URLSearchParams(window.location.search);}catch(e){return;}
   const loginHint=(params.get('login_hint')||'').trim();
   if(!loginHint)return;
-  const pseudonym=(params.get('pseudonym')||'').trim();
-  ['login_hint','pseudonym'].forEach(k=>params.delete(k));
+  ['login_hint'].forEach(k=>params.delete(k));
   try{
     const q=params.toString();
     history.replaceState(null,'',window.location.pathname+(q?'?'+q:'')+window.location.hash);
   }catch(e){}
   pick('email');
   document.getElementById('emailInput').value=loginHint;
-  const pi=document.getElementById('pseudoInput'); if(pi&&pseudonym) pi.value=pseudonym;
   const hint=document.getElementById('emailHint');
   if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(loginHint)){if(hint)hint.textContent=tr('err');return;}
   if(hint)hint.textContent=tr('email.hintAuto');
@@ -1053,6 +1068,7 @@ function handleLoginHint(){
 
 applyLang();
 handleEmailVerifyReturn();
+captureHintPseudonym();
 handleLoginHint();
 restoreIdentity();
 </script>

@@ -1,5 +1,5 @@
 // Unit tests for identity.js (T1) — pure helpers, no DB/HTTP.
-// Covers AK-2 (E-Mail-Normalisierung), AK-6/AK-7 (Pseudonym), AK-23/AK-24 (Code-Normalisierung), AK-18 (Methoden-Flags).
+// Covers AK-2 (E-Mail-Normalisierung), AK-6/AK-7 (Pseudonym), AK-33 (generierter Name), AK-23/AK-24 (Code-Normalisierung), AK-18 (Methoden-Flags).
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -9,6 +9,7 @@ import {
   emailAnchorHash,
   sanitizePseudonym,
   generatePseudonym,
+  isGeneratedPseudonym,
   resolvePseudonym,
   normalizeCode,
   isValidCode,
@@ -262,5 +263,16 @@ describe('assertPepperConfigured (F-4 / S-5)', () => {
   test('non-production without pepper → ok (dev fallback stays)', () => {
     process.env.NODE_ENV = 'development'; delete process.env.HHTTPS_VERIFICATION_PEPPER;
     try { assert.doesNotThrow(() => assertPepperConfigured()); } finally { restore(); }
+  });
+});
+
+describe('isGeneratedPseudonym (AK-33)', () => {
+  test('recognises every server-generated pseudonym', () => {
+    for (let i = 0; i < 50; i++) assert.equal(isGeneratedPseudonym(generatePseudonym()), true);
+  });
+  test('chosen names, near misses and non-strings are not generated', () => {
+    for (const p of ['Anna', 'Waldfee42', 'iamhmn_', 'iamhmn_abc', 'iamhmn_ABCDEFGHIJ', 'iamhmn_abcdefghijk', 'xiamhmn_abcdefghij', '', null, undefined, 42]) {
+      assert.equal(isGeneratedPseudonym(p), false, String(p));
+    }
   });
 });

@@ -34,13 +34,48 @@ test('AK-30: relogin() appends login_hint and pseudonym (URL-encoded) to the sig
   assert.match(body, /&pseudonym=' \+ encodeURIComponent\(/, 'pseudonym appended URL-encoded');
 });
 
-test('AK-30: #pseudoInput is pre-filled from params via the DOM, not via HTML interpolation', () => {
+test('AK-30: #pseudoInput is pre-filled via the DOM (platform hint or current name), never via HTML interpolation', () => {
   const r = renderer();
-  assert.match(r, /getElementById\('pseudoInput'\)[\s\S]{0,120}params\.get\('pseudonym'\)/, 'DOM pre-fill');
+  const fn = r.match(/function openPseudoEdit\(prefill\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'openPseudoEdit() exists');
+  assert.match(fn[1], /getElementById\('pseudoInput'\)/, 'works on #pseudoInput');
+  assert.match(fn[1], /pi\.value = prefill/, 'DOM pre-fill');
+  assert.match(r, /const hint = params\.get\('pseudonym'\)/, 'the hint comes from params');
+  assert.match(r, /openPseudoEdit\(hint\)/, 'a generated/absent name opens the field with the hint');
   const tag = r.match(/<input id="pseudoInput"[^>]*>/);
   assert.ok(tag, '#pseudoInput input exists');
   assert.doesNotMatch(tag[0], /value=/, 'no value attribute in the template');
   assert.doesNotMatch(tag[0], /\$\{/, 'no template interpolation in the input tag');
+});
+
+test('AK-33: the name box is hidden by default and only shown for a signed-in identity', () => {
+  const r = renderer();
+  assert.match(r, /<div class="pseudo-field" id="pseudoBox" hidden>/, '#pseudoBox starts hidden');
+  assert.match(r, /<div class="pseudo-show" id="pseudoShow" hidden>/, 'read-only view starts hidden');
+  assert.match(r, /<div id="pseudoEditBox" hidden>/, 'edit view starts hidden');
+  assert.match(r, /if \(!ident \|\| !ident\.token\) return;/, 'no identity → box stays hidden (sign-in creates the account)');
+  assert.match(r, /const GENERATED_PSEUDONYM = \/\^iamhmn_\[a-z0-9\]\{10\}\$\/;/, 'generated-name pattern matches AK-7');
+  assert.match(r, /known && !GENERATED_PSEUDONYM\.test\(known\)/, 'a chosen name is shown read-only');
+  assert.match(r, /getElementById\('pseudoName'\)\.textContent = known/, 'the name is set via textContent');
+  assert.doesNotMatch(r, /pseudoName'\)\.innerHTML/, 'never via innerHTML');
+  assert.match(r, /ident\.pseudonym \|\| \(jwtPayload\(ident\.token\) \|\| \{\}\)\.pseudonym/, 'remembered name wins over the token claim (AK-35)');
+});
+
+test('AK-34: approve sends set_pseudonym only after the user opened the field', () => {
+  const r = renderer();
+  const fn = r.match(/function pseudoPayload\(\)\{([\s\S]*?)\n\}/);
+  assert.ok(fn, 'pseudoPayload() exists');
+  assert.match(fn[1], /if \(!pseudoWanted\) return \{ pseudonym: null \};/, 'closed field → no name sent');
+  assert.match(fn[1], /set_pseudonym: true/, 'open field with a value → set_pseudonym');
+  const uses = r.match(/\.\.\.pseudoPayload\(\)/g) || [];
+  assert.equal(uses.length, 2, 'both approve calls (first try + after refresh) use pseudoPayload()');
+  assert.doesNotMatch(r, /pseudonym:\s+\(document\.getElementById\('pseudoInput'\)/, 'the raw field value is no longer sent unconditionally');
+});
+
+test('AK-35: the confirmed name is remembered in hhttps_identity before redirecting', () => {
+  const r = renderer();
+  assert.match(r, /rememberPseudonym\(d\.pseudonym\);\n {4}window\.location = d\.redirect;/, 'first try');
+  assert.match(r, /rememberPseudonym\(d2\.pseudonym\); window\.location = d2\.redirect;/, 'after refresh');
 });
 
 test('AK-29: authorize reads login_hint/pseudonym and only adds valid values to the consent params', () => {
